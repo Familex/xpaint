@@ -152,7 +152,7 @@ void free_sel_circ() {
     sel_circ.is_active = False;
 }
 
-static void run() {
+void run() {
     XEvent event;
 
     XSync(display, False);
@@ -163,7 +163,7 @@ static void run() {
     }
 }
 
-static void setup() {
+void setup() {
     int screen = DefaultScreen(display);
 
     /* drawing contexts for an window */
@@ -191,7 +191,7 @@ static void setup() {
     );
     drawable = window;
 
-    XSetStandardProperties(display, window, title, NULL, None, 0, NULL, &hint);
+    XSetStandardProperties(display, window, title, NULL, None, NULL, 0, &hint);
 
     /* graphics context */
     gc = XCreateGC(display, window, 0, 0);
@@ -209,7 +209,7 @@ static void setup() {
     XMapRaised(display, window);
 }
 
-static void button_press_hdlr(XEvent* event) {
+void button_press_hdlr(XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     if (e->button == Button3) {
         init_sel_circ_instruments(e->x, e->y);
@@ -217,7 +217,7 @@ static void button_press_hdlr(XEvent* event) {
     }
 }
 
-static void button_release_hdlr(XEvent* event) {
+void button_release_hdlr(XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     if (e->button == Button3) {
         free_sel_circ();
@@ -225,11 +225,11 @@ static void button_release_hdlr(XEvent* event) {
     }
 }
 
-static void destroy_notify_hdlr(XEvent* event) {}
+void destroy_notify_hdlr(XEvent* event) {}
 
-static void expose_hdlr(XEvent* event) {}
+void expose_hdlr(XEvent* event) {}
 
-static void key_press_hdlr(XEvent* event) {
+void key_press_hdlr(XEvent* event) {
     static char text[10];
     KeySym key;
 
@@ -239,11 +239,11 @@ static void key_press_hdlr(XEvent* event) {
     }
 }
 
-static void mapping_notify_hdlr(XEvent* event) {
+void mapping_notify_hdlr(XEvent* event) {
     XRefreshKeyboardMapping(&event->xmapping);
 }
 
-static void cleanup() {
+void cleanup() {
     XFreeGC(display, gc);
     XDestroyWindow(display, window);
 }
