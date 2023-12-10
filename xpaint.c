@@ -12,12 +12,11 @@
 #include <time.h>
 #include <unistd.h>
 
-char title[] = "xpaint";
-Bool done = False;
-unsigned long ANIMATE_SLEEP_MS = 16;
-unsigned long MIN_SEL_RECT_DIMENTION_PX = 50;
-unsigned long MAX_SEL_RECT_DIMENTION_PX = 200;
-unsigned long SEL_CIRC_ANIMATION_TIME_MS = 1000;
+char const title[] = "xpaint";
+unsigned long const ANIMATE_SLEEP_MS = 16;
+unsigned long const MIN_SEL_RECT_DIMENTION_PX = 50;
+unsigned long const MAX_SEL_RECT_DIMENTION_PX = 200;
+unsigned long const SEL_CIRC_ANIMATION_TIME_MS = 1000;
 
 struct SelectCircle {
     Bool is_active;
@@ -36,6 +35,13 @@ struct AnimateArgs {
 void* animate(void*);
 XRectangle get_curr_sel_rect();
 struct timespec get_time();
+void animate_cicle();
+
+/* globals */
+Bool done = False;
+Display* display;
+Drawable drawable;
+GC gc;
 
 int main(int argc, char** argv) {
     pthread_t animate_thread_id;
@@ -43,13 +49,13 @@ int main(int argc, char** argv) {
     char text[10];
 
     /* setup display/screen */
-    Display* display = XOpenDisplay("");
+    display = XOpenDisplay("");
 
-    int myscreen = DefaultScreen(display);
+    int screen = DefaultScreen(display);
 
     /* drawing contexts for an window */
-    unsigned int myforeground = BlackPixel(display, myscreen);
-    unsigned int mybackground = WhitePixel(display, myscreen);
+    unsigned int myforeground = BlackPixel(display, screen);
+    unsigned int mybackground = WhitePixel(display, screen);
     XSizeHints hint = {
         .x = 200,
         .y = 300,
@@ -70,6 +76,7 @@ int main(int argc, char** argv) {
         myforeground,
         mybackground
     );
+    drawable = window;
 
     /* window manager properties (yes, use of StdProp is obsolete) */
     XSetStandardProperties(
@@ -84,7 +91,7 @@ int main(int argc, char** argv) {
     );
 
     /* graphics context */
-    GC gc = XCreateGC(display, window, 0, 0);
+    gc = XCreateGC(display, window, 0, 0);
     XSetBackground(display, gc, mybackground);
     XSetForeground(display, gc, myforeground);
 
@@ -98,18 +105,8 @@ int main(int argc, char** argv) {
     /* show up window */
     XMapRaised(display, window);
 
-    /* FIXME animation thread start */
-    struct AnimateArgs animate_thread_args = {
-        .display = display,
-        .drawable = window,
-        .gc = gc,
-    };
-    pthread_create(
-        &animate_thread_id,
-        NULL,
-        animate,
-        (void*)&animate_thread_args
-    );
+    /* animation thread start */
+    pthread_create(&animate_thread_id, NULL, animate, NULL);
 
     /* event loop */
     while (!done) {
@@ -119,17 +116,7 @@ int main(int argc, char** argv) {
 
         switch (event.type) {
             case Expose: {
-                /* Window was showed. */
-                if (event.xexpose.count == 0)
-                    XDrawImageString(
-                        event.xexpose.display,
-                        event.xexpose.window,
-                        gc,
-                        50,
-                        50,
-                        title,
-                        strlen(title)
-                    );
+                /* Main draw */
             } break;
             case MappingNotify: {
                 /* Modifier key was up/down. */
@@ -144,6 +131,7 @@ int main(int argc, char** argv) {
                     sel_circ.x = e->x;
                     sel_circ.y = e->y;
                     pthread_mutex_unlock(&sel_circ_mtx);
+                    animate_cicle();
                 }
             } break;
             case ButtonRelease: {
@@ -179,44 +167,47 @@ int main(int argc, char** argv) {
     exit(0);
 }
 
-void* animate(void* args_v) {
-    struct AnimateArgs* args = (struct AnimateArgs*)args_v;
+void animate_cicle() {
     static Bool sel_circ_flush_done = False;
 
-    while (!done) {
-        if (sel_circ.is_active || !sel_circ_flush_done) {
-            XRectangle sel_rect = get_curr_sel_rect();
+    if (sel_circ.is_active || !sel_circ_flush_done) {
+        XRectangle sel_rect = get_curr_sel_rect();
 
-            XClearArea(
-                args->display,
-                args->drawable,
-                sel_rect.x - 1,
-                sel_rect.y - 1,
-                sel_rect.width + 2,
-                sel_rect.height + 2,
-                // Expose to draw background
-                True
+        XClearArea(
+            display,
+            drawable,
+            sel_rect.x - 1,
+            sel_rect.y - 1,
+            sel_rect.width + 2,
+            sel_rect.height + 2,
+            // Expose to draw background
+            True
+        );
+
+        if (!sel_circ_flush_done) {
+            sel_circ_flush_done = True;
+        } else {
+            sel_circ_flush_done = False;
+            // draw circle
+            XDrawArc(
+                display,
+                drawable,
+                gc,
+                sel_rect.x,
+                sel_rect.y,
+                sel_rect.width,
+                sel_rect.height,
+                0,
+                360 * 64
             );
-
-            if (!sel_circ_flush_done) {
-                sel_circ_flush_done = True;
-            } else {
-                sel_circ_flush_done = False;
-                // draw circle
-                XDrawArc(
-                    args->display,
-                    args->drawable,
-                    args->gc,
-                    sel_rect.x,
-                    sel_rect.y,
-                    sel_rect.width,
-                    sel_rect.height,
-                    0,
-                    360 * 64
-                );
-                XFlush(args->display);
-            }
+            XFlush(display);
         }
+    }
+}
+
+void* animate(void* nothing) {
+    while (!done) {
+        animate_cicle();
 
         struct timespec ts = {
             .tv_sec = 0,
