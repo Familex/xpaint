@@ -3,59 +3,167 @@
 #include <X11/X.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <assert.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// temp solution
-#include <pthread.h>
-#include <time.h>
-#include <unistd.h>
-
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
+#define LENGTH(X) (sizeof X / sizeof X[0])
 
-char const title[] = "xpaint";
-unsigned long const ANIMATE_SLEEP_MS = 16;
-unsigned long const MIN_SEL_RECT_DIMENTION_PX = 50;
-unsigned long const MAX_SEL_RECT_DIMENTION_PX = 200;
-unsigned long const SEL_CIRC_ANIMATION_TIME_SEC = 1;
+#include "config.h"
+
+struct Item {
+    void (*on_select)();
+    int hicon;
+};
 
 struct SelectCircle {
     Bool is_active;
-    struct timespec start_time;
     int x;
     int y;
+    unsigned int item_count;
+    struct Item* items;
 } sel_circ = {0};
 pthread_mutex_t sel_circ_mtx;
 
-struct AnimateArgs {
-    Display* display;
-    Drawable drawable;
-    GC gc;
-};
+static void die(char const* errstr, ...);
 
-void* animate(void*);
-XRectangle get_curr_sel_rect();
-struct timespec get_time();
-void animate_cicle();
-double
-diff_timespec(struct timespec const* restrict, struct timespec const* restrict);
+static void init_sel_circ_instruments(int, int);
+static void free_sel_circ();
+
+static XRectangle get_curr_sel_rect();
+
+static void draw_selection_circle();
+static void clear_selection_circle();
+
+static void setup();
+static void run();
+static void button_press_hdlr(XEvent*);
+static void button_release_hdlr(XEvent*);
+static void destroy_notify_hdlr(XEvent*);
+static void expose_hdlr(XEvent*);
+static void key_press_hdlr(XEvent*);
+static void mapping_notify_hdlr(XEvent*);
+static void cleanup();
 
 /* globals */
-Bool done = False;
-Display* display;
-Drawable drawable;
-GC gc;
+static Bool done = False;
+static Display* display;
+static Drawable drawable;
+static GC gc;
+static Window window;
+static void (*handler[LASTEvent])(XEvent*) = {
+    [ButtonPress] = button_press_hdlr,
+    [ButtonRelease] = button_release_hdlr,
+    [DestroyNotify] = destroy_notify_hdlr,
+    [Expose] = expose_hdlr,
+    [KeyPress] = key_press_hdlr,
+    [MappingNotify] = mapping_notify_hdlr,
+};
 
 int main(int argc, char** argv) {
-    pthread_t animate_thread_id;
-    KeySym mykey;
-    char text[10];
+    if (!(display = XOpenDisplay(NULL))) {
+        die("cannot open display\n");
+    }
+    setup();
+    run();
+    cleanup();
+    XCloseDisplay(display);
 
-    /* setup display/screen */
-    display = XOpenDisplay("");
+    return 0;
+}
 
+void die(char const* errstr, ...) {
+    va_list ap;
+
+    va_start(ap, errstr);
+    vfprintf(stderr, errstr, ap);
+    va_end(ap);
+    exit(EXIT_FAILURE);
+}
+
+XRectangle get_curr_sel_rect() {
+    XRectangle result = {
+        .x = sel_circ.x - SELECTION_RECT_DIMENTION_PX / 2,
+        .y = sel_circ.y - SELECTION_RECT_DIMENTION_PX / 2,
+        .height = SELECTION_RECT_DIMENTION_PX,
+        .width = SELECTION_RECT_DIMENTION_PX,
+    };
+
+    return result;
+}
+
+void init_sel_circ_instruments(int x, int y) {
+    static struct Item instruments[] = {[0] = {NULL, 0}};
+
+    sel_circ.is_active = True;
+    sel_circ.x = x;
+    sel_circ.y = y;
+    sel_circ.item_count = LENGTH(instruments);
+    sel_circ.items = instruments;
+}
+
+void draw_selection_circle() {
+    assert(sel_circ.is_active);
+
+    XRectangle sel_rect = get_curr_sel_rect();
+
+    XClearArea(
+        display,
+        drawable,
+        sel_rect.x - 1,
+        sel_rect.y - 1,
+        sel_rect.width + 2,
+        sel_rect.height + 2,
+        True  // Expose to draw background
+    );
+
+    XDrawArc(
+        display,
+        drawable,
+        gc,
+        sel_rect.x,
+        sel_rect.y,
+        sel_rect.width,
+        sel_rect.height,
+        0,
+        360 * 64
+    );
+}
+
+void clear_selection_circle() {
+    XRectangle sel_rect = get_curr_sel_rect();
+
+    XClearArea(
+        display,
+        drawable,
+        sel_rect.x - 1,
+        sel_rect.y - 1,
+        sel_rect.width + 2,
+        sel_rect.height + 2,
+        True  // Expose to draw background
+    );
+}
+
+void free_sel_circ() {
+    sel_circ.is_active = False;
+}
+
+static void run() {
+    XEvent event;
+
+    XSync(display, False);
+    while (!done && !XNextEvent(display, &event)) {
+        if (handler[event.type]) {
+            handler[event.type](&event);
+        }
+    }
+}
+
+static void setup() {
     int screen = DefaultScreen(display);
 
     /* drawing contexts for an window */
@@ -70,7 +178,7 @@ int main(int argc, char** argv) {
     };
 
     /* create window */
-    Window window = XCreateSimpleWindow(
+    window = XCreateSimpleWindow(
         display,
         DefaultRootWindow(display),
         hint.x,
@@ -83,17 +191,7 @@ int main(int argc, char** argv) {
     );
     drawable = window;
 
-    /* window manager properties (yes, use of StdProp is obsolete) */
-    XSetStandardProperties(
-        display,
-        window,
-        title,
-        NULL,
-        None,
-        argv,
-        argc,
-        &hint
-    );
+    XSetStandardProperties(display, window, title, NULL, None, 0, NULL, &hint);
 
     /* graphics context */
     gc = XCreateGC(display, window, 0, 0);
@@ -109,159 +207,43 @@ int main(int argc, char** argv) {
 
     /* show up window */
     XMapRaised(display, window);
+}
 
-    /* animation thread start */
-    pthread_create(&animate_thread_id, NULL, animate, NULL);
-
-    /* event loop */
-    while (!done) {
-        /* fetch event */
-        XEvent event = {0};
-        XNextEvent(display, &event);
-
-        switch (event.type) {
-            case Expose: {
-                /* Main draw */
-            } break;
-            case MappingNotify: {
-                /* Modifier key was up/down. */
-                XRefreshKeyboardMapping(&event.xmapping);
-            } break;
-            case ButtonPress: {
-                XButtonPressedEvent* e = (XButtonPressedEvent*)&event;
-                if (e->button == Button3) {
-                    pthread_mutex_lock(&sel_circ_mtx);
-                    sel_circ.is_active = True;
-                    sel_circ.start_time = get_time();
-                    sel_circ.x = e->x;
-                    sel_circ.y = e->y;
-                    pthread_mutex_unlock(&sel_circ_mtx);
-                    animate_cicle();
-                }
-            } break;
-            case ButtonRelease: {
-                XButtonReleasedEvent* e = (XButtonReleasedEvent*)&event;
-                if (e->button == Button3) {
-                    sel_circ.is_active = False;
-                }
-                animate_cicle();
-            } break;
-            case KeyPress: {
-                /* Key input. */
-                int i = XLookupString(&event.xkey, text, 10, &mykey, 0);
-                if (i == 1 && text[0] == 'q') {
-                    done = True;
-                }
-            } break;
-            case DestroyNotify: {
-                // FIXME feels useless
-                XDestroyWindowEvent* e = (XDestroyWindowEvent*)&event;
-                if (e->window == window) {
-                    done = True;
-                }
-            } break;
-        }
+static void button_press_hdlr(XEvent* event) {
+    XButtonPressedEvent* e = (XButtonPressedEvent*)event;
+    if (e->button == Button3) {
+        init_sel_circ_instruments(e->x, e->y);
+        draw_selection_circle();
     }
+}
 
-    /* finalization */
+static void button_release_hdlr(XEvent* event) {
+    XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
+    if (e->button == Button3) {
+        free_sel_circ();
+        clear_selection_circle();
+    }
+}
+
+static void destroy_notify_hdlr(XEvent* event) {}
+
+static void expose_hdlr(XEvent* event) {}
+
+static void key_press_hdlr(XEvent* event) {
+    static char text[10];
+    KeySym key;
+
+    int i = XLookupString(&event->xkey, text, 10, &key, 0);
+    if (i == 1 && text[0] == 'q') {
+        done = True;
+    }
+}
+
+static void mapping_notify_hdlr(XEvent* event) {
+    XRefreshKeyboardMapping(&event->xmapping);
+}
+
+static void cleanup() {
     XFreeGC(display, gc);
     XDestroyWindow(display, window);
-    XCloseDisplay(display);
-
-    pthread_join(animate_thread_id, NULL);
-
-    exit(0);
-}
-
-void animate_cicle() {
-    static Bool sel_circ_flush_done = False;
-
-    if (sel_circ.is_active || !sel_circ_flush_done) {
-        XRectangle sel_rect = get_curr_sel_rect();
-
-        XClearArea(
-            display,
-            drawable,
-            sel_rect.x - 1,
-            sel_rect.y - 1,
-            sel_rect.width + 2,
-            sel_rect.height + 2,
-            // Expose to draw background
-            True
-        );
-
-        if (!sel_circ.is_active && !sel_circ_flush_done) {
-            sel_circ_flush_done = True;
-        } else {
-            sel_circ_flush_done = False;
-            // draw circle
-            XDrawArc(
-                display,
-                drawable,
-                gc,
-                sel_rect.x,
-                sel_rect.y,
-                sel_rect.width,
-                sel_rect.height,
-                0,
-                360 * 64
-            );
-        }
-    }
-}
-
-void* animate(void* nothing) {
-    while (!done) {
-        animate_cicle();
-
-        XFlush(display);
-
-        struct timespec ts = {
-            .tv_sec = 0,
-            .tv_nsec = ANIMATE_SLEEP_MS,
-        };
-        nanosleep(&ts, &ts);
-    }
-
-    pthread_exit(NULL);
-}
-
-XRectangle get_curr_sel_rect() {
-    pthread_mutex_lock(&sel_circ_mtx);
-    // FIXME
-    struct timespec const curr_time = get_time();
-    // MINIMUM_* on 0 and MAXIMUM_* on 1.
-    double delta =
-        MIN(1.0,
-            diff_timespec(&curr_time, &sel_circ.start_time)
-                / SEL_CIRC_ANIMATION_TIME_SEC);
-    short dimention = MIN_SEL_RECT_DIMENTION_PX
-        + (MAX_SEL_RECT_DIMENTION_PX - MIN_SEL_RECT_DIMENTION_PX) * delta;
-
-    XRectangle result = {
-        .x = sel_circ.x - dimention / 2,
-        .y = sel_circ.y - dimention / 2,
-        .height = dimention,
-        .width = dimention,
-    };
-
-    pthread_mutex_unlock(&sel_circ_mtx);
-
-    return result;
-}
-
-struct timespec get_time() {
-    struct timespec result;
-
-    clock_gettime(CLOCK_REALTIME, &result);
-
-    return result;
-}
-
-double diff_timespec(
-    const struct timespec* restrict lhs,
-    const struct timespec* restrict rhs
-) {
-    return (lhs->tv_sec - rhs->tv_sec)
-        + (lhs->tv_nsec - rhs->tv_nsec) / 1000000000.0;
 }
