@@ -12,11 +12,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#define MAX(A, B) ((A) > (B) ? (A) : (B))
+#define MIN(A, B) ((A) < (B) ? (A) : (B))
+
 char const title[] = "xpaint";
 unsigned long const ANIMATE_SLEEP_MS = 16;
 unsigned long const MIN_SEL_RECT_DIMENTION_PX = 50;
 unsigned long const MAX_SEL_RECT_DIMENTION_PX = 200;
-unsigned long const SEL_CIRC_ANIMATION_TIME_MS = 1000;
+unsigned long const SEL_CIRC_ANIMATION_TIME_SEC = 1;
 
 struct SelectCircle {
     Bool is_active;
@@ -36,6 +39,8 @@ void* animate(void*);
 XRectangle get_curr_sel_rect();
 struct timespec get_time();
 void animate_cicle();
+double
+diff_timespec(struct timespec const* restrict, struct timespec const* restrict);
 
 /* globals */
 Bool done = False;
@@ -139,6 +144,7 @@ int main(int argc, char** argv) {
                 if (e->button == Button3) {
                     sel_circ.is_active = False;
                 }
+                animate_cicle();
             } break;
             case KeyPress: {
                 /* Key input. */
@@ -184,7 +190,7 @@ void animate_cicle() {
             True
         );
 
-        if (!sel_circ_flush_done) {
+        if (!sel_circ.is_active && !sel_circ_flush_done) {
             sel_circ_flush_done = True;
         } else {
             sel_circ_flush_done = False;
@@ -200,7 +206,6 @@ void animate_cicle() {
                 0,
                 360 * 64
             );
-            XFlush(display);
         }
     }
 }
@@ -208,6 +213,8 @@ void animate_cicle() {
 void* animate(void* nothing) {
     while (!done) {
         animate_cicle();
+
+        XFlush(display);
 
         struct timespec ts = {
             .tv_sec = 0,
@@ -222,7 +229,14 @@ void* animate(void* nothing) {
 XRectangle get_curr_sel_rect() {
     pthread_mutex_lock(&sel_circ_mtx);
     // FIXME
-    short dimention = 200;
+    struct timespec const curr_time = get_time();
+    // MINIMUM_* on 0 and MAXIMUM_* on 1.
+    double delta =
+        MIN(1.0,
+            diff_timespec(&curr_time, &sel_circ.start_time)
+                / SEL_CIRC_ANIMATION_TIME_SEC);
+    short dimention = MIN_SEL_RECT_DIMENTION_PX
+        + (MAX_SEL_RECT_DIMENTION_PX - MIN_SEL_RECT_DIMENTION_PX) * delta;
 
     XRectangle result = {
         .x = sel_circ.x - dimention / 2,
@@ -242,4 +256,12 @@ struct timespec get_time() {
     clock_gettime(CLOCK_REALTIME, &result);
 
     return result;
+}
+
+double diff_timespec(
+    const struct timespec* restrict lhs,
+    const struct timespec* restrict rhs
+) {
+    return (lhs->tv_sec - rhs->tv_sec)
+        + (lhs->tv_nsec - rhs->tv_nsec) / 1000000000.0;
 }
