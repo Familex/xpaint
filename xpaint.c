@@ -4,6 +4,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <assert.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
 #define LENGTH(X) (sizeof X / sizeof X[0])
+#define PI        3.141
 
 #include "config.h"
 
@@ -26,8 +28,7 @@ struct SelectCircle {
     int y;
     unsigned int item_count;
     struct Item* items;
-} sel_circ = {0};
-pthread_mutex_t sel_circ_mtx;
+};
 
 static void die(char const* errstr, ...);
 
@@ -63,6 +64,7 @@ static void (*handler[LASTEvent])(XEvent*) = {
     [KeyPress] = key_press_hdlr,
     [MappingNotify] = mapping_notify_hdlr,
 };
+struct SelectCircle sel_circ = {0};
 
 int main(int argc, char** argv) {
     if (!(display = XOpenDisplay(NULL))) {
@@ -97,7 +99,13 @@ XRectangle get_curr_sel_rect() {
 }
 
 void init_sel_circ_instruments(int x, int y) {
-    static struct Item instruments[] = {[0] = {NULL, 0}};
+    static struct Item instruments[] = {
+        [0] = {NULL, 0},
+        [1] = {NULL, 0},
+        [2] = {NULL, 0},
+        [3] = {NULL, 0},
+        [4] = {NULL, 0}
+    };
 
     sel_circ.is_active = True;
     sel_circ.x = x;
@@ -132,6 +140,24 @@ void draw_selection_circle() {
         0,
         360 * 64
     );
+
+    if (sel_circ.item_count >= 2) {
+        double const segment_rad = PI * 2 / sel_circ.item_count;
+        for (unsigned int line_num = 0; line_num < sel_circ.item_count;
+             ++line_num) {
+            XDrawLine(
+                display,
+                drawable,
+                gc,
+                sel_circ.x,
+                sel_circ.y,
+                sel_circ.x
+                    + cos(segment_rad * line_num) * (sel_rect.width / 2.0),
+                sel_circ.y
+                    + sin(segment_rad * line_num) * (sel_rect.height / 2.0)
+            );
+        }
+    }
 }
 
 void clear_selection_circle() {
