@@ -30,12 +30,22 @@ struct SelectCircle {
     struct Item* items;
 };
 
+struct SelectCircleDims {
+    struct CircleDims {
+        unsigned int x;
+        unsigned int y;
+        unsigned int r;
+    };
+    struct CircleDims outer;
+    struct CircleDims inner;
+};
+
 static void die(char const* errstr, ...);
 
 static void init_sel_circ_instruments(int, int);
 static void free_sel_circ();
 
-static XRectangle get_curr_sel_rect();
+static struct SelectCircleDims get_curr_sel_dims();
 
 static void draw_selection_circle();
 static void clear_selection_circle();
@@ -87,12 +97,20 @@ void die(char const* errstr, ...) {
     exit(EXIT_FAILURE);
 }
 
-XRectangle get_curr_sel_rect() {
-    XRectangle result = {
-        .x = sel_circ.x - SELECTION_RECT_DIMENTION_PX / 2,
-        .y = sel_circ.y - SELECTION_RECT_DIMENTION_PX / 2,
-        .height = SELECTION_RECT_DIMENTION_PX,
-        .width = SELECTION_RECT_DIMENTION_PX,
+struct SelectCircleDims get_curr_sel_dims() {
+    struct SelectCircleDims result = {
+        .outer =
+            {
+                .x = sel_circ.x - SELECTION_RECT_DIMENTION_PX / 2,
+                .y = sel_circ.y - SELECTION_RECT_DIMENTION_PX / 2,
+                .r = SELECTION_RECT_DIMENTION_PX,
+            },
+        .inner =
+            {
+                .x = sel_circ.x - SELECTION_INNER_RECT_DIM_PX / 2,
+                .y = sel_circ.y - SELECTION_INNER_RECT_DIM_PX / 2,
+                .r = SELECTION_INNER_RECT_DIM_PX,
+            },
     };
 
     return result;
@@ -117,15 +135,15 @@ void init_sel_circ_instruments(int x, int y) {
 void draw_selection_circle() {
     assert(sel_circ.is_active);
 
-    XRectangle sel_rect = get_curr_sel_rect();
+    struct SelectCircleDims sel_rect = get_curr_sel_dims();
 
     XClearArea(
         display,
         drawable,
-        sel_rect.x - 1,
-        sel_rect.y - 1,
-        sel_rect.width + 2,
-        sel_rect.height + 2,
+        sel_rect.outer.x - 1,
+        sel_rect.outer.y - 1,
+        sel_rect.outer.r + 2,
+        sel_rect.outer.r + 2,
         True  // Expose to draw background
     );
 
@@ -133,10 +151,22 @@ void draw_selection_circle() {
         display,
         drawable,
         gc,
-        sel_rect.x,
-        sel_rect.y,
-        sel_rect.width,
-        sel_rect.height,
+        sel_rect.inner.x,
+        sel_rect.inner.y,
+        sel_rect.inner.r,
+        sel_rect.inner.r,
+        0,
+        360 * 64
+    );
+
+    XDrawArc(
+        display,
+        drawable,
+        gc,
+        sel_rect.outer.x,
+        sel_rect.outer.y,
+        sel_rect.outer.r,
+        sel_rect.outer.r,
         0,
         360 * 64
     );
@@ -151,12 +181,17 @@ void draw_selection_circle() {
                     display,
                     drawable,
                     gc,
-                    sel_circ.x,
-                    sel_circ.y,
                     sel_circ.x
-                        + cos(segment_rad * line_num) * (sel_rect.width / 2.0),
+                        + cos(segment_rad * line_num)
+                            * (sel_rect.inner.r * 0.5),
                     sel_circ.y
-                        + sin(segment_rad * line_num) * (sel_rect.height / 2.0)
+                        + sin(segment_rad * line_num)
+                            * (sel_rect.inner.r * 0.5),
+                    sel_circ.x
+                        + cos(segment_rad * line_num)
+                            * (sel_rect.outer.r * 0.5),
+                    sel_circ.y
+                        + sin(segment_rad * line_num) * (sel_rect.outer.r * 0.5)
                 );
             }
         }
@@ -169,10 +204,10 @@ void draw_selection_circle() {
                 gc,
                 sel_circ.x
                     + cos(segment_rad * (image_num + 0.5))
-                        * (sel_rect.width * 0.35),
+                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.25),
                 sel_circ.y
                     + sin(segment_rad * (image_num + 0.5))
-                        * (sel_rect.height * 0.35),
+                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.25),
                 "T",
                 1
             );
@@ -181,15 +216,15 @@ void draw_selection_circle() {
 }
 
 void clear_selection_circle() {
-    XRectangle sel_rect = get_curr_sel_rect();
+    struct SelectCircleDims sel_rect = get_curr_sel_dims();
 
     XClearArea(
         display,
         drawable,
-        sel_rect.x - 1,
-        sel_rect.y - 1,
-        sel_rect.width + 2,
-        sel_rect.height + 2,
+        sel_rect.outer.x - 1,
+        sel_rect.outer.y - 1,
+        sel_rect.outer.r + 2,
+        sel_rect.outer.r + 2,
         True  // Expose to draw background
     );
 }
