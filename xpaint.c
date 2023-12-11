@@ -35,9 +35,7 @@ struct SelectonCircleDims {
         unsigned int x;
         unsigned int y;
         unsigned int r;
-    };
-    struct CircleDims outer;
-    struct CircleDims inner;
+    } outer, inner;
 };
 
 static void die(char const* errstr, ...);
