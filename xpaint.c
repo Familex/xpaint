@@ -141,20 +141,40 @@ void draw_selection_circle() {
         360 * 64
     );
 
-    if (sel_circ.item_count >= 2) {
-        double const segment_rad = PI * 2 / sel_circ.item_count;
-        for (unsigned int line_num = 0; line_num < sel_circ.item_count;
-             ++line_num) {
-            XDrawLine(
+    {
+        double const segment_rad = PI * 2 / MAX(1, sel_circ.item_count);
+
+        if (sel_circ.item_count >= 2) {
+            for (unsigned int line_num = 0; line_num < sel_circ.item_count;
+                 ++line_num) {
+                XDrawLine(
+                    display,
+                    drawable,
+                    gc,
+                    sel_circ.x,
+                    sel_circ.y,
+                    sel_circ.x
+                        + cos(segment_rad * line_num) * (sel_rect.width / 2.0),
+                    sel_circ.y
+                        + sin(segment_rad * line_num) * (sel_rect.height / 2.0)
+                );
+            }
+        }
+
+        for (unsigned int image_num = 0; image_num < sel_circ.item_count;
+             ++image_num) {
+            XDrawImageString(
                 display,
                 drawable,
                 gc,
-                sel_circ.x,
-                sel_circ.y,
                 sel_circ.x
-                    + cos(segment_rad * line_num) * (sel_rect.width / 2.0),
+                    + cos(segment_rad * (image_num + 0.5))
+                        * (sel_rect.width * 0.35),
                 sel_circ.y
-                    + sin(segment_rad * line_num) * (sel_rect.height / 2.0)
+                    + sin(segment_rad * (image_num + 0.5))
+                        * (sel_rect.height * 0.35),
+                "T",
+                1
             );
         }
     }
