@@ -22,7 +22,7 @@ struct Item {
     int hicon;
 };
 
-struct SelectCircle {
+struct SelectonCircle {
     Bool is_active;
     int x;
     int y;
@@ -30,7 +30,7 @@ struct SelectCircle {
     struct Item* items;
 };
 
-struct SelectCircleDims {
+struct SelectonCircleDims {
     struct CircleDims {
         unsigned int x;
         unsigned int y;
@@ -45,7 +45,7 @@ static void die(char const* errstr, ...);
 static void init_sel_circ_instruments(int, int);
 static void free_sel_circ();
 
-static struct SelectCircleDims get_curr_sel_dims();
+static struct SelectonCircleDims get_curr_sel_dims();
 
 static void draw_selection_circle();
 static void clear_selection_circle();
@@ -74,7 +74,7 @@ static void (*handler[LASTEvent])(XEvent*) = {
     [KeyPress] = key_press_hdlr,
     [MappingNotify] = mapping_notify_hdlr,
 };
-struct SelectCircle sel_circ = {0};
+struct SelectonCircle sel_circ = {0};
 
 int main(int argc, char** argv) {
     if (!(display = XOpenDisplay(NULL))) {
@@ -97,19 +97,19 @@ void die(char const* errstr, ...) {
     exit(EXIT_FAILURE);
 }
 
-struct SelectCircleDims get_curr_sel_dims() {
-    struct SelectCircleDims result = {
+struct SelectonCircleDims get_curr_sel_dims() {
+    struct SelectonCircleDims result = {
         .outer =
             {
-                .x = sel_circ.x - SELECTION_RECT_DIMENTION_PX / 2,
-                .y = sel_circ.y - SELECTION_RECT_DIMENTION_PX / 2,
-                .r = SELECTION_RECT_DIMENTION_PX,
+                .x = sel_circ.x - SELECTION_OUTER_RADIUS_PX / 2,
+                .y = sel_circ.y - SELECTION_OUTER_RADIUS_PX / 2,
+                .r = SELECTION_OUTER_RADIUS_PX,
             },
         .inner =
             {
-                .x = sel_circ.x - SELECTION_INNER_RECT_DIM_PX / 2,
-                .y = sel_circ.y - SELECTION_INNER_RECT_DIM_PX / 2,
-                .r = SELECTION_INNER_RECT_DIM_PX,
+                .x = sel_circ.x - SELECTION_INNER_RADIUS_PX / 2,
+                .y = sel_circ.y - SELECTION_INNER_RADIUS_PX / 2,
+                .r = SELECTION_INNER_RADIUS_PX,
             },
     };
 
@@ -135,7 +135,7 @@ void init_sel_circ_instruments(int x, int y) {
 void draw_selection_circle() {
     assert(sel_circ.is_active);
 
-    struct SelectCircleDims sel_rect = get_curr_sel_dims();
+    struct SelectonCircleDims sel_rect = get_curr_sel_dims();
 
     XClearArea(
         display,
@@ -216,7 +216,7 @@ void draw_selection_circle() {
 }
 
 void clear_selection_circle() {
-    struct SelectCircleDims sel_rect = get_curr_sel_dims();
+    struct SelectonCircleDims sel_rect = get_curr_sel_dims();
 
     XClearArea(
         display,
