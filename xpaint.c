@@ -209,14 +209,36 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                 1
             );
         }
-    }
 
-    if (pointer_x != -1 && pointer_y != -1) {
-        int const pointer_x_rel = pointer_x - sel_circ.x;
-        int const pointer_y_rel = pointer_y - sel_circ.y;
-        if (sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel)
-            <= sel_rect.outer.r) {
-            puts("draw");
+        // pointer
+        if (pointer_x != -1 && pointer_y != -1) {
+            int const pointer_x_rel = pointer_x - sel_circ.x;
+            int const pointer_y_rel = pointer_y - sel_circ.y;
+            if (sqrt(
+                    pointer_x_rel * pointer_x_rel
+                    + pointer_y_rel * pointer_y_rel
+                )
+                <= sel_rect.outer.r) {
+                double angle =
+                    -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
+                if (pointer_x_rel < 0) {
+                    angle += 180;
+                } else if (pointer_y_rel >= 0) {
+                    angle += 360;
+                }
+
+                XFillArc(
+                    display,
+                    drawable,
+                    gc,
+                    sel_rect.outer.x,
+                    sel_rect.outer.y,
+                    sel_rect.outer.r * 2,
+                    sel_rect.outer.r * 2,
+                    angle * 64,
+                    segment_rad / PI * 180 * 64
+                );
+            }
         }
     }
 }
