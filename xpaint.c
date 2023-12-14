@@ -45,7 +45,7 @@ static void free_sel_circ();
 
 static struct SelectonCircleDims get_curr_sel_dims();
 
-static void draw_selection_circle();
+static void draw_selection_circle(int, int);
 static void clear_selection_circle();
 
 static void setup();
@@ -56,6 +56,7 @@ static void destroy_notify_hdlr(XEvent*);
 static void expose_hdlr(XEvent*);
 static void key_press_hdlr(XEvent*);
 static void mapping_notify_hdlr(XEvent*);
+static void motion_notify_hdlr(XEvent*);
 static void cleanup();
 
 /* globals */
@@ -71,6 +72,7 @@ static void (*handler[LASTEvent])(XEvent*) = {
     [Expose] = expose_hdlr,
     [KeyPress] = key_press_hdlr,
     [MappingNotify] = mapping_notify_hdlr,
+    [MotionNotify] = motion_notify_hdlr,
 };
 struct SelectonCircle sel_circ = {0};
 
@@ -99,14 +101,14 @@ struct SelectonCircleDims get_curr_sel_dims() {
     struct SelectonCircleDims result = {
         .outer =
             {
-                .x = sel_circ.x - SELECTION_OUTER_RADIUS_PX / 2,
-                .y = sel_circ.y - SELECTION_OUTER_RADIUS_PX / 2,
+                .x = sel_circ.x - SELECTION_OUTER_RADIUS_PX,
+                .y = sel_circ.y - SELECTION_OUTER_RADIUS_PX,
                 .r = SELECTION_OUTER_RADIUS_PX,
             },
         .inner =
             {
-                .x = sel_circ.x - SELECTION_INNER_RADIUS_PX / 2,
-                .y = sel_circ.y - SELECTION_INNER_RADIUS_PX / 2,
+                .x = sel_circ.x - SELECTION_INNER_RADIUS_PX,
+                .y = sel_circ.y - SELECTION_INNER_RADIUS_PX,
                 .r = SELECTION_INNER_RADIUS_PX,
             },
     };
@@ -130,10 +132,14 @@ void init_sel_circ_instruments(int x, int y) {
     sel_circ.items = instruments;
 }
 
-void draw_selection_circle() {
-    assert(sel_circ.is_active);
+void draw_selection_circle(int const pointer_x, int const pointer_y) {
+    if (!sel_circ.is_active) {
+        return;
+    }
 
     struct SelectonCircleDims sel_rect = get_curr_sel_dims();
+
+    clear_selection_circle();
 
     XClearArea(
         display,
@@ -151,8 +157,8 @@ void draw_selection_circle() {
         gc,
         sel_rect.inner.x,
         sel_rect.inner.y,
-        sel_rect.inner.r,
-        sel_rect.inner.r,
+        sel_rect.inner.r * 2,
+        sel_rect.inner.r * 2,
         0,
         360 * 64
     );
@@ -163,8 +169,8 @@ void draw_selection_circle() {
         gc,
         sel_rect.outer.x,
         sel_rect.outer.y,
-        sel_rect.outer.r,
-        sel_rect.outer.r,
+        sel_rect.outer.r * 2,
+        sel_rect.outer.r * 2,
         0,
         360 * 64
     );
@@ -179,17 +185,10 @@ void draw_selection_circle() {
                     display,
                     drawable,
                     gc,
-                    sel_circ.x
-                        + cos(segment_rad * line_num)
-                            * (sel_rect.inner.r * 0.5),
-                    sel_circ.y
-                        + sin(segment_rad * line_num)
-                            * (sel_rect.inner.r * 0.5),
-                    sel_circ.x
-                        + cos(segment_rad * line_num)
-                            * (sel_rect.outer.r * 0.5),
-                    sel_circ.y
-                        + sin(segment_rad * line_num) * (sel_rect.outer.r * 0.5)
+                    sel_circ.x + cos(segment_rad * line_num) * sel_rect.inner.r,
+                    sel_circ.y + sin(segment_rad * line_num) * sel_rect.inner.r,
+                    sel_circ.x + cos(segment_rad * line_num) * sel_rect.outer.r,
+                    sel_circ.y + sin(segment_rad * line_num) * sel_rect.outer.r
                 );
             }
         }
@@ -202,13 +201,22 @@ void draw_selection_circle() {
                 gc,
                 sel_circ.x
                     + cos(segment_rad * (image_num + 0.5))
-                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.25),
+                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5),
                 sel_circ.y
                     + sin(segment_rad * (image_num + 0.5))
-                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.25),
+                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5),
                 "T",
                 1
             );
+        }
+    }
+
+    if (pointer_x != -1 && pointer_y != -1) {
+        int const pointer_x_rel = pointer_x - sel_circ.x;
+        int const pointer_y_rel = pointer_y - sel_circ.y;
+        if (sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel)
+            <= sel_rect.outer.r) {
+            puts("draw");
         }
     }
 }
@@ -221,8 +229,8 @@ void clear_selection_circle() {
         drawable,
         sel_rect.outer.x - 1,
         sel_rect.outer.y - 1,
-        sel_rect.outer.r + 2,
-        sel_rect.outer.r + 2,
+        sel_rect.outer.r * 2 + 2,
+        sel_rect.outer.r * 2 + 2,
         True  // Expose to draw background
     );
 }
@@ -282,6 +290,7 @@ void setup() {
         display,
         window,
         ButtonPressMask | ButtonReleaseMask | KeyPressMask | ExposureMask
+            | PointerMotionMask
     );
 
     /* show up window */
@@ -292,7 +301,7 @@ void button_press_hdlr(XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     if (e->button == Button3) {
         init_sel_circ_instruments(e->x, e->y);
-        draw_selection_circle();
+        draw_selection_circle(-1, -1);
     }
 }
 
@@ -320,6 +329,12 @@ void key_press_hdlr(XEvent* event) {
 
 void mapping_notify_hdlr(XEvent* event) {
     XRefreshKeyboardMapping(&event->xmapping);
+}
+
+void motion_notify_hdlr(XEvent* event) {
+    XMotionEvent* e = (XMotionEvent*)event;
+
+    draw_selection_circle(e->x, e->y);
 }
 
 void cleanup() {
