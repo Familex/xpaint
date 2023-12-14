@@ -219,6 +219,7 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                     + pointer_y_rel * pointer_y_rel
                 )
                 <= sel_rect.outer.r) {
+                // FIXME do it right.
                 double angle =
                     -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
                 if (pointer_x_rel < 0) {
@@ -226,6 +227,9 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                 } else if (pointer_y_rel >= 0) {
                     angle += 360;
                 }
+
+                double const segment_deg = segment_rad / PI * 180;
+                int const current_segment = angle / segment_deg;
 
                 XFillArc(
                     display,
@@ -235,8 +239,8 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                     sel_rect.outer.y,
                     sel_rect.outer.r * 2,
                     sel_rect.outer.r * 2,
-                    angle * 64,
-                    segment_rad / PI * 180 * 64
+                    (current_segment * segment_deg) * 64,
+                    segment_deg * 64
                 );
             }
         }
