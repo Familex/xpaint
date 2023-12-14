@@ -139,18 +139,20 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
 
     struct SelectonCircleDims sel_rect = get_curr_sel_dims();
 
-    clear_selection_circle();
-
-    XClearArea(
+    XSetForeground(display, gc, 0xFFFFFF);
+    XFillArc(
         display,
         drawable,
-        sel_rect.outer.x - 1,
-        sel_rect.outer.y - 1,
-        sel_rect.outer.r + 2,
-        sel_rect.outer.r + 2,
-        True  // Expose to draw background
+        gc,
+        sel_rect.outer.x,
+        sel_rect.outer.y,
+        sel_rect.outer.r * 2,
+        sel_rect.outer.r * 2,
+        0,
+        360 * 64
     );
 
+    XSetForeground(display, gc, 0x000000);
     XDrawArc(
         display,
         drawable,
@@ -231,6 +233,7 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                 double const segment_deg = segment_rad / PI * 180;
                 int const current_segment = angle / segment_deg;
 
+                XSetForeground(display, gc, 0x888888);
                 XFillArc(
                     display,
                     drawable,
@@ -239,6 +242,18 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                     sel_rect.outer.y,
                     sel_rect.outer.r * 2,
                     sel_rect.outer.r * 2,
+                    (current_segment * segment_deg) * 64,
+                    segment_deg * 64
+                );
+                XSetForeground(display, gc, 0xAAAAAA);
+                XFillArc(
+                    display,
+                    drawable,
+                    gc,
+                    sel_rect.inner.x,
+                    sel_rect.inner.y,
+                    sel_rect.inner.r * 2,
+                    sel_rect.inner.r * 2,
                     (current_segment * segment_deg) * 64,
                     segment_deg * 64
                 );
