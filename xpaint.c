@@ -214,11 +214,11 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
         if (pointer_x != -1 && pointer_y != -1) {
             int const pointer_x_rel = pointer_x - sel_circ.x;
             int const pointer_y_rel = pointer_y - sel_circ.y;
-            if (sqrt(
-                    pointer_x_rel * pointer_x_rel
-                    + pointer_y_rel * pointer_y_rel
-                )
-                <= sel_rect.outer.r) {
+            double const pointer_r = sqrt(
+                pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel
+            );
+            if (pointer_r <= sel_rect.outer.r
+                && pointer_r >= sel_rect.inner.r) {
                 // FIXME do it right.
                 double angle =
                     -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
