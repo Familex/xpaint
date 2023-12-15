@@ -45,6 +45,8 @@ static void free_sel_circ();
 
 static struct SelectonCircleDims get_curr_sel_dims();
 
+static int current_sel_circ_item(int, int);
+
 static void draw_selection_circle(int, int);
 static void clear_selection_circle();
 
@@ -132,6 +134,30 @@ void init_sel_circ_instruments(int x, int y) {
     sel_circ.items = instruments;
 }
 
+int current_sel_circ_item(int x, int y) {
+    struct SelectonCircleDims sel_rect = get_curr_sel_dims();
+    int const pointer_x_rel = x - sel_circ.x;
+    int const pointer_y_rel = y - sel_circ.y;
+    double const segment_rad = PI * 2 / MAX(1, sel_circ.item_count);
+    double const segment_deg = segment_rad / PI * 180;
+    double const pointer_r =
+        sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
+
+    if (pointer_r <= sel_rect.outer.r && pointer_r >= sel_rect.inner.r) {
+        // FIXME do it right.
+        double angle = -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
+        if (pointer_x_rel < 0) {
+            angle += 180;
+        } else if (pointer_y_rel >= 0) {
+            angle += 360;
+        }
+
+        return angle / segment_deg;
+    } else {
+        return -1;
+    }
+}
+
 void draw_selection_circle(int const pointer_x, int const pointer_y) {
     if (!sel_circ.is_active) {
         return;
@@ -179,6 +205,7 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
 
     {
         double const segment_rad = PI * 2 / MAX(1, sel_circ.item_count);
+        double const segment_deg = segment_rad / PI * 180;
 
         if (sel_circ.item_count >= 2) {
             for (unsigned int line_num = 0; line_num < sel_circ.item_count;
@@ -213,51 +240,32 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
         }
 
         // pointer
-        if (pointer_x != -1 && pointer_y != -1) {
-            int const pointer_x_rel = pointer_x - sel_circ.x;
-            int const pointer_y_rel = pointer_y - sel_circ.y;
-            double const pointer_r = sqrt(
-                pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel
+        int const current_item = current_sel_circ_item(pointer_x, pointer_y);
+        if (current_item != -1) {
+            XSetForeground(display, gc, 0x888888);
+            XFillArc(
+                display,
+                drawable,
+                gc,
+                sel_rect.outer.x,
+                sel_rect.outer.y,
+                sel_rect.outer.r * 2,
+                sel_rect.outer.r * 2,
+                (current_item * segment_deg) * 64,
+                segment_deg * 64
             );
-            if (pointer_r <= sel_rect.outer.r
-                && pointer_r >= sel_rect.inner.r) {
-                // FIXME do it right.
-                double angle =
-                    -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
-                if (pointer_x_rel < 0) {
-                    angle += 180;
-                } else if (pointer_y_rel >= 0) {
-                    angle += 360;
-                }
-
-                double const segment_deg = segment_rad / PI * 180;
-                int const current_segment = angle / segment_deg;
-
-                XSetForeground(display, gc, 0x888888);
-                XFillArc(
-                    display,
-                    drawable,
-                    gc,
-                    sel_rect.outer.x,
-                    sel_rect.outer.y,
-                    sel_rect.outer.r * 2,
-                    sel_rect.outer.r * 2,
-                    (current_segment * segment_deg) * 64,
-                    segment_deg * 64
-                );
-                XSetForeground(display, gc, 0xAAAAAA);
-                XFillArc(
-                    display,
-                    drawable,
-                    gc,
-                    sel_rect.inner.x,
-                    sel_rect.inner.y,
-                    sel_rect.inner.r * 2,
-                    sel_rect.inner.r * 2,
-                    (current_segment * segment_deg) * 64,
-                    segment_deg * 64
-                );
-            }
+            XSetForeground(display, gc, 0xAAAAAA);
+            XFillArc(
+                display,
+                drawable,
+                gc,
+                sel_rect.inner.x,
+                sel_rect.inner.y,
+                sel_rect.inner.r * 2,
+                sel_rect.inner.r * 2,
+                (current_item * segment_deg) * 64,
+                segment_deg * 64
+            );
         }
     }
 }
