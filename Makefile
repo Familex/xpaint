@@ -1,16 +1,19 @@
-INCS = 
 LIBS = -lX11 -lGL -lGLU -lm
 CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
 
 CC = cc
 
-all: clean xpaint
+SRC = xpaint.c
+
+all: xpaint
 
 clean:
-	@rm -rf build
+	@rm -f xpaint ${OBJ}
 
-xpaint:
-	@mkdir build
-	@${CC} -o build/xpaint xpaint.c ${CFLAGS}
+xpaint: ${SRC} config.h
+	@${CC} -o $@ ${SRC} ${CFLAGS}
 
-.PHONY: all clean xpaint
+exec: xpaint
+	@./xpaint
+
+.PHONY: all clean exec
