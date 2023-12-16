@@ -21,10 +21,14 @@ struct Item {
     int hicon;
 };
 
-struct Instrument {
+struct ToolCtx {
     void (*on_click)(XButtonReleasedEvent*);
+    void (*on_drag)(XMotionEvent*);
     // static zero terminated string pointer
-    char* ssz_name;
+    char* ssz_tool_name;
+    int prev_x;
+    int prev_y;
+    Bool is_holding;
 };
 
 struct SelectonCircle {
@@ -43,21 +47,32 @@ struct SelectonCircleDims {
     } outer, inner;
 };
 
+struct Canvas {
+    Pixmap pm;
+    GC gc;
+    int width;
+    int height;
+};
+
 static void die(char const* errstr, ...);
 
-static void init_sel_circ_instruments(int, int);
+static void init_sel_circ_tools(int, int);
 static void free_sel_circ(void);
 static int current_sel_circ_item(int, int);
 static struct SelectonCircleDims get_curr_sel_dims(void);
 
-static void set_current_instrument_selection(void);
-static void set_current_instrument_pencil(void);
+static void set_current_tool_selection(void);
+static void set_current_tool_pencil(void);
 
-static void instrument_selection_on_click(XButtonReleasedEvent*);
-static void instrument_pencil_on_click(XButtonReleasedEvent*);
+static void tool_selection_on_click(XButtonReleasedEvent*);
+static void tool_pencil_on_click(XButtonReleasedEvent*);
+static void tool_pencil_on_drag(XMotionEvent*);
 
 static void draw_selection_circle(int, int);
 static void clear_selection_circle(void);
+static void update_screen();
+
+static void resize_canvas(int, int);
 
 static void setup(void);
 static void run(void);
@@ -68,6 +83,7 @@ static void expose_hdlr(XEvent*);
 static void key_press_hdlr(XEvent*);
 static void mapping_notify_hdlr(XEvent*);
 static void motion_notify_hdlr(XEvent*);
+static void configure_notify_hdlr(XEvent*);
 static void cleanup(void);
 
 /* globals */
@@ -84,9 +100,11 @@ static void (*handler[LASTEvent])(XEvent*) = {
     [KeyPress] = key_press_hdlr,
     [MappingNotify] = mapping_notify_hdlr,
     [MotionNotify] = motion_notify_hdlr,
+    [ConfigureNotify] = configure_notify_hdlr,
 };
-struct SelectonCircle sel_circ = {0};
-struct Instrument current_instrument = {0};
+static struct SelectonCircle sel_circ = {0};
+static struct ToolCtx tool_ctx = {0};
+static struct Canvas canvas = {0};
 
 int main(int argc, char** argv) {
     if (!(display = XOpenDisplay(NULL))) {
@@ -128,37 +146,55 @@ struct SelectonCircleDims get_curr_sel_dims(void) {
     return result;
 }
 
-void set_current_instrument_selection(void) {
-    current_instrument.on_click = &instrument_selection_on_click;
-    current_instrument.ssz_name = "selection";
+void set_current_tool_selection(void) {
+    tool_ctx = (const struct ToolCtx) {0};
+    tool_ctx.on_click = &tool_selection_on_click;
+    tool_ctx.ssz_tool_name = "selection";
 }
 
-void set_current_instrument_pencil(void) {
-    current_instrument.on_click = &instrument_pencil_on_click;
-    current_instrument.ssz_name = "pencil";
+void set_current_tool_pencil(void) {
+    tool_ctx.on_click = &tool_pencil_on_click;
+    tool_ctx.on_drag = &tool_pencil_on_drag;
+    tool_ctx.ssz_tool_name = "pencil";
 }
 
-void instrument_selection_on_click(XButtonReleasedEvent* event) {
+void tool_selection_on_click(XButtonReleasedEvent* event) {
     // FIXME
     puts("selection action");
 }
 
-void instrument_pencil_on_click(XButtonReleasedEvent* event) {
-    // FIXME
+void tool_pencil_on_click(XButtonReleasedEvent* event) {
     puts("pencil action");
+    // FIXME use XDrawArc and XFillArc
+    XDrawPoint(display, canvas.pm, canvas.gc, event->x, event->y);
 }
 
-void init_sel_circ_instruments(int x, int y) {
-    static struct Item instruments[] = {
-        [0] = {&set_current_instrument_selection, 0},
-        [1] = {&set_current_instrument_pencil, 0},
+void tool_pencil_on_drag(XMotionEvent* event) {
+    if (tool_ctx.is_holding) {
+        XSetForeground(display, canvas.gc, 0x00FF00);
+        XDrawLine(
+            display,
+            canvas.pm,
+            canvas.gc,
+            tool_ctx.prev_x,
+            tool_ctx.prev_y,
+            event->x,
+            event->y
+        );
+    }
+}
+
+void init_sel_circ_tools(int x, int y) {
+    static struct Item tools[] = {
+        [0] = {&set_current_tool_selection, 0},
+        [1] = {&set_current_tool_pencil, 0},
     };
 
     sel_circ.is_active = True;
     sel_circ.x = x;
     sel_circ.y = y;
-    sel_circ.item_count = LENGTH(instruments);
-    sel_circ.items = instruments;
+    sel_circ.item_count = LENGTH(tools);
+    sel_circ.items = tools;
 }
 
 int current_sel_circ_item(int x, int y) {
@@ -311,6 +347,53 @@ void clear_selection_circle(void) {
     );
 }
 
+void update_screen(void) {
+    XCopyArea(
+        display,
+        canvas.pm,
+        drawable,
+        canvas.gc,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+        0,
+        0
+    );
+}
+
+void resize_canvas(int new_width, int new_height) {
+    Pixmap new_pm = XCreatePixmap(
+        display,
+        window,
+        new_width,
+        new_height,
+        // FIXME
+        DefaultDepth(display, 0)
+    );
+
+    XSetForeground(display, canvas.gc, CANVAS_BACKGROUND_RGB);
+    XFillRectangle(display, new_pm, canvas.gc, 0, 0, new_width, new_height);
+
+    XCopyArea(
+        display,
+        canvas.pm,
+        new_pm,
+        canvas.gc,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+        0,
+        0
+    );
+    XFreePixmap(display, canvas.pm);
+
+    canvas.pm = new_pm;
+    canvas.width = new_width;
+    canvas.height = new_height;
+}
+
 void free_sel_circ(void) {
     sel_circ.is_active = False;
 }
@@ -332,6 +415,7 @@ void setup(void) {
     /* drawing contexts for an window */
     unsigned int myforeground = BlackPixel(display, screen);
     unsigned int mybackground = WhitePixel(display, screen);
+    // FIXME check values
     XSizeHints hint = {
         .x = 200,
         .y = 300,
@@ -366,8 +450,45 @@ void setup(void) {
         display,
         window,
         ButtonPressMask | ButtonReleaseMask | KeyPressMask | ExposureMask
-            | PointerMotionMask
+            | PointerMotionMask | StructureNotifyMask
     );
+
+    /* canvas */ {
+        canvas.width = hint.width;
+        canvas.height = hint.height;
+        canvas.pm = XCreatePixmap(
+            display,
+            window,
+            canvas.width,
+            canvas.height,
+            // FIXME
+            DefaultDepth(display, 0)
+        );
+        XGCValues canvas_gc_vals = {
+            .line_style = LineSolid,
+            .line_width = 5,
+            .cap_style = CapButt,
+            .fill_style = FillSolid
+        };
+        canvas.gc = XCreateGC(
+            display,
+            window,
+            GCForeground | GCBackground | GCFillStyle | GCLineStyle
+                | GCLineWidth | GCCapStyle | GCJoinStyle,
+            &canvas_gc_vals
+        );
+        // initial canvas color
+        XSetForeground(display, canvas.gc, CANVAS_BACKGROUND_RGB);
+        XFillRectangle(
+            display,
+            canvas.pm,
+            canvas.gc,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+    }
 
     /* show up window */
     XMapRaised(display, window);
@@ -376,8 +497,11 @@ void setup(void) {
 void button_press_hdlr(XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     if (e->button == Button3) {
-        init_sel_circ_instruments(e->x, e->y);
+        init_sel_circ_tools(e->x, e->y);
         draw_selection_circle(-1, -1);
+    }
+    if (e->button == Button1) {
+        tool_ctx.is_holding = True;
     }
 }
 
@@ -390,14 +514,18 @@ void button_release_hdlr(XEvent* event) {
         }
         free_sel_circ();
         clear_selection_circle();
-    } else if (current_instrument.on_click) {
-        current_instrument.on_click(e);
+    } else if (tool_ctx.on_click) {
+        tool_ctx.on_click(e);
+        tool_ctx.is_holding = False;
+        update_screen();
     }
 }
 
 void destroy_notify_hdlr(XEvent* event) {}
 
-void expose_hdlr(XEvent* event) {}
+void expose_hdlr(XEvent* event) {
+    update_screen();
+}
 
 void key_press_hdlr(XEvent* event) {
     static char text[10];
@@ -416,10 +544,28 @@ void mapping_notify_hdlr(XEvent* event) {
 void motion_notify_hdlr(XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
 
+    if (tool_ctx.on_drag) {
+        tool_ctx.on_drag(e);
+        // FIXME move it to better place
+        update_screen();
+    }
+
     draw_selection_circle(e->x, e->y);
+
+    tool_ctx.prev_x = e->x;
+    tool_ctx.prev_y = e->y;
+}
+
+void configure_notify_hdlr(XEvent* event) {
+    if (event->xconfigure.width != canvas.width
+        || event->xconfigure.height != canvas.height) {
+        resize_canvas(event->xconfigure.width, event->xconfigure.height);
+    }
 }
 
 void cleanup(void) {
+    XFreeGC(display, canvas.gc);
+    XFreePixmap(display, canvas.pm);
     XFreeGC(display, gc);
     XDestroyWindow(display, window);
 }
