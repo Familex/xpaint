@@ -21,6 +21,12 @@ struct Item {
     int hicon;
 };
 
+struct Instrument {
+    void (*on_click)(XButtonReleasedEvent*);
+    // static zero terminated string pointer
+    char* ssz_name;
+};
+
 struct SelectonCircle {
     Bool is_active;
     int x;
@@ -43,6 +49,12 @@ static void init_sel_circ_instruments(int, int);
 static void free_sel_circ(void);
 static int current_sel_circ_item(int, int);
 static struct SelectonCircleDims get_curr_sel_dims(void);
+
+static void set_current_instrument_selection(void);
+static void set_current_instrument_pencil(void);
+
+static void instrument_selection_on_click(XButtonReleasedEvent*);
+static void instrument_pencil_on_click(XButtonReleasedEvent*);
 
 static void draw_selection_circle(int, int);
 static void clear_selection_circle(void);
@@ -74,6 +86,7 @@ static void (*handler[LASTEvent])(XEvent*) = {
     [MotionNotify] = motion_notify_hdlr,
 };
 struct SelectonCircle sel_circ = {0};
+struct Instrument current_instrument = {0};
 
 int main(int argc, char** argv) {
     if (!(display = XOpenDisplay(NULL))) {
@@ -115,13 +128,30 @@ struct SelectonCircleDims get_curr_sel_dims(void) {
     return result;
 }
 
+void set_current_instrument_selection(void) {
+    current_instrument.on_click = &instrument_selection_on_click;
+    current_instrument.ssz_name = "selection";
+}
+
+void set_current_instrument_pencil(void) {
+    current_instrument.on_click = &instrument_pencil_on_click;
+    current_instrument.ssz_name = "pencil";
+}
+
+void instrument_selection_on_click(XButtonReleasedEvent* event) {
+    // FIXME
+    puts("selection action");
+}
+
+void instrument_pencil_on_click(XButtonReleasedEvent* event) {
+    // FIXME
+    puts("pencil action");
+}
+
 void init_sel_circ_instruments(int x, int y) {
     static struct Item instruments[] = {
-        [0] = {NULL, 0},
-        [1] = {NULL, 0},
-        [2] = {NULL, 0},
-        [3] = {NULL, 0},
-        [4] = {NULL, 0}
+        [0] = {&set_current_instrument_selection, 0},
+        [1] = {&set_current_instrument_pencil, 0},
     };
 
     sel_circ.is_active = True;
@@ -354,8 +384,14 @@ void button_press_hdlr(XEvent* event) {
 void button_release_hdlr(XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     if (e->button == Button3) {
+        int const selected_item = current_sel_circ_item(e->x, e->y);
+        if (selected_item != -1 && sel_circ.items[selected_item].on_select) {
+            sel_circ.items[selected_item].on_select();
+        }
         free_sel_circ();
         clear_selection_circle();
+    } else if (current_instrument.on_click) {
+        current_instrument.on_click(e);
     }
 }
 
