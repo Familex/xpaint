@@ -1,7 +1,7 @@
 LIBS = -lX11 -lGL -lGLU -lm
 CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
 
-CC = cc
+CC ?= cc
 
 SRC = xpaint.c
 
