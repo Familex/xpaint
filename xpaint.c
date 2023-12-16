@@ -3,7 +3,6 @@
 #include <X11/X.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
-#include <assert.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -18,7 +17,7 @@
 #include "config.h"
 
 struct Item {
-    void (*on_select)();
+    void (*on_select)(void);
     int hicon;
 };
 
@@ -41,17 +40,15 @@ struct SelectonCircleDims {
 static void die(char const* errstr, ...);
 
 static void init_sel_circ_instruments(int, int);
-static void free_sel_circ();
-
-static struct SelectonCircleDims get_curr_sel_dims();
-
+static void free_sel_circ(void);
 static int current_sel_circ_item(int, int);
+static struct SelectonCircleDims get_curr_sel_dims(void);
 
 static void draw_selection_circle(int, int);
-static void clear_selection_circle();
+static void clear_selection_circle(void);
 
-static void setup();
-static void run();
+static void setup(void);
+static void run(void);
 static void button_press_hdlr(XEvent*);
 static void button_release_hdlr(XEvent*);
 static void destroy_notify_hdlr(XEvent*);
@@ -59,7 +56,7 @@ static void expose_hdlr(XEvent*);
 static void key_press_hdlr(XEvent*);
 static void mapping_notify_hdlr(XEvent*);
 static void motion_notify_hdlr(XEvent*);
-static void cleanup();
+static void cleanup(void);
 
 /* globals */
 static Bool done = False;
@@ -99,7 +96,7 @@ void die(char const* errstr, ...) {
     exit(EXIT_FAILURE);
 }
 
-struct SelectonCircleDims get_curr_sel_dims() {
+struct SelectonCircleDims get_curr_sel_dims(void) {
     struct SelectonCircleDims result = {
         .outer =
             {
@@ -270,7 +267,7 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
     }
 }
 
-void clear_selection_circle() {
+void clear_selection_circle(void) {
     struct SelectonCircleDims sel_rect = get_curr_sel_dims();
 
     XClearArea(
@@ -284,11 +281,11 @@ void clear_selection_circle() {
     );
 }
 
-void free_sel_circ() {
+void free_sel_circ(void) {
     sel_circ.is_active = False;
 }
 
-void run() {
+void run(void) {
     XEvent event;
 
     XSync(display, False);
@@ -299,7 +296,7 @@ void run() {
     }
 }
 
-void setup() {
+void setup(void) {
     int screen = DefaultScreen(display);
 
     /* drawing contexts for an window */
@@ -386,7 +383,7 @@ void motion_notify_hdlr(XEvent* event) {
     draw_selection_circle(e->x, e->y);
 }
 
-void cleanup() {
+void cleanup(void) {
     XFreeGC(display, gc);
     XDestroyWindow(display, window);
 }
