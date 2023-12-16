@@ -8,7 +8,7 @@ SRC = xpaint.c
 all: xpaint
 
 clean:
-	@rm -f xpaint ${OBJ}
+	@rm -f xpaint
 
 xpaint: ${SRC} config.h
 	@${CC} -o $@ ${SRC} ${CFLAGS}
