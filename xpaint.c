@@ -16,29 +16,6 @@
 
 #include "config.h"
 
-struct Item {
-    void (*on_select)(void);
-    int hicon;
-};
-
-struct ToolCtx {
-    void (*on_click)(XButtonReleasedEvent*);
-    void (*on_drag)(XMotionEvent*);
-    // static zero terminated string pointer
-    char* ssz_tool_name;
-    int prev_x;
-    int prev_y;
-    Bool is_holding;
-};
-
-struct SelectonCircle {
-    Bool is_active;
-    int x;
-    int y;
-    unsigned int item_count;
-    struct Item* items;
-};
-
 struct SelectonCircleDims {
     struct CircleDims {
         unsigned int x;
@@ -47,72 +24,86 @@ struct SelectonCircleDims {
     } outer, inner;
 };
 
-struct Canvas {
-    Pixmap pm;
-    GC gc;
-    int width;
-    int height;
+struct Ctx {
+    struct DrawCtx {
+        Display* dp;
+        Drawable drawable;
+        GC gc;
+        Window window;
+        struct Canvas {
+            Pixmap pm;
+            GC gc;
+            int width;
+            int height;
+        } cv;
+    } dc;
+    struct ToolCtx {
+        void (*on_click)(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+        void (*on_drag)(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
+        // static zero terminated string pointer
+        char* ssz_tool_name;
+        int prev_x;
+        int prev_y;
+        Bool is_holding;
+    } tool_ctx;
+    struct SelectionCircle {
+        Bool is_active;
+        int x;
+        int y;
+        unsigned int item_count;
+        struct Item {
+            void (*on_select)(struct ToolCtx*);
+            int hicon;
+        }* items;
+    } sc;
 };
 
 static void die(char const* errstr, ...);
 
-static void init_sel_circ_tools(int, int);
-static void free_sel_circ(void);
-static int current_sel_circ_item(int, int);
-static struct SelectonCircleDims get_curr_sel_dims(void);
+static void init_sel_circ_tools(struct SelectionCircle*, int, int);
+static void free_sel_circ(struct SelectionCircle*);
+static int current_sel_circ_item(struct SelectionCircle const*, int, int);
+static struct SelectonCircleDims
+get_curr_sel_dims(struct SelectionCircle const*);
 
-static void set_current_tool_selection(void);
-static void set_current_tool_pencil(void);
+static void set_current_tool_selection(struct ToolCtx*);
+static void set_current_tool_pencil(struct ToolCtx*);
 
-static void tool_selection_on_click(XButtonReleasedEvent*);
-static void tool_pencil_on_click(XButtonReleasedEvent*);
-static void tool_pencil_on_drag(XMotionEvent*);
+static void
+tool_selection_on_click(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+static void
+tool_pencil_on_click(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+static void
+tool_pencil_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
 
-static void draw_selection_circle(int, int);
-static void clear_selection_circle(void);
-static void update_screen();
+static void
+draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, int, int);
+static void clear_selection_circle(struct DrawCtx*, struct SelectionCircle*);
+static void update_screen(struct DrawCtx*);
 
-static void resize_canvas(int, int);
+static void resize_canvas(struct DrawCtx*, int, int);
 
-static void setup(void);
-static void run(void);
-static void button_press_hdlr(XEvent*);
-static void button_release_hdlr(XEvent*);
-static void destroy_notify_hdlr(XEvent*);
-static void expose_hdlr(XEvent*);
-static void key_press_hdlr(XEvent*);
-static void mapping_notify_hdlr(XEvent*);
-static void motion_notify_hdlr(XEvent*);
-static void configure_notify_hdlr(XEvent*);
-static void cleanup(void);
-
-/* globals */
-static Bool done = False;
-static Display* display;
-static Drawable drawable;
-static GC gc;
-static Window window;
-static void (*handler[LASTEvent])(XEvent*) = {
-    [ButtonPress] = button_press_hdlr,
-    [ButtonRelease] = button_release_hdlr,
-    [DestroyNotify] = destroy_notify_hdlr,
-    [Expose] = expose_hdlr,
-    [KeyPress] = key_press_hdlr,
-    [MappingNotify] = mapping_notify_hdlr,
-    [MotionNotify] = motion_notify_hdlr,
-    [ConfigureNotify] = configure_notify_hdlr,
-};
-static struct SelectonCircle sel_circ = {0};
-static struct ToolCtx tool_ctx = {0};
-static struct Canvas canvas = {0};
+static struct Ctx setup(Display*);
+static void run(struct Ctx*);
+static Bool button_press_hdlr(struct Ctx*, XEvent*);
+static Bool button_release_hdlr(struct Ctx*, XEvent*);
+static Bool destroy_notify_hdlr(struct Ctx*, XEvent*);
+static Bool expose_hdlr(struct Ctx*, XEvent*);
+static Bool key_press_hdlr(struct Ctx*, XEvent*);
+static Bool mapping_notify_hdlr(struct Ctx*, XEvent*);
+static Bool motion_notify_hdlr(struct Ctx*, XEvent*);
+static Bool configure_notify_hdlr(struct Ctx*, XEvent*);
+static void cleanup(struct Ctx*);
 
 int main(int argc, char** argv) {
-    if (!(display = XOpenDisplay(NULL))) {
+    Display* display = XOpenDisplay(NULL);
+    if (!display) {
         die("cannot open display\n");
     }
-    setup();
-    run();
-    cleanup();
+
+    struct Ctx ctx = setup(display);
+    run(&ctx);
+    cleanup(&ctx);
     XCloseDisplay(display);
 
     return 0;
@@ -127,18 +118,19 @@ void die(char const* errstr, ...) {
     exit(EXIT_FAILURE);
 }
 
-struct SelectonCircleDims get_curr_sel_dims(void) {
+struct SelectonCircleDims
+get_curr_sel_dims(struct SelectionCircle const* sel_circ) {
     struct SelectonCircleDims result = {
         .outer =
             {
-                .x = sel_circ.x - SELECTION_OUTER_RADIUS_PX,
-                .y = sel_circ.y - SELECTION_OUTER_RADIUS_PX,
+                .x = sel_circ->x - SELECTION_OUTER_RADIUS_PX,
+                .y = sel_circ->y - SELECTION_OUTER_RADIUS_PX,
                 .r = SELECTION_OUTER_RADIUS_PX,
             },
         .inner =
             {
-                .x = sel_circ.x - SELECTION_INNER_RADIUS_PX,
-                .y = sel_circ.y - SELECTION_INNER_RADIUS_PX,
+                .x = sel_circ->x - SELECTION_INNER_RADIUS_PX,
+                .y = sel_circ->y - SELECTION_INNER_RADIUS_PX,
                 .r = SELECTION_INNER_RADIUS_PX,
             },
     };
@@ -146,62 +138,75 @@ struct SelectonCircleDims get_curr_sel_dims(void) {
     return result;
 }
 
-void set_current_tool_selection(void) {
-    tool_ctx = (const struct ToolCtx) {0};
-    tool_ctx.on_click = &tool_selection_on_click;
-    tool_ctx.ssz_tool_name = "selection";
+void set_current_tool_selection(struct ToolCtx* tool_ctx) {
+    *tool_ctx = (const struct ToolCtx) {0};
+    tool_ctx->on_click = &tool_selection_on_click;
+    tool_ctx->ssz_tool_name = "selection";
 }
 
-void set_current_tool_pencil(void) {
-    tool_ctx.on_click = &tool_pencil_on_click;
-    tool_ctx.on_drag = &tool_pencil_on_drag;
-    tool_ctx.ssz_tool_name = "pencil";
+void set_current_tool_pencil(struct ToolCtx* tool_ctx) {
+    *tool_ctx = (const struct ToolCtx) {0};
+    tool_ctx->on_click = &tool_pencil_on_click;
+    tool_ctx->on_drag = &tool_pencil_on_drag;
+    tool_ctx->ssz_tool_name = "pencil";
 }
 
-void tool_selection_on_click(XButtonReleasedEvent* event) {
+void tool_selection_on_click(
+    struct DrawCtx* dc,
+    struct ToolCtx* tool,
+    XButtonReleasedEvent const* event
+) {
     // FIXME
     puts("selection action");
 }
 
-void tool_pencil_on_click(XButtonReleasedEvent* event) {
+void tool_pencil_on_click(
+    struct DrawCtx* dc,
+    struct ToolCtx* tool,
+    XButtonReleasedEvent const* event
+) {
     puts("pencil action");
     // FIXME use XDrawArc and XFillArc
-    XDrawPoint(display, canvas.pm, canvas.gc, event->x, event->y);
+    XDrawPoint(dc->dp, dc->cv.pm, dc->cv.gc, event->x, event->y);
 }
 
-void tool_pencil_on_drag(XMotionEvent* event) {
-    if (tool_ctx.is_holding) {
-        XSetForeground(display, canvas.gc, 0x00FF00);
+void tool_pencil_on_drag(
+    struct DrawCtx* dc,
+    struct ToolCtx* tool,
+    XMotionEvent const* event
+) {
+    if (tool->is_holding) {
+        XSetForeground(dc->dp, dc->cv.gc, 0x00FF00);
         XDrawLine(
-            display,
-            canvas.pm,
-            canvas.gc,
-            tool_ctx.prev_x,
-            tool_ctx.prev_y,
+            dc->dp,
+            dc->cv.pm,
+            dc->cv.gc,
+            tool->prev_x,
+            tool->prev_y,
             event->x,
             event->y
         );
     }
 }
 
-void init_sel_circ_tools(int x, int y) {
+void init_sel_circ_tools(struct SelectionCircle* sc, int x, int y) {
     static struct Item tools[] = {
         [0] = {&set_current_tool_selection, 0},
         [1] = {&set_current_tool_pencil, 0},
     };
 
-    sel_circ.is_active = True;
-    sel_circ.x = x;
-    sel_circ.y = y;
-    sel_circ.item_count = LENGTH(tools);
-    sel_circ.items = tools;
+    sc->is_active = True;
+    sc->x = x;
+    sc->y = y;
+    sc->item_count = LENGTH(tools);
+    sc->items = tools;
 }
 
-int current_sel_circ_item(int x, int y) {
-    struct SelectonCircleDims sel_rect = get_curr_sel_dims();
-    int const pointer_x_rel = x - sel_circ.x;
-    int const pointer_y_rel = y - sel_circ.y;
-    double const segment_rad = PI * 2 / MAX(1, sel_circ.item_count);
+int current_sel_circ_item(struct SelectionCircle const* sc, int x, int y) {
+    struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
+    int const pointer_x_rel = x - sc->x;
+    int const pointer_y_rel = y - sc->y;
+    double const segment_rad = PI * 2 / MAX(1, sc->item_count);
     double const segment_deg = segment_rad / PI * 180;
     double const pointer_r =
         sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
@@ -221,18 +226,23 @@ int current_sel_circ_item(int x, int y) {
     }
 }
 
-void draw_selection_circle(int const pointer_x, int const pointer_y) {
-    if (!sel_circ.is_active) {
+void draw_selection_circle(
+    struct DrawCtx* dc,
+    struct SelectionCircle const* sc,
+    int const pointer_x,
+    int const pointer_y
+) {
+    if (!sc->is_active) {
         return;
     }
 
-    struct SelectonCircleDims sel_rect = get_curr_sel_dims();
+    struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
 
-    XSetForeground(display, gc, 0xFFFFFF);
+    XSetForeground(dc->dp, dc->gc, 0xFFFFFF);
     XFillArc(
-        display,
-        drawable,
-        gc,
+        dc->dp,
+        dc->drawable,
+        dc->gc,
         sel_rect.outer.x,
         sel_rect.outer.y,
         sel_rect.outer.r * 2,
@@ -241,11 +251,11 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
         360 * 64
     );
 
-    XSetForeground(display, gc, 0x000000);
+    XSetForeground(dc->dp, dc->gc, 0x000000);
     XDrawArc(
-        display,
-        drawable,
-        gc,
+        dc->dp,
+        dc->drawable,
+        dc->gc,
         sel_rect.inner.x,
         sel_rect.inner.y,
         sel_rect.inner.r * 2,
@@ -255,9 +265,9 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
     );
 
     XDrawArc(
-        display,
-        drawable,
-        gc,
+        dc->dp,
+        dc->drawable,
+        dc->gc,
         sel_rect.outer.x,
         sel_rect.outer.y,
         sel_rect.outer.r * 2,
@@ -267,34 +277,34 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
     );
 
     {
-        double const segment_rad = PI * 2 / MAX(1, sel_circ.item_count);
+        double const segment_rad = PI * 2 / MAX(1, sc->item_count);
         double const segment_deg = segment_rad / PI * 180;
 
-        if (sel_circ.item_count >= 2) {
-            for (unsigned int line_num = 0; line_num < sel_circ.item_count;
+        if (sc->item_count >= 2) {
+            for (unsigned int line_num = 0; line_num < sc->item_count;
                  ++line_num) {
                 XDrawLine(
-                    display,
-                    drawable,
-                    gc,
-                    sel_circ.x + cos(segment_rad * line_num) * sel_rect.inner.r,
-                    sel_circ.y + sin(segment_rad * line_num) * sel_rect.inner.r,
-                    sel_circ.x + cos(segment_rad * line_num) * sel_rect.outer.r,
-                    sel_circ.y + sin(segment_rad * line_num) * sel_rect.outer.r
+                    dc->dp,
+                    dc->drawable,
+                    dc->gc,
+                    sc->x + cos(segment_rad * line_num) * sel_rect.inner.r,
+                    sc->y + sin(segment_rad * line_num) * sel_rect.inner.r,
+                    sc->x + cos(segment_rad * line_num) * sel_rect.outer.r,
+                    sc->y + sin(segment_rad * line_num) * sel_rect.outer.r
                 );
             }
         }
 
-        for (unsigned int image_num = 0; image_num < sel_circ.item_count;
+        for (unsigned int image_num = 0; image_num < sc->item_count;
              ++image_num) {
             XDrawImageString(
-                display,
-                drawable,
-                gc,
-                sel_circ.x
+                dc->dp,
+                dc->drawable,
+                dc->gc,
+                sc->x
                     + cos(segment_rad * (image_num + 0.5))
                         * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5),
-                sel_circ.y
+                sc->y
                     + sin(segment_rad * (image_num + 0.5))
                         * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5),
                 "T",
@@ -303,13 +313,14 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
         }
 
         // pointer
-        int const current_item = current_sel_circ_item(pointer_x, pointer_y);
+        int const current_item =
+            current_sel_circ_item(sc, pointer_x, pointer_y);
         if (current_item != -1) {
-            XSetForeground(display, gc, 0x888888);
+            XSetForeground(dc->dp, dc->gc, 0x888888);
             XFillArc(
-                display,
-                drawable,
-                gc,
+                dc->dp,
+                dc->drawable,
+                dc->gc,
                 sel_rect.outer.x,
                 sel_rect.outer.y,
                 sel_rect.outer.r * 2,
@@ -317,11 +328,11 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
                 (current_item * segment_deg) * 64,
                 segment_deg * 64
             );
-            XSetForeground(display, gc, 0xAAAAAA);
+            XSetForeground(dc->dp, dc->gc, 0xAAAAAA);
             XFillArc(
-                display,
-                drawable,
-                gc,
+                dc->dp,
+                dc->drawable,
+                dc->gc,
                 sel_rect.inner.x,
                 sel_rect.inner.y,
                 sel_rect.inner.r * 2,
@@ -333,12 +344,12 @@ void draw_selection_circle(int const pointer_x, int const pointer_y) {
     }
 }
 
-void clear_selection_circle(void) {
-    struct SelectonCircleDims sel_rect = get_curr_sel_dims();
+void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
+    struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
 
     XClearArea(
-        display,
-        drawable,
+        dc->dp,
+        dc->drawable,
         sel_rect.outer.x - 1,
         sel_rect.outer.y - 1,
         sel_rect.outer.r * 2 + 2,
@@ -347,74 +358,88 @@ void clear_selection_circle(void) {
     );
 }
 
-void update_screen(void) {
+void update_screen(struct DrawCtx* dc) {
     XCopyArea(
-        display,
-        canvas.pm,
-        drawable,
-        canvas.gc,
+        dc->dp,
+        dc->cv.pm,
+        dc->drawable,
+        dc->cv.gc,
         0,
         0,
-        canvas.width,
-        canvas.height,
+        dc->cv.width,
+        dc->cv.height,
         0,
         0
     );
 }
 
-void resize_canvas(int new_width, int new_height) {
+void resize_canvas(struct DrawCtx* dc, int new_width, int new_height) {
     Pixmap new_pm = XCreatePixmap(
-        display,
-        window,
+        dc->dp,
+        dc->window,
         new_width,
         new_height,
         // FIXME
-        DefaultDepth(display, 0)
+        DefaultDepth(dc->dp, 0)
     );
 
-    XSetForeground(display, canvas.gc, CANVAS_BACKGROUND_RGB);
-    XFillRectangle(display, new_pm, canvas.gc, 0, 0, new_width, new_height);
+    XSetForeground(dc->dp, dc->cv.gc, CANVAS_BACKGROUND_RGB);
+    XFillRectangle(dc->dp, new_pm, dc->cv.gc, 0, 0, new_width, new_height);
 
     XCopyArea(
-        display,
-        canvas.pm,
+        dc->dp,
+        dc->cv.pm,
         new_pm,
-        canvas.gc,
+        dc->cv.gc,
         0,
         0,
-        canvas.width,
-        canvas.height,
+        dc->cv.width,
+        dc->cv.height,
         0,
         0
     );
-    XFreePixmap(display, canvas.pm);
+    XFreePixmap(dc->dp, dc->cv.pm);
 
-    canvas.pm = new_pm;
-    canvas.width = new_width;
-    canvas.height = new_height;
+    dc->cv.pm = new_pm;
+    dc->cv.width = new_width;
+    dc->cv.height = new_height;
 }
 
-void free_sel_circ(void) {
-    sel_circ.is_active = False;
+void free_sel_circ(struct SelectionCircle* sel_circ) {
+    sel_circ->is_active = False;
 }
 
-void run(void) {
+void run(struct Ctx* ctx) {
+    static Bool (*handlers[])(struct Ctx*, XEvent*) = {
+        [ButtonPress] = &button_press_hdlr,
+        [ButtonRelease] = &button_release_hdlr,
+        [DestroyNotify] = &destroy_notify_hdlr,
+        [Expose] = &expose_hdlr,
+        [KeyPress] = &key_press_hdlr,
+        [MappingNotify] = &mapping_notify_hdlr,
+        [MotionNotify] = &motion_notify_hdlr,
+        [ConfigureNotify] = &configure_notify_hdlr,
+    };
+
+    Bool running = True;
     XEvent event;
 
-    XSync(display, False);
-    while (!done && !XNextEvent(display, &event)) {
-        if (handler[event.type]) {
-            handler[event.type](&event);
+    XSync(ctx->dc.dp, False);
+    while (running && !XNextEvent(ctx->dc.dp, &event)) {
+        if (handlers[event.type]) {
+            running = handlers[event.type](ctx, &event);
         }
     }
 }
 
-void setup(void) {
-    int screen = DefaultScreen(display);
+struct Ctx setup(Display* dp) {
+    struct Ctx ctx = {.dc.dp = dp};
+
+    int screen = DefaultScreen(dp);
 
     /* drawing contexts for an window */
-    unsigned int myforeground = BlackPixel(display, screen);
-    unsigned int mybackground = WhitePixel(display, screen);
+    unsigned int myforeground = BlackPixel(dp, screen);
+    unsigned int mybackground = WhitePixel(dp, screen);
     // FIXME check values
     XSizeHints hint = {
         .x = 200,
@@ -425,9 +450,9 @@ void setup(void) {
     };
 
     /* create window */
-    window = XCreateSimpleWindow(
-        display,
-        DefaultRootWindow(display),
+    ctx.dc.window = XCreateSimpleWindow(
+        dp,
+        DefaultRootWindow(dp),
         hint.x,
         hint.y,
         hint.width,
@@ -436,33 +461,42 @@ void setup(void) {
         myforeground,
         mybackground
     );
-    drawable = window;
+    ctx.dc.drawable = ctx.dc.window;
 
-    XSetStandardProperties(display, window, title, NULL, None, NULL, 0, &hint);
+    XSetStandardProperties(
+        dp,
+        ctx.dc.window,
+        title,
+        NULL,
+        None,
+        NULL,
+        0,
+        &hint
+    );
 
     /* graphics context */
-    gc = XCreateGC(display, window, 0, 0);
-    XSetBackground(display, gc, mybackground);
-    XSetForeground(display, gc, myforeground);
+    ctx.dc.gc = XCreateGC(dp, ctx.dc.window, 0, 0);
+    XSetBackground(dp, ctx.dc.gc, mybackground);
+    XSetForeground(dp, ctx.dc.gc, myforeground);
 
     /* allow receiving mouse events */
     XSelectInput(
-        display,
-        window,
+        dp,
+        ctx.dc.window,
         ButtonPressMask | ButtonReleaseMask | KeyPressMask | ExposureMask
             | PointerMotionMask | StructureNotifyMask
     );
 
     /* canvas */ {
-        canvas.width = hint.width;
-        canvas.height = hint.height;
-        canvas.pm = XCreatePixmap(
-            display,
-            window,
-            canvas.width,
-            canvas.height,
+        ctx.dc.cv.width = hint.width;
+        ctx.dc.cv.height = hint.height;
+        ctx.dc.cv.pm = XCreatePixmap(
+            dp,
+            ctx.dc.window,
+            ctx.dc.cv.width,
+            ctx.dc.cv.height,
             // FIXME
-            DefaultDepth(display, 0)
+            DefaultDepth(dp, 0)
         );
         XGCValues canvas_gc_vals = {
             .line_style = LineSolid,
@@ -470,102 +504,119 @@ void setup(void) {
             .cap_style = CapButt,
             .fill_style = FillSolid
         };
-        canvas.gc = XCreateGC(
-            display,
-            window,
+        ctx.dc.cv.gc = XCreateGC(
+            dp,
+            ctx.dc.window,
             GCForeground | GCBackground | GCFillStyle | GCLineStyle
                 | GCLineWidth | GCCapStyle | GCJoinStyle,
             &canvas_gc_vals
         );
         // initial canvas color
-        XSetForeground(display, canvas.gc, CANVAS_BACKGROUND_RGB);
+        XSetForeground(dp, ctx.dc.cv.gc, CANVAS_BACKGROUND_RGB);
         XFillRectangle(
-            display,
-            canvas.pm,
-            canvas.gc,
+            dp,
+            ctx.dc.cv.pm,
+            ctx.dc.cv.gc,
             0,
             0,
-            canvas.width,
-            canvas.height
+            ctx.dc.cv.width,
+            ctx.dc.cv.height
         );
     }
 
     /* show up window */
-    XMapRaised(display, window);
+    XMapRaised(dp, ctx.dc.window);
+
+    return ctx;
 }
 
-void button_press_hdlr(XEvent* event) {
+Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     if (e->button == Button3) {
-        init_sel_circ_tools(e->x, e->y);
-        draw_selection_circle(-1, -1);
+        init_sel_circ_tools(&ctx->sc, e->x, e->y);
+        draw_selection_circle(&ctx->dc, &ctx->sc, -1, -1);
     }
     if (e->button == Button1) {
-        tool_ctx.is_holding = True;
+        ctx->tool_ctx.is_holding = True;
     }
+
+    return True;
 }
 
-void button_release_hdlr(XEvent* event) {
+Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     if (e->button == Button3) {
-        int const selected_item = current_sel_circ_item(e->x, e->y);
-        if (selected_item != -1 && sel_circ.items[selected_item].on_select) {
-            sel_circ.items[selected_item].on_select();
+        int const selected_item = current_sel_circ_item(&ctx->sc, e->x, e->y);
+        if (selected_item != -1 && ctx->sc.items[selected_item].on_select) {
+            ctx->sc.items[selected_item].on_select(&ctx->tool_ctx);
         }
-        free_sel_circ();
-        clear_selection_circle();
-    } else if (tool_ctx.on_click) {
-        tool_ctx.on_click(e);
-        tool_ctx.is_holding = False;
-        update_screen();
+        free_sel_circ(&ctx->sc);
+        clear_selection_circle(&ctx->dc, &ctx->sc);
+    } else if (ctx->tool_ctx.on_click) {
+        ctx->tool_ctx.on_click(&ctx->dc, &ctx->tool_ctx, e);
+        ctx->tool_ctx.is_holding = False;
+        update_screen(&ctx->dc);
     }
+
+    return True;
 }
 
-void destroy_notify_hdlr(XEvent* event) {}
-
-void expose_hdlr(XEvent* event) {
-    update_screen();
+Bool destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+    return True;
 }
 
-void key_press_hdlr(XEvent* event) {
+Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
+    update_screen(&ctx->dc);
+    return True;
+}
+
+Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     static char text[10];
-    KeySym key;
 
-    int i = XLookupString(&event->xkey, text, 10, &key, 0);
-    if (i == 1 && text[0] == 'q') {
-        done = True;
+    if (XLookupString(&event->xkey, text, 10, NULL, NULL) && text[0] == 'q') {
+        return False;
     }
+    return True;
 }
 
-void mapping_notify_hdlr(XEvent* event) {
+Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XRefreshKeyboardMapping(&event->xmapping);
+    return True;
 }
 
-void motion_notify_hdlr(XEvent* event) {
+Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
 
-    if (tool_ctx.on_drag) {
-        tool_ctx.on_drag(e);
+    if (ctx->tool_ctx.on_drag) {
+        ctx->tool_ctx.on_drag(&ctx->dc, &ctx->tool_ctx, e);
         // FIXME move it to better place
-        update_screen();
+        update_screen(&ctx->dc);
     }
 
-    draw_selection_circle(e->x, e->y);
+    draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
-    tool_ctx.prev_x = e->x;
-    tool_ctx.prev_y = e->y;
+    ctx->tool_ctx.prev_x = e->x;
+    ctx->tool_ctx.prev_y = e->y;
+
+    return True;
 }
 
-void configure_notify_hdlr(XEvent* event) {
-    if (event->xconfigure.width != canvas.width
-        || event->xconfigure.height != canvas.height) {
-        resize_canvas(event->xconfigure.width, event->xconfigure.height);
+Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+    if (event->xconfigure.width != ctx->dc.cv.width
+        || event->xconfigure.height != ctx->dc.cv.height) {
+        resize_canvas(
+            &ctx->dc,
+            event->xconfigure.width,
+            event->xconfigure.height
+        );
     }
+
+    return True;
 }
 
-void cleanup(void) {
-    XFreeGC(display, canvas.gc);
-    XFreePixmap(display, canvas.pm);
-    XFreeGC(display, gc);
-    XDestroyWindow(display, window);
+void cleanup(struct Ctx* ctx) {
+    XFreeGC(ctx->dc.dp, ctx->dc.cv.gc);
+    XFreePixmap(ctx->dc.dp, ctx->dc.cv.pm);
+    XFreeGC(ctx->dc.dp, ctx->dc.gc);
+    XDestroyWindow(ctx->dc.dp, ctx->dc.window);
 }
