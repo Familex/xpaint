@@ -30,6 +30,8 @@ struct Ctx {
         Drawable drawable;
         GC gc;
         Window window;
+        unsigned int width;
+        unsigned int height;
         struct Canvas {
             Pixmap pm;
             GC gc;
@@ -79,7 +81,8 @@ tool_pencil_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
 static void
 draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, int, int);
 static void clear_selection_circle(struct DrawCtx*, struct SelectionCircle*);
-static void update_screen(struct DrawCtx*);
+static void draw_statusline(struct DrawCtx*, struct ToolCtx const*);
+static void update_screen(struct DrawCtx*, struct ToolCtx const*);
 
 static void resize_canvas(struct DrawCtx*, int, int);
 
@@ -297,6 +300,7 @@ void draw_selection_circle(
 
         for (unsigned int image_num = 0; image_num < sc->item_count;
              ++image_num) {
+            XSetForeground(dc->dp, dc->gc, 0xFFFFFF);
             XDrawImageString(
                 dc->dp,
                 dc->drawable,
@@ -358,7 +362,33 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     );
 }
 
-void update_screen(struct DrawCtx* dc) {
+void draw_statusline(struct DrawCtx* dc, struct ToolCtx const* tc) {
+    XSetForeground(dc->dp, dc->gc, STATUSLINE_BACKGROUND_RGB);
+    XFillRectangle(
+        dc->dp,
+        dc->drawable,
+        dc->gc,
+        0,
+        dc->height - STATUSLINE_HEIGHT_PX,
+        dc->width,
+        STATUSLINE_HEIGHT_PX
+    );
+    if (tc->ssz_tool_name) {
+        XSetBackground(dc->dp, dc->gc, STATUSLINE_BACKGROUND_RGB);
+        XSetForeground(dc->dp, dc->gc, STATUSLINE_FONT_RGB);
+        XDrawImageString(
+            dc->dp,
+            dc->drawable,
+            dc->gc,
+            0,
+            dc->height,
+            tc->ssz_tool_name,
+            strlen(tc->ssz_tool_name)
+        );
+    }
+}
+
+void update_screen(struct DrawCtx* dc, struct ToolCtx const* tc) {
     XCopyArea(
         dc->dp,
         dc->cv.pm,
@@ -371,6 +401,7 @@ void update_screen(struct DrawCtx* dc) {
         0,
         0
     );
+    draw_statusline(dc, tc);
 }
 
 void resize_canvas(struct DrawCtx* dc, int new_width, int new_height) {
@@ -433,7 +464,11 @@ void run(struct Ctx* ctx) {
 }
 
 struct Ctx setup(Display* dp) {
-    struct Ctx ctx = {.dc.dp = dp};
+    struct Ctx ctx = {
+        .dc.dp = dp,
+        .dc.width = 350,
+        .dc.height = 250,
+    };
 
     int screen = DefaultScreen(dp);
 
@@ -444,8 +479,8 @@ struct Ctx setup(Display* dp) {
     XSizeHints hint = {
         .x = 200,
         .y = 300,
-        .width = 350,
-        .height = 250,
+        .width = ctx.dc.width,
+        .height = ctx.dc.height,
         .flags = PPosition | PSize,
     };
 
@@ -488,8 +523,8 @@ struct Ctx setup(Display* dp) {
     );
 
     /* canvas */ {
-        ctx.dc.cv.width = hint.width;
-        ctx.dc.cv.height = hint.height;
+        ctx.dc.cv.width = ctx.dc.width;
+        ctx.dc.cv.height = ctx.dc.height - STATUSLINE_HEIGHT_PX;
         ctx.dc.cv.pm = XCreatePixmap(
             dp,
             ctx.dc.window,
@@ -555,7 +590,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (ctx->tool_ctx.on_click) {
         ctx->tool_ctx.on_click(&ctx->dc, &ctx->tool_ctx, e);
         ctx->tool_ctx.is_holding = False;
-        update_screen(&ctx->dc);
+        update_screen(&ctx->dc, &ctx->tool_ctx);
     }
 
     return True;
@@ -566,7 +601,7 @@ Bool destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
-    update_screen(&ctx->dc);
+    update_screen(&ctx->dc, &ctx->tool_ctx);
     return True;
 }
 
@@ -590,7 +625,7 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     if (ctx->tool_ctx.on_drag) {
         ctx->tool_ctx.on_drag(&ctx->dc, &ctx->tool_ctx, e);
         // FIXME move it to better place
-        update_screen(&ctx->dc);
+        update_screen(&ctx->dc, &ctx->tool_ctx);
     }
 
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
@@ -602,13 +637,15 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
-    if (event->xconfigure.width != ctx->dc.cv.width
-        || event->xconfigure.height != ctx->dc.cv.height) {
-        resize_canvas(
-            &ctx->dc,
-            event->xconfigure.width,
-            event->xconfigure.height
-        );
+    ctx->dc.width = event->xconfigure.width;
+    ctx->dc.height = event->xconfigure.height;
+
+    unsigned int new_cv_width = ctx->dc.width;
+    unsigned int new_cv_height = ctx->dc.height - STATUSLINE_HEIGHT_PX;
+
+    if (ctx->dc.cv.width != new_cv_width
+        || ctx->dc.cv.height != new_cv_height) {
+        resize_canvas(&ctx->dc, new_cv_width, new_cv_height);
     }
 
     return True;
