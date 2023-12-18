@@ -1,4 +1,4 @@
-LIBS = -lX11 -lGL -lGLU -lm
+LIBS = -lX11 -lm
 CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
 
 CC ?= cc
