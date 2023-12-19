@@ -28,11 +28,6 @@ struct SelectonCircleDims {
     } outer, inner;
 };
 
-enum Action {
-    Act_Click,
-    Act_Drag,
-};
-
 struct Ctx {
     struct DrawCtx {
         Display* dp;
@@ -66,7 +61,6 @@ struct Ctx {
     struct History {
         struct Canvas cv;
         struct ToolCtx tc;
-        enum Action action;
     } *hist_prev, *hist_next;
     struct SelectionCircle {
         Bool is_active;
@@ -98,9 +92,13 @@ tool_pencil_on_click(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent cons
 static void
 tool_pencil_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
 
-static Bool history_undo(struct Ctx*);
-static Bool history_revert(struct Ctx*);
-static Bool history_push(struct History**, struct Ctx*, enum Action);
+static Bool history_move(struct Ctx*, Bool forward);
+static Bool history_push(struct History**, struct Ctx*);
+
+static void historyarr_clear(Display*, struct History**);
+static void history_clear(Display*, struct History*);
+static void canvas_clear(Display*, struct Canvas*);
+static void tool_ctx_clear(struct ToolCtx*);
 
 static void
 draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, int, int);
@@ -217,22 +215,37 @@ void tool_pencil_on_drag(
     );
 }
 
-Bool history_undo(struct Ctx* ctx) {
-    // FIXME
-    return False;
+///  forward? current state into hist_next; pop state from hist_prev.
+/// !forward? current state into hist_prev; pop state from hist_next.
+Bool history_move(struct Ctx* ctx, Bool forward) {
+    printf("history move %d\n", forward);
+
+    struct History** hist_pop = forward ? &ctx->hist_prev : &ctx->hist_next;
+    struct History** hist_save = forward ? &ctx->hist_next : &ctx->hist_prev;
+
+    if (!arrlenu(*hist_pop)) {
+        return False;
+    }
+
+    struct History const curr = arrpop(*hist_pop);
+    history_push(hist_save, ctx);
+
+    canvas_clear(ctx->dc.dp, &ctx->dc.cv);
+    tool_ctx_clear(&ctx->tc);
+
+    // apply history
+    ctx->dc.cv = curr.cv;
+    ctx->tc = curr.tc;
+
+    return True;
 }
 
-Bool history_revert(struct Ctx* ctx) {
-    // FIXME
-    return False;
-}
+Bool history_push(struct History** hist, struct Ctx* ctx) {
+    puts("xpaint: history push");
 
-Bool history_push(struct History** hist, struct Ctx* ctx, enum Action act) {
-    puts("push");
     struct History new_item = {
         .cv = ctx->dc.cv,
         .tc = ctx->tc,
-        .action = act,
     };
 
     new_item.cv.pm = XCreatePixmap(
@@ -256,9 +269,30 @@ Bool history_push(struct History** hist, struct Ctx* ctx, enum Action act) {
         0
     );
 
-    arrput(*hist, new_item);
+    arrpush(*hist, new_item);
 
     return True;
+}
+
+void historyarr_clear(Display* dp, struct History** hist) {
+    for (unsigned int i = 0; i < arrlenu(*hist); ++i) {
+        history_clear(dp, &(*hist)[i]);
+    }
+    arrfree(*hist);
+}
+
+// FIXME may be removed?
+void history_clear(Display* dp, struct History* hist) {
+    canvas_clear(dp, &hist->cv);
+    tool_ctx_clear(&hist->tc);
+}
+
+void canvas_clear(Display* dp, struct Canvas* cv) {
+    XFreePixmap(dp, cv->pm);
+}
+
+void tool_ctx_clear(struct ToolCtx* tc) {
+    // do nothing
 }
 
 void init_sel_circ_tools(struct SelectionCircle* sc, int x, int y) {
@@ -657,11 +691,9 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (ctx->tc.on_click) {
         ctx->tc.on_click(&ctx->dc, &ctx->tc, e);
         ctx->tc.is_holding = False;
-        history_push(
-            &ctx->hist_prev,
-            ctx,
-            ctx->tc.is_dragging ? Act_Drag : Act_Click
-        );
+        // next history invalidated after user action
+        historyarr_clear(ctx->dc.dp, &ctx->hist_next);
+        history_push(&ctx->hist_prev, ctx);
         update_screen(&ctx->dc, &ctx->tc);
     }
 
@@ -686,10 +718,18 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 return False;
             case 'u':
             case 'z':
-                history_undo(ctx);
+                if (!history_move(ctx, True)) {
+                    puts("xpaint: can't undo history");
+                }
+                update_screen(&ctx->dc, &ctx->tc);
+                break;
             case 'U':
             case 'Z':
-                history_revert(ctx);
+                if (!history_move(ctx, False)) {
+                    puts("xpaint: can't revert history");
+                }
+                update_screen(&ctx->dc, &ctx->tc);
+                break;
         }
     }
     return True;
@@ -736,14 +776,8 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 void cleanup(struct Ctx* ctx) {
-    for (unsigned int i = 0; i < arrlenu(ctx->hist_next); ++i) {
-        XFreePixmap(ctx->dc.dp, ctx->hist_next[i].cv.pm);
-    }
-    arrfree(ctx->hist_next);
-    for (unsigned int i = 0; i < arrlenu(ctx->hist_prev); ++i) {
-        XFreePixmap(ctx->dc.dp, ctx->hist_prev[i].cv.pm);
-    }
-    arrfree(ctx->hist_prev);
+    historyarr_clear(ctx->dc.dp, &ctx->hist_next);
+    historyarr_clear(ctx->dc.dp, &ctx->hist_prev);
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
     XFreePixmap(ctx->dc.dp, ctx->dc.cv.pm);
