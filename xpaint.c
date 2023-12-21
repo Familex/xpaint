@@ -660,6 +660,8 @@ struct Ctx setup(Display* dp) {
         );
     }
 
+    history_push(&ctx.hist_prev, &ctx);
+
     /* show up window */
     XMapRaised(dp, ctx.dc.window);
 
@@ -673,6 +675,9 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         draw_selection_circle(&ctx->dc, &ctx->sc, -1, -1);
     }
     if (e->button == Button1) {
+        // next history invalidated after user action
+        historyarr_clear(ctx->dc.dp, &ctx->hist_next);
+        history_push(&ctx->hist_prev, ctx);
         ctx->tc.is_holding = True;
     }
 
@@ -691,9 +696,6 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (ctx->tc.on_click) {
         ctx->tc.on_click(&ctx->dc, &ctx->tc, e);
         ctx->tc.is_holding = False;
-        // next history invalidated after user action
-        historyarr_clear(ctx->dc.dp, &ctx->hist_next);
-        history_push(&ctx->hist_prev, ctx);
         update_screen(&ctx->dc, &ctx->tc);
     }
 
