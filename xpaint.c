@@ -74,7 +74,8 @@ struct Ctx {
     } sc;
 };
 
-static void die(char const* errstr, ...);
+static void die(char const*, ...);
+static void trace(char const*, ...);
 
 static void init_sel_circ_tools(struct SelectionCircle*, int, int);
 static void free_sel_circ(struct SelectionCircle*);
@@ -120,10 +121,20 @@ static Bool motion_notify_hdlr(struct Ctx*, XEvent*);
 static Bool configure_notify_hdlr(struct Ctx*, XEvent*);
 static void cleanup(struct Ctx*);
 
+static Bool is_verbose_output = False;
+
 int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
+            is_verbose_output = True;
+        } else {
+            die("usage: xpaint [-v]");
+        }
+    }
+
     Display* display = XOpenDisplay(NULL);
     if (!display) {
-        die("cannot open display\n");
+        die("cannot open display");
     }
 
     struct Ctx ctx = setup(display);
@@ -140,7 +151,19 @@ void die(char const* errstr, ...) {
     va_start(ap, errstr);
     vfprintf(stderr, errstr, ap);
     va_end(ap);
+    fprintf(stderr, "\n");
     exit(EXIT_FAILURE);
+}
+
+void trace(char const* fmt, ...) {
+    if (is_verbose_output) {
+        va_list ap;
+
+        va_start(ap, fmt);
+        vfprintf(stdout, fmt, ap);
+        fprintf(stdout, "\n");
+        va_end(ap);
+    }
 }
 
 struct SelectonCircleDims
@@ -163,19 +186,32 @@ get_curr_sel_dims(struct SelectionCircle const* sel_circ) {
     return result;
 }
 
-void set_current_tool_selection(struct ToolCtx* tool_ctx) {
-    *tool_ctx = (const struct ToolCtx) {0};
-    tool_ctx->on_click = &tool_selection_on_click;
-    tool_ctx->ssz_tool_name = "selection";
-    tool_ctx->type = Tool_Selection;
+static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
+    struct ToolCtx new_tc = {
+        .type = type,
+        .prev_x = tc->prev_x,
+        .prev_y = tc->prev_y,
+    };
+    switch (type) {
+        case Tool_Selection:
+            new_tc.on_click = &tool_selection_on_click;
+            new_tc.ssz_tool_name = "selection";
+            break;
+        case Tool_Pencil:
+            new_tc.on_click = &tool_pencil_on_click;
+            new_tc.on_drag = &tool_pencil_on_drag;
+            new_tc.ssz_tool_name = "pencil";
+            break;
+    }
+    *tc = new_tc;
 }
 
-void set_current_tool_pencil(struct ToolCtx* tool_ctx) {
-    *tool_ctx = (const struct ToolCtx) {0};
-    tool_ctx->on_click = &tool_pencil_on_click;
-    tool_ctx->on_drag = &tool_pencil_on_drag;
-    tool_ctx->ssz_tool_name = "pencil";
-    tool_ctx->type = Tool_Pencil;
+void set_current_tool_selection(struct ToolCtx* tc) {
+    set_current_tool(tc, Tool_Selection);
+}
+
+void set_current_tool_pencil(struct ToolCtx* tc) {
+    set_current_tool(tc, Tool_Pencil);
 }
 
 void tool_selection_on_click(
@@ -184,7 +220,7 @@ void tool_selection_on_click(
     XButtonReleasedEvent const* event
 ) {
     // FIXME
-    puts("selection action");
+    trace("selection action");
 }
 
 void tool_pencil_on_click(
@@ -192,7 +228,7 @@ void tool_pencil_on_click(
     struct ToolCtx* tool,
     XButtonReleasedEvent const* event
 ) {
-    puts("pencil action");
+    trace("pencil action");
     // FIXME use XDrawArc and XFillArc
     XDrawPoint(dc->dp, dc->cv.pm, dc->gc, event->x, event->y);
 }
@@ -218,8 +254,6 @@ void tool_pencil_on_drag(
 ///  forward? current state into hist_next; pop state from hist_prev.
 /// !forward? current state into hist_prev; pop state from hist_next.
 Bool history_move(struct Ctx* ctx, Bool forward) {
-    printf("history move %d\n", forward);
-
     struct History** hist_pop = forward ? &ctx->hist_prev : &ctx->hist_next;
     struct History** hist_save = forward ? &ctx->hist_next : &ctx->hist_prev;
 
@@ -241,7 +275,7 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
 }
 
 Bool history_push(struct History** hist, struct Ctx* ctx) {
-    puts("xpaint: history push");
+    trace("xpaint: history push");
 
     struct History new_item = {
         .cv = ctx->dc.cv,
@@ -721,14 +755,14 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             case 'u':
             case 'z':
                 if (!history_move(ctx, True)) {
-                    puts("xpaint: can't undo history");
+                    trace("xpaint: can't undo history");
                 }
                 update_screen(&ctx->dc, &ctx->tc);
                 break;
             case 'U':
             case 'Z':
                 if (!history_move(ctx, False)) {
-                    puts("xpaint: can't revert history");
+                    trace("xpaint: can't revert history");
                 }
                 update_screen(&ctx->dc, &ctx->tc);
                 break;
