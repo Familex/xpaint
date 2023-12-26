@@ -13,10 +13,16 @@
 #include "lib/stb_ds.h"
 #undef STB_DS_IMPLEMENTATION
 
+#define XLeftMouseBtn   Button1
+#define XMiddleMouseBtn Button2
+#define XRightMouseBtn  Button3
+
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
 #define MIN(A, B) ((A) < (B) ? (A) : (B))
 #define LENGTH(X) (sizeof X / sizeof X[0])
 #define PI        3.141
+// default value for signed integers
+#define NIL       -1
 
 #include "config.h"
 
@@ -31,7 +37,6 @@ struct SelectonCircleDims {
 struct Ctx {
     struct DrawCtx {
         Display* dp;
-        // FIXME rename to screen
         Drawable screen;
         GC gc;
         GC screen_gc;
@@ -45,7 +50,8 @@ struct Ctx {
         } cv;
     } dc;
     struct ToolCtx {
-        void (*on_click)(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+        void (*on_press)(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
+        void (*on_release)(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
         void (*on_drag)(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
         // static zero terminated string pointer
         char* ssz_tool_name;
@@ -57,6 +63,12 @@ struct Ctx {
             Tool_Selection,
             Tool_Pencil,
         } type;
+        union ToolData {
+            struct SelectionData {
+                // begin/end x/y
+                int by, bx, ey, ex;
+            } sel;
+        } data;
     } tc;
     struct History {
         struct Canvas cv;
@@ -87,9 +99,13 @@ static void set_current_tool_selection(struct ToolCtx*);
 static void set_current_tool_pencil(struct ToolCtx*);
 
 static void
-tool_selection_on_click(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+tool_selection_on_press(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
 static void
-tool_pencil_on_click(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+tool_selection_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+static void
+tool_selection_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
+static void
+tool_pencil_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
 static void
 tool_pencil_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
 
@@ -104,8 +120,7 @@ static void tool_ctx_clear(struct ToolCtx*);
 static void
 draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, int, int);
 static void clear_selection_circle(struct DrawCtx*, struct SelectionCircle*);
-static void draw_statusline(struct DrawCtx*, struct ToolCtx const*);
-static void update_screen(struct DrawCtx*, struct ToolCtx const*);
+static void update_screen(struct Ctx*);
 
 static void resize_canvas(struct DrawCtx*, int, int);
 
@@ -134,7 +149,7 @@ int main(int argc, char** argv) {
 
     Display* display = XOpenDisplay(NULL);
     if (!display) {
-        die("cannot open display");
+        die("xpaint: cannot open X display");
     }
 
     struct Ctx ctx = setup(display);
@@ -142,7 +157,7 @@ int main(int argc, char** argv) {
     cleanup(&ctx);
     XCloseDisplay(display);
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 void die(char const* errstr, ...) {
@@ -194,11 +209,19 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
     };
     switch (type) {
         case Tool_Selection:
-            new_tc.on_click = &tool_selection_on_click;
+            new_tc.on_press = &tool_selection_on_press;
+            new_tc.on_release = &tool_selection_on_release;
+            new_tc.on_drag = &tool_selection_on_drag;
             new_tc.ssz_tool_name = "selection";
+            new_tc.data.sel = (struct SelectionData) {
+                .by = NIL,
+                .bx = NIL,
+                .ey = NIL,
+                .ex = NIL,
+            };
             break;
         case Tool_Pencil:
-            new_tc.on_click = &tool_pencil_on_click;
+            new_tc.on_release = &tool_pencil_on_release;
             new_tc.on_drag = &tool_pencil_on_drag;
             new_tc.ssz_tool_name = "pencil";
             break;
@@ -214,45 +237,83 @@ void set_current_tool_pencil(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Pencil);
 }
 
-void tool_selection_on_click(
+void tool_selection_on_press(
     struct DrawCtx* dc,
-    struct ToolCtx* tool,
-    XButtonReleasedEvent const* event
+    struct ToolCtx* tc,
+    XButtonPressedEvent const* event
 ) {
-    // FIXME
-    trace("selection action");
+    assert(tc->type == Tool_Selection);
+    if (event->button == XLeftMouseBtn) {
+        struct SelectionData* sd = &tc->data.sel;
+        sd->bx = event->x;
+        sd->by = event->y;
+        sd->ex = NIL;
+        sd->ey = NIL;
+    }
 }
 
-void tool_pencil_on_click(
+void tool_selection_on_release(
     struct DrawCtx* dc,
-    struct ToolCtx* tool,
+    struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
-    trace("pencil action");
-    // FIXME use XDrawArc and XFillArc
-    XDrawPoint(dc->dp, dc->cv.pm, dc->gc, event->x, event->y);
+    if (event->button == XLeftMouseBtn && !tc->is_dragging) {
+        struct SelectionData* sd = &tc->data.sel;
+        sd->bx = NIL;
+        sd->ey = NIL;
+        sd->by = NIL;
+        sd->ex = NIL;
+    }
+}
+
+void tool_selection_on_drag(
+    struct DrawCtx* dc,
+    struct ToolCtx* tc,
+    XMotionEvent const* event
+) {
+    if (tc->is_holding) {
+        tc->data.sel.ex = event->x;
+        tc->data.sel.ey = event->y;
+    }
+}
+
+void tool_pencil_on_release(
+    struct DrawCtx* dc,
+    struct ToolCtx* tc,
+    XButtonReleasedEvent const* event
+) {
+    int size = 25;
+    XFillArc(
+        dc->dp,
+        dc->cv.pm,
+        dc->gc,
+        event->x - size / 2,
+        event->y - size / 2,
+        size,
+        size,
+        0,
+        360 * 64
+    );
 }
 
 void tool_pencil_on_drag(
     struct DrawCtx* dc,
-    struct ToolCtx* tool,
+    struct ToolCtx* tc,
     XMotionEvent const* event
 ) {
-    assert(tool->is_holding);
+    assert(tc->is_holding);
     XSetForeground(dc->dp, dc->gc, 0x00FF00);
     XDrawLine(
         dc->dp,
         dc->cv.pm,
         dc->gc,
-        tool->prev_x,
-        tool->prev_y,
+        tc->prev_x,
+        tc->prev_y,
         event->x,
         event->y
     );
 }
 
-///  forward? current state into hist_next; pop state from hist_prev.
-/// !forward? current state into hist_prev; pop state from hist_next.
 Bool history_move(struct Ctx* ctx, Bool forward) {
     struct History** hist_pop = forward ? &ctx->hist_prev : &ctx->hist_next;
     struct History** hist_save = forward ? &ctx->hist_next : &ctx->hist_prev;
@@ -362,7 +423,7 @@ int current_sel_circ_item(struct SelectionCircle const* sc, int x, int y) {
 
         return angle / segment_deg;
     } else {
-        return -1;
+        return NIL;
     }
 }
 
@@ -456,7 +517,7 @@ void draw_selection_circle(
         // pointer
         int const current_item =
             current_sel_circ_item(sc, pointer_x, pointer_y);
-        if (current_item != -1) {
+        if (current_item != NIL) {
             XSetForeground(dc->dp, dc->screen_gc, 0x888888);
             XFillArc(
                 dc->dp,
@@ -499,46 +560,74 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     );
 }
 
-void draw_statusline(struct DrawCtx* dc, struct ToolCtx const* tc) {
-    XSetForeground(dc->dp, dc->screen_gc, STATUSLINE_BACKGROUND_RGB);
-    XFillRectangle(
-        dc->dp,
-        dc->screen,
-        dc->screen_gc,
+void update_screen(struct Ctx* ctx) {
+    XCopyArea(
+        ctx->dc.dp,
+        ctx->dc.cv.pm,
+        ctx->dc.screen,
+        ctx->dc.gc,
         0,
-        dc->height - STATUSLINE_HEIGHT_PX,
-        dc->width,
-        STATUSLINE_HEIGHT_PX
+        0,
+        ctx->dc.cv.width,
+        ctx->dc.cv.height,
+        0,
+        0
     );
-    if (tc->ssz_tool_name) {
-        XSetBackground(dc->dp, dc->screen_gc, STATUSLINE_BACKGROUND_RGB);
-        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE_FONT_RGB);
-        XDrawImageString(
+    /* current selection */ {
+        if (ctx->tc.type == Tool_Selection) {
+            struct SelectionData sd = ctx->tc.data.sel;
+            if (sd.bx != NIL && sd.ey != NIL && sd.ex != NIL && sd.by != NIL) {
+                XSetLineAttributes(
+                    ctx->dc.dp,
+                    ctx->dc.screen_gc,
+                    5,
+                    LineOnOffDash,
+                    CapNotLast,
+                    JoinMiter
+                );
+                unsigned int x = MIN(sd.bx, sd.ex);
+                unsigned int y = MIN(sd.by, sd.ey);
+                unsigned int w = MAX(sd.bx, sd.ex) - x;
+                unsigned int h = MAX(sd.by, sd.ey) - y;
+                XDrawRectangle(
+                    ctx->dc.dp,
+                    ctx->dc.screen,
+                    ctx->dc.screen_gc,
+                    x,
+                    y,
+                    w,
+                    h
+                );
+            }
+        }
+    }
+    /* statusline */ {
+        struct DrawCtx* dc = &ctx->dc;
+        struct ToolCtx* tc = &ctx->tc;
+        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE_BACKGROUND_RGB);
+        XFillRectangle(
             dc->dp,
             dc->screen,
             dc->screen_gc,
             0,
-            dc->height,
-            tc->ssz_tool_name,
-            strlen(tc->ssz_tool_name)
+            dc->height - STATUSLINE_HEIGHT_PX,
+            dc->width,
+            STATUSLINE_HEIGHT_PX
         );
+        if (tc->ssz_tool_name) {
+            XSetBackground(dc->dp, dc->screen_gc, STATUSLINE_BACKGROUND_RGB);
+            XSetForeground(dc->dp, dc->screen_gc, STATUSLINE_FONT_RGB);
+            XDrawImageString(
+                dc->dp,
+                dc->screen,
+                dc->screen_gc,
+                0,
+                dc->height,
+                tc->ssz_tool_name,
+                strlen(tc->ssz_tool_name)
+            );
+        }
     }
-}
-
-void update_screen(struct DrawCtx* dc, struct ToolCtx const* tc) {
-    XCopyArea(
-        dc->dp,
-        dc->cv.pm,
-        dc->screen,
-        dc->gc,
-        0,
-        0,
-        dc->cv.width,
-        dc->cv.height,
-        0,
-        0
-    );
-    draw_statusline(dc, tc);
 }
 
 void resize_canvas(struct DrawCtx* dc, int new_width, int new_height) {
@@ -704,11 +793,15 @@ struct Ctx setup(Display* dp) {
 
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
-    if (e->button == Button3) {
+    if (e->button == XRightMouseBtn) {
         init_sel_circ_tools(&ctx->sc, e->x, e->y);
-        draw_selection_circle(&ctx->dc, &ctx->sc, -1, -1);
+        draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
-    if (e->button == Button1) {
+    if (ctx->tc.on_press) {
+        ctx->tc.on_press(&ctx->dc, &ctx->tc, e);
+        update_screen(ctx);
+    }
+    if (e->button == XLeftMouseBtn) {
         // next history invalidated after user action
         historyarr_clear(ctx->dc.dp, &ctx->hist_next);
         history_push(&ctx->hist_prev, ctx);
@@ -720,18 +813,20 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
 Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
-    if (e->button == Button3) {
+    if (e->button == XRightMouseBtn) {
         int const selected_item = current_sel_circ_item(&ctx->sc, e->x, e->y);
-        if (selected_item != -1 && ctx->sc.items[selected_item].on_select) {
+        if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
             ctx->sc.items[selected_item].on_select(&ctx->tc);
         }
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
-    } else if (ctx->tc.on_click) {
-        ctx->tc.on_click(&ctx->dc, &ctx->tc, e);
-        ctx->tc.is_holding = False;
-        update_screen(&ctx->dc, &ctx->tc);
     }
+    if (ctx->tc.on_release) {
+        ctx->tc.on_release(&ctx->dc, &ctx->tc, e);
+        update_screen(ctx);
+    }
+    ctx->tc.is_holding = False;
+    ctx->tc.is_dragging = False;
 
     return True;
 }
@@ -741,7 +836,7 @@ Bool destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
-    update_screen(&ctx->dc, &ctx->tc);
+    update_screen(ctx);
     return True;
 }
 
@@ -757,14 +852,14 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 if (!history_move(ctx, True)) {
                     trace("xpaint: can't undo history");
                 }
-                update_screen(&ctx->dc, &ctx->tc);
+                update_screen(ctx);
                 break;
             case 'U':
             case 'Z':
                 if (!history_move(ctx, False)) {
                     trace("xpaint: can't revert history");
                 }
-                update_screen(&ctx->dc, &ctx->tc);
+                update_screen(ctx);
                 break;
         }
     }
@@ -784,7 +879,7 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         if (ctx->tc.on_drag) {
             ctx->tc.on_drag(&ctx->dc, &ctx->tc, e);
             // FIXME move it to better place
-            update_screen(&ctx->dc, &ctx->tc);
+            update_screen(ctx);
         }
     }
 
