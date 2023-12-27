@@ -1,8 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <X11/X.h>
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -13,18 +15,24 @@
 #include "lib/stb_ds.h"
 #undef STB_DS_IMPLEMENTATION
 
+#include "config.h"
+
 #define XLeftMouseBtn   Button1
 #define XMiddleMouseBtn Button2
 #define XRightMouseBtn  Button3
-
-#define MAX(A, B) ((A) > (B) ? (A) : (B))
-#define MIN(A, B) ((A) < (B) ? (A) : (B))
-#define LENGTH(X) (sizeof X / sizeof X[0])
-#define PI        3.141
+#define MAX(A, B)       ((A) > (B) ? (A) : (B))
+#define MIN(A, B)       ((A) < (B) ? (A) : (B))
+#define LENGTH(X)       (sizeof X / sizeof X[0])
+#define PI              3.141
 // default value for signed integers
-#define NIL       -1
+#define NIL             -1
 
-#include "config.h"
+enum {
+    A_Clipboard,
+    A_Targets,
+    A_Utf8string,
+    A_Last,
+};
 
 struct SelectonCircleDims {
     struct CircleDims {
@@ -113,7 +121,6 @@ static Bool history_move(struct Ctx*, Bool forward);
 static Bool history_push(struct History**, struct Ctx*);
 
 static void historyarr_clear(Display*, struct History**);
-static void history_clear(Display*, struct History*);
 static void canvas_clear(Display*, struct Canvas*);
 static void tool_ctx_clear(struct ToolCtx*);
 
@@ -134,9 +141,12 @@ static Bool key_press_hdlr(struct Ctx*, XEvent*);
 static Bool mapping_notify_hdlr(struct Ctx*, XEvent*);
 static Bool motion_notify_hdlr(struct Ctx*, XEvent*);
 static Bool configure_notify_hdlr(struct Ctx*, XEvent*);
+static Bool selection_request_hdlr(struct Ctx*, XEvent*);
+static Bool selection_notify_hdlr(struct Ctx*, XEvent*);
 static void cleanup(struct Ctx*);
 
 static Bool is_verbose_output = False;
+static Atom atoms[A_Last];
 
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
@@ -257,12 +267,26 @@ void tool_selection_on_release(
     struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
-    if (event->button == XLeftMouseBtn && !tc->is_dragging) {
-        struct SelectionData* sd = &tc->data.sel;
-        sd->bx = NIL;
-        sd->ey = NIL;
-        sd->by = NIL;
-        sd->ex = NIL;
+    if (event->button == XLeftMouseBtn) {
+        if (tc->is_dragging) {
+            // select area
+            XSetSelectionOwner(
+                dc->dp,
+                atoms[A_Clipboard],
+                dc->window,
+                CurrentTime
+            );
+            trace("clipboard owned");
+        } else {
+            // unselect area
+            struct SelectionData* sd = &tc->data.sel;
+            sd->bx = NIL;
+            sd->ey = NIL;
+            sd->by = NIL;
+            sd->ex = NIL;
+            XSetSelectionOwner(dc->dp, atoms[A_Clipboard], None, CurrentTime);
+            trace("clipboard released");
+        }
     }
 }
 
@@ -371,15 +395,11 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
 
 void historyarr_clear(Display* dp, struct History** hist) {
     for (unsigned int i = 0; i < arrlenu(*hist); ++i) {
-        history_clear(dp, &(*hist)[i]);
+        struct History* h = &(*hist)[i];
+        canvas_clear(dp, &h->cv);
+        tool_ctx_clear(&h->tc);
     }
     arrfree(*hist);
-}
-
-// FIXME may be removed?
-void history_clear(Display* dp, struct History* hist) {
-    canvas_clear(dp, &hist->cv);
-    tool_ctx_clear(&hist->tc);
 }
 
 void canvas_clear(Display* dp, struct Canvas* cv) {
@@ -676,6 +696,8 @@ void run(struct Ctx* ctx) {
         [MappingNotify] = &mapping_notify_hdlr,
         [MotionNotify] = &motion_notify_hdlr,
         [ConfigureNotify] = &configure_notify_hdlr,
+        [SelectionRequest] = &selection_request_hdlr,
+        [SelectionNotify] = &selection_notify_hdlr,
     };
 
     Bool running = True;
@@ -699,6 +721,12 @@ struct Ctx setup(Display* dp) {
     };
 
     int screen = DefaultScreen(dp);
+
+    /* atoms */ {
+        atoms[A_Clipboard] = XInternAtom(dp, "CLIPBOARD", False);
+        atoms[A_Targets] = XInternAtom(dp, "TARGETS", False);
+        atoms[A_Utf8string] = XInternAtom(dp, "UTF8_STRING", False);
+    }
 
     /* drawing contexts for an window */
     unsigned int foreground = BlackPixel(dp, screen);
@@ -878,7 +906,6 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         ctx->tc.is_dragging = True;
         if (ctx->tc.on_drag) {
             ctx->tc.on_drag(&ctx->dc, &ctx->tc, e);
-            // FIXME move it to better place
             update_screen(ctx);
         }
     }
@@ -903,6 +930,111 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         resize_canvas(&ctx->dc, new_cv_width, new_cv_height);
     }
 
+    return True;
+}
+
+Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
+    trace("selection request handler");
+    XSelectionRequestEvent request = event->xselectionrequest;
+    if (XGetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard]) == ctx->dc.window
+        && request.selection == atoms[A_Clipboard]) {
+        if (request.target == atoms[A_Targets] && request.property != None) {
+            trace(
+                "%d requested selection to %s prop",
+                request.requestor,
+                XGetAtomName(ctx->dc.dp, request.property)
+            );
+            XChangeProperty(
+                request.display,
+                request.requestor,
+                request.property,
+                XA_ATOM,
+                32,
+                PropModeReplace,
+                (unsigned char*)&atoms[A_Utf8string],
+                1
+            );
+        } else if (request.target == atoms[A_Utf8string] && request.property != None) {
+            char const dummy_text[] = "some dummy text";
+            XChangeProperty(
+                request.display,
+                request.requestor,
+                request.property,
+                request.target,
+                8,
+                PropModeReplace,
+                (unsigned char const*)dummy_text,
+                LENGTH(dummy_text) - 1
+            );
+        }
+        XSelectionEvent sendEvent = {
+            .type = SelectionNotify,
+            .serial = request.serial,
+            .send_event = request.send_event,
+            .display = request.display,
+            .requestor = request.requestor,
+            .selection = request.selection,
+            .target = request.target,
+            .property = request.property,
+            .time = request.time,
+        };
+        XSendEvent(ctx->dc.dp, request.requestor, 0, 0, (XEvent*)&sendEvent);
+    }
+    return True;
+}
+
+Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+    static Atom target = None;
+    trace("selection notify handler");
+    XSelectionEvent selection = event->xselection;
+
+    if (selection.property != None) {
+        Atom actual_type;
+        int actual_format;
+        unsigned long bytes_after;
+        Atom* data;
+        unsigned long count;
+        XGetWindowProperty(
+            ctx->dc.dp,
+            ctx->dc.window,
+            atoms[A_Clipboard],
+            0,
+            LONG_MAX,
+            False,
+            AnyPropertyType,
+            &actual_type,
+            &actual_format,
+            &count,
+            &bytes_after,
+            (unsigned char**)&data
+        );
+
+        if (selection.target == atoms[A_Targets]) {
+            for (unsigned int i = 0; i < count; ++i) {
+                Atom li = data[i];
+                trace("Requested target: %s\n", XGetAtomName(ctx->dc.dp, li));
+                if (li == atoms[A_Utf8string]) {
+                    target = atoms[A_Utf8string];
+                    break;
+                }
+            }
+            if (target != None)
+                XConvertSelection(
+                    ctx->dc.dp,
+                    atoms[A_Clipboard],
+                    target,
+                    atoms[A_Clipboard],
+                    ctx->dc.window,
+                    CurrentTime
+                );
+        } else if (selection.target == target) {
+            // the data is in {data, count}
+        }
+
+        if (data) {
+            XFree(data);
+        }
+    }
     return True;
 }
 
