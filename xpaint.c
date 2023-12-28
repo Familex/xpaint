@@ -27,6 +27,11 @@
 // default value for signed integers
 #define NIL             -1
 
+#define HAS_SELECTION(p_ctx) \
+    p_ctx->tc.type == Tool_Selection && p_ctx->tc.data.sel.ex != NIL \
+        && p_ctx->tc.data.sel.ey != NIL && p_ctx->tc.data.sel.bx != NIL \
+        && p_ctx->tc.data.sel.by != NIL
+
 enum {
     A_Clipboard,
     A_Targets,
@@ -147,6 +152,7 @@ static void cleanup(struct Ctx*);
 
 static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
+static Pixmap selection_buffer = None;
 
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
@@ -594,31 +600,29 @@ void update_screen(struct Ctx* ctx) {
         0
     );
     /* current selection */ {
-        if (ctx->tc.type == Tool_Selection) {
+        if (HAS_SELECTION(ctx)) {
             struct SelectionData sd = ctx->tc.data.sel;
-            if (sd.bx != NIL && sd.ey != NIL && sd.ex != NIL && sd.by != NIL) {
-                XSetLineAttributes(
-                    ctx->dc.dp,
-                    ctx->dc.screen_gc,
-                    5,
-                    LineOnOffDash,
-                    CapNotLast,
-                    JoinMiter
-                );
-                unsigned int x = MIN(sd.bx, sd.ex);
-                unsigned int y = MIN(sd.by, sd.ey);
-                unsigned int w = MAX(sd.bx, sd.ex) - x;
-                unsigned int h = MAX(sd.by, sd.ey) - y;
-                XDrawRectangle(
-                    ctx->dc.dp,
-                    ctx->dc.screen,
-                    ctx->dc.screen_gc,
-                    x,
-                    y,
-                    w,
-                    h
-                );
-            }
+            XSetLineAttributes(
+                ctx->dc.dp,
+                ctx->dc.screen_gc,
+                5,
+                LineOnOffDash,
+                CapNotLast,
+                JoinMiter
+            );
+            unsigned int x = MIN(sd.bx, sd.ex);
+            unsigned int y = MIN(sd.by, sd.ey);
+            unsigned int w = MAX(sd.bx, sd.ex) - x;
+            unsigned int h = MAX(sd.by, sd.ey) - y;
+            XDrawRectangle(
+                ctx->dc.dp,
+                ctx->dc.screen,
+                ctx->dc.screen_gc,
+                x,
+                y,
+                w,
+                h
+            );
         }
     }
     /* statusline */ {
@@ -811,6 +815,7 @@ struct Ctx setup(Display* dp) {
         );
     }
 
+    set_current_tool_selection(&ctx.tc);
     history_push(&ctx.hist_prev, &ctx);
 
     /* show up window */
@@ -869,27 +874,56 @@ Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
-    static char text[10];
+    XKeyPressedEvent e = event->xkey;
+    if (e.type == KeyRelease) {
+        return True;
+    }
 
-    if (XLookupString(&event->xkey, text, 10, NULL, NULL)) {
-        switch (text[0]) {
-            case 'q':
-                return False;
-            case 'u':
-            case 'z':
-                if (!history_move(ctx, True)) {
-                    trace("xpaint: can't undo history");
+    switch (XLookupKeysym(&e, 0)) {
+        case XK_q:
+            return False;
+        case XK_u:
+        case XK_z:
+            if (e.state & ControlMask) {
+                if (!history_move(ctx, !(e.state & ShiftMask))) {
+                    trace("xpaint: can't undo/revert history");
                 }
                 update_screen(ctx);
-                break;
-            case 'U':
-            case 'Z':
-                if (!history_move(ctx, False)) {
-                    trace("xpaint: can't revert history");
+            }
+            break;
+        case XK_c:
+            if (e.state & ControlMask && HAS_SELECTION(ctx)) {
+                unsigned int width =
+                    MAX(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx)
+                    - MIN(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx);
+                unsigned int height =
+                    MAX(ctx->tc.data.sel.ey, ctx->tc.data.sel.by)
+                    - MIN(ctx->tc.data.sel.ey, ctx->tc.data.sel.by);
+                if (selection_buffer != None) {
+                    XFreePixmap(ctx->dc.dp, selection_buffer);
                 }
-                update_screen(ctx);
-                break;
-        }
+                selection_buffer = XCreatePixmap(
+                    ctx->dc.dp,
+                    ctx->dc.window,
+                    width,
+                    height,
+                    // FIXME
+                    DefaultDepth(ctx->dc.dp, 0)
+                );
+                XCopyArea(
+                    ctx->dc.dp,
+                    ctx->dc.cv.pm,
+                    selection_buffer,
+                    ctx->dc.gc,
+                    ctx->tc.data.sel.bx,
+                    ctx->tc.data.sel.by,
+                    width,
+                    height,
+                    0,
+                    0
+                );
+            }
+            break;
     }
     return True;
 }
@@ -1044,5 +1078,8 @@ void cleanup(struct Ctx* ctx) {
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
     XFreePixmap(ctx->dc.dp, ctx->dc.cv.pm);
+    if (selection_buffer != None) {
+        XFreePixmap(ctx->dc.dp, selection_buffer);
+    }
     XDestroyWindow(ctx->dc.dp, ctx->dc.window);
 }
