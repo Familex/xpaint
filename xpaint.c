@@ -98,6 +98,11 @@ struct Ctx {
             int hicon;
         }* items;
     } sc;
+    struct SelectionBuffer {
+        Pixmap data;
+        unsigned int width;
+        unsigned int height;
+    } sel_buf;
 };
 
 static void die(char const*, ...);
@@ -153,7 +158,6 @@ static void cleanup(struct Ctx*);
 
 static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
-static Pixmap selection_buffer = None;
 
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
@@ -718,6 +722,7 @@ struct Ctx setup(Display* dp) {
         .dc.height = 250,
         .hist_next = NULL,
         .hist_prev = NULL,
+        .sel_buf.data = None,
     };
 
     int screen = DefaultScreen(dp);
@@ -896,32 +901,32 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                     ctx->dc.window,
                     CurrentTime
                 );
-                unsigned int width =
+                ctx->sel_buf.width =
                     MAX(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx)
                     - MIN(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx);
-                unsigned int height =
+                ctx->sel_buf.height =
                     MAX(ctx->tc.data.sel.ey, ctx->tc.data.sel.by)
                     - MIN(ctx->tc.data.sel.ey, ctx->tc.data.sel.by);
-                if (selection_buffer != None) {
-                    XFreePixmap(ctx->dc.dp, selection_buffer);
+                if (ctx->sel_buf.data != None) {
+                    XFreePixmap(ctx->dc.dp, ctx->sel_buf.data);
                 }
-                selection_buffer = XCreatePixmap(
+                ctx->sel_buf.data = XCreatePixmap(
                     ctx->dc.dp,
                     ctx->dc.window,
-                    width,
-                    height,
+                    ctx->sel_buf.width,
+                    ctx->sel_buf.height,
                     // FIXME
                     DefaultDepth(ctx->dc.dp, 0)
                 );
                 XCopyArea(
                     ctx->dc.dp,
                     ctx->dc.cv.pm,
-                    selection_buffer,
+                    ctx->sel_buf.data,
                     ctx->dc.gc,
                     ctx->tc.data.sel.bx,
                     ctx->tc.data.sel.by,
-                    width,
-                    height,
+                    ctx->sel_buf.width,
+                    ctx->sel_buf.height,
                     0,
                     0
                 );
@@ -1099,8 +1104,8 @@ void cleanup(struct Ctx* ctx) {
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
     XFreePixmap(ctx->dc.dp, ctx->dc.cv.pm);
-    if (selection_buffer != None) {
-        XFreePixmap(ctx->dc.dp, selection_buffer);
+    if (ctx->sel_buf.data != None) {
+        XFreePixmap(ctx->dc.dp, ctx->sel_buf.data);
     }
     XDestroyWindow(ctx->dc.dp, ctx->dc.window);
 }
