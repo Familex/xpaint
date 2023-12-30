@@ -979,11 +979,17 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
         && request.property != None) {
         if (request.target == atoms[A_Targets]) {
             Atom avaliable_targets[] = {atoms[A_ImagePng]};
-            trace(
-                "%d requested selection to %s prop",
-                request.requestor,
-                XGetAtomName(ctx->dc.dp, request.property)
-            );
+            {
+                char* request_property_name =
+                    XGetAtomName(ctx->dc.dp, request.property);
+                trace(
+                    "%d requested selection to %s prop",
+                    request.requestor,
+                    request_property_name
+                );
+                // valgrind still marks as leak
+                XFree(request_property_name);
+            }
             XChangeProperty(
                 request.display,
                 request.requestor,
@@ -1060,6 +1066,7 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         if (selection.target == atoms[A_Targets]) {
             for (unsigned int i = 0; i < count; ++i) {
                 Atom li = data[i];
+                // leak
                 trace("Requested target: %s\n", XGetAtomName(ctx->dc.dp, li));
                 if (li == atoms[A_Utf8string]) {
                     target = atoms[A_Utf8string];
