@@ -29,6 +29,7 @@
 #define XRightMouseBtn  Button3
 #define MAX(A, B)       ((A) > (B) ? (A) : (B))
 #define MIN(A, B)       ((A) < (B) ? (A) : (B))
+#define CLAMP(X, L, H)  ((X < L) ? L : (X > H) ? H : X)
 #define LENGTH(X)       (sizeof X / sizeof X[0])
 #define PI              3.141
 // default value for signed integers
@@ -289,8 +290,8 @@ void tool_selection_on_press(
     if (event->button == XLeftMouseBtn) {
         struct SelectionData* sd = &tc->data.sel;
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-        sd->bx = pointer.x;
-        sd->by = pointer.y;
+        sd->bx = CLAMP(pointer.x, 0, dc->cv.width);
+        sd->by = CLAMP(pointer.y, 0, dc->cv.height);
         sd->ex = NIL;
         sd->ey = NIL;
     }
@@ -326,8 +327,8 @@ void tool_selection_on_drag(
 ) {
     if (tc->is_holding) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-        tc->data.sel.ex = pointer.x;
-        tc->data.sel.ey = pointer.y;
+        tc->data.sel.ex = CLAMP(pointer.x, 0, dc->cv.width);
+        tc->data.sel.ey = CLAMP(pointer.y, 0, dc->cv.height);
     }
 }
 
