@@ -1,12 +1,61 @@
+#include <X11/X.h>
+
 #include "types.h"
 
 char const title[] = "xpaint";
-u32 const SELECTION_OUTER_RADIUS_PX = 225;
-u32 const SELECTION_INNER_RADIUS_PX = 40;
-u32 const CANVAS_BACKGROUND_RGB = 0xAA0000;
-u32 const CANVAS_DEFAULT_WIDTH = 500;
-u32 const CANVAS_DEFAULT_HEIGHT = 800;
-u32 const STATUSLINE_BACKGROUND_RGB = 0x000000;
-u32 const STATUSLINE_FONT_RGB = 0xFFFFFF;
-u32 const STATUSLINE_HEIGHT_PX = 10; // FIXME
-u32 const WINDOW_BACKGROUND_RGB = 0x181818;
+
+struct {
+    u32 background_rgb;
+} const WINDOW = {
+    .background_rgb = 0x181818,
+};
+
+struct {
+    u32 background_rgb;
+    u32 font_rgb;
+    u32 height_px;  // FIXME
+} const STATUSLINE = {
+    .background_rgb = 0x000000,
+    .font_rgb = 0xFFFFFF,
+    .height_px = 10,
+};
+
+struct {
+    u32 outer_r_px;
+    u32 inner_r_px;
+    u32 line_col_rgb;
+    u32 line_w;
+    i32 line_style;
+    i32 cap_style;
+    i32 join_style;
+} const SELECTION_CIRCLE = {
+    .outer_r_px = 225,
+    .inner_r_px = 40,
+    .line_col_rgb = 0xFFFFFF,
+    .line_w = 2,
+    .line_style = LineSolid,
+    .cap_style = CapNotLast,
+    .join_style = JoinMiter,
+};
+
+struct {
+    u32 line_w;
+    i32 line_style;
+    i32 cap_style;
+    i32 join_style;
+} const SELECTION_TOOL = {
+    .line_w = 2,
+    .line_style = LineOnOffDash,
+    .cap_style = CapNotLast,
+    .join_style = JoinMiter,
+};
+
+struct {
+    u32 background_rgb;
+    u32 default_width;
+    u32 default_height;
+} const CANVAS = {
+    .background_rgb = 0xAA0000,
+    .default_width = 500,
+    .default_height = 800,
+};

@@ -149,7 +149,7 @@ draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, i32, i32);
 static void clear_selection_circle(struct DrawCtx*, struct SelectionCircle*);
 static void update_screen(struct Ctx*);
 
-static void resize_canvas(struct DrawCtx*, i32, i32);
+// static void resize_canvas(struct DrawCtx*, i32, i32);
 
 static struct Ctx setup(Display*);
 static void run(struct Ctx*);
@@ -163,6 +163,7 @@ static Bool motion_notify_hdlr(struct Ctx*, XEvent*);
 static Bool configure_notify_hdlr(struct Ctx*, XEvent*);
 static Bool selection_request_hdlr(struct Ctx*, XEvent*);
 static Bool selection_notify_hdlr(struct Ctx*, XEvent*);
+static Bool client_message_hdlr(struct Ctx*, XEvent*);
 static void cleanup(struct Ctx*);
 
 static Bool is_verbose_output = False;
@@ -213,36 +214,34 @@ void trace(char const* fmt, ...) {
 
 Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc) {
     return (Pair) {
-        .x = x + (dc->width - dc->cv.width) / 2,
-        .y = y + (dc->height - dc->cv.height) / 2,
+        .x = x + ((i32)dc->width - (i32)dc->cv.width) / 2,
+        .y = y + ((i32)dc->height - (i32)dc->cv.height) / 2,
     };
 }
 
 Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
     return (Pair) {
-        .x = x - (dc->width - dc->cv.width) / 2,
-        .y = y - (dc->height - dc->cv.height) / 2,
+        .x = x - ((i32)dc->width - (i32)dc->cv.width) / 2,
+        .y = y - ((i32)dc->height - (i32)dc->cv.height) / 2,
     };
 }
 
 struct SelectonCircleDims
 get_curr_sel_dims(struct SelectionCircle const* sel_circ) {
-    struct SelectonCircleDims result = {
+    return (struct SelectonCircleDims) {
         .outer =
             {
-                .x = sel_circ->x - SELECTION_OUTER_RADIUS_PX,
-                .y = sel_circ->y - SELECTION_OUTER_RADIUS_PX,
-                .r = SELECTION_OUTER_RADIUS_PX,
+                .x = sel_circ->x - SELECTION_CIRCLE.outer_r_px,
+                .y = sel_circ->y - SELECTION_CIRCLE.outer_r_px,
+                .r = SELECTION_CIRCLE.outer_r_px,
             },
         .inner =
             {
-                .x = sel_circ->x - SELECTION_INNER_RADIUS_PX,
-                .y = sel_circ->y - SELECTION_INNER_RADIUS_PX,
-                .r = SELECTION_INNER_RADIUS_PX,
+                .x = sel_circ->x - SELECTION_CIRCLE.inner_r_px,
+                .y = sel_circ->y - SELECTION_CIRCLE.inner_r_px,
+                .r = SELECTION_CIRCLE.inner_r_px,
             },
     };
-
-    return result;
 }
 
 static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
@@ -497,7 +496,15 @@ void draw_selection_circle(
 
     struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
 
-    XSetForeground(dc->dp, dc->screen_gc, 0xFFFFFF);
+    XSetLineAttributes(
+        dc->dp,
+        dc->screen_gc,
+        SELECTION_CIRCLE.line_w,
+        SELECTION_CIRCLE.line_style,
+        SELECTION_CIRCLE.cap_style,
+        SELECTION_CIRCLE.join_style
+    );
+    XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.line_col_rgb);
     XFillArc(
         dc->dp,
         dc->screen,
@@ -619,7 +626,7 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
 void update_screen(struct Ctx* ctx) {
     Pair cv_pivot = point_from_cv_to_scr(0, 0, &ctx->dc);
 
-    XSetForeground(ctx->dc.dp, ctx->dc.screen_gc, WINDOW_BACKGROUND_RGB);
+    XSetForeground(ctx->dc.dp, ctx->dc.screen_gc, WINDOW.background_rgb);
     XFillRectangle(
         ctx->dc.dp,
         ctx->dc.window,
@@ -647,10 +654,10 @@ void update_screen(struct Ctx* ctx) {
             XSetLineAttributes(
                 ctx->dc.dp,
                 ctx->dc.screen_gc,
-                5,
-                LineOnOffDash,
-                CapNotLast,
-                JoinMiter
+                SELECTION_TOOL.line_w,
+                SELECTION_TOOL.line_style,
+                SELECTION_TOOL.cap_style,
+                SELECTION_TOOL.join_style
             );
             u32 x = MIN(sd.bx, sd.ex);
             u32 y = MIN(sd.by, sd.ey);
@@ -670,19 +677,19 @@ void update_screen(struct Ctx* ctx) {
     /* statusline */ {
         struct DrawCtx* dc = &ctx->dc;
         struct ToolCtx* tc = &ctx->tc;
-        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE_BACKGROUND_RGB);
+        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
         XFillRectangle(
             dc->dp,
             dc->screen,
             dc->screen_gc,
             0,
-            dc->height - STATUSLINE_HEIGHT_PX,
+            dc->height - STATUSLINE.height_px,
             dc->width,
-            STATUSLINE_HEIGHT_PX
+            STATUSLINE.height_px
         );
         if (tc->ssz_tool_name) {
-            XSetBackground(dc->dp, dc->screen_gc, STATUSLINE_BACKGROUND_RGB);
-            XSetForeground(dc->dp, dc->screen_gc, STATUSLINE_FONT_RGB);
+            XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
+            XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
             XDrawImageString(
                 dc->dp,
                 dc->screen,
@@ -706,7 +713,7 @@ void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height) {
         DefaultDepth(dc->dp, 0)
     );
 
-    XSetForeground(dc->dp, dc->gc, CANVAS_BACKGROUND_RGB);
+    XSetForeground(dc->dp, dc->gc, CANVAS.background_rgb);
     XFillRectangle(dc->dp, new_pm, dc->gc, 0, 0, new_width, new_height);
 
     XCopyArea(
@@ -744,6 +751,7 @@ void run(struct Ctx* ctx) {
         [ConfigureNotify] = &configure_notify_hdlr,
         [SelectionRequest] = &selection_request_hdlr,
         [SelectionNotify] = &selection_notify_hdlr,
+        [ClientMessage] = &client_message_hdlr,
     };
 
     Bool running = True;
@@ -760,8 +768,8 @@ void run(struct Ctx* ctx) {
 struct Ctx setup(Display* dp) {
     struct Ctx ctx = {
         .dc.dp = dp,
-        .dc.width = 350,
-        .dc.height = 250,
+        .dc.width = CANVAS.default_width,
+        .dc.height = CANVAS.default_height,
         .hist_next = NULL,
         .hist_prev = NULL,
         .sel_buf.im = NULL,
@@ -802,6 +810,11 @@ struct Ctx setup(Display* dp) {
     );
     ctx.dc.screen = ctx.dc.window;
 
+    /* turn on protocol support */ {
+        Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
+        XSetWMProtocols(dp, ctx.dc.window, &wm_delete_window, 1);
+    }
+
     XSetStandardProperties(
         dp,
         ctx.dc.window,
@@ -823,8 +836,8 @@ struct Ctx setup(Display* dp) {
     );
 
     /* canvas */ {
-        ctx.dc.cv.width = CANVAS_DEFAULT_WIDTH;
-        ctx.dc.cv.height = CANVAS_DEFAULT_HEIGHT;
+        ctx.dc.cv.width = CANVAS.default_width;
+        ctx.dc.cv.height = CANVAS.default_height;
         ctx.dc.cv.pm = XCreatePixmap(
             dp,
             ctx.dc.window,
@@ -847,7 +860,7 @@ struct Ctx setup(Display* dp) {
             &canvas_gc_vals
         );
         // initial canvas color
-        XSetForeground(dp, ctx.dc.gc, CANVAS_BACKGROUND_RGB);
+        XSetForeground(dp, ctx.dc.gc, CANVAS.background_rgb);
         XFillRectangle(
             dp,
             ctx.dc.cv.pm,
@@ -1180,6 +1193,11 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
     return True;
+}
+
+Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
+    // close window on request
+    return False;
 }
 
 void cleanup(struct Ctx* ctx) {
