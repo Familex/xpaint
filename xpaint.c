@@ -87,9 +87,15 @@ struct Ctx {
         } type;
         union ToolData {
             struct SelectionData {
-                // begin/end x/y
-                i32 by, bx, ey, ex;
+                // selection begin
+                i32 by, bx;
+                // selection end
+                i32 ey, ex;
             } sel;
+            struct PencilData {
+                u32 line_r;
+                u32 col_rgb;
+            } pencil;
         } data;
     } tc;
     struct History {
@@ -267,6 +273,10 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             new_tc.on_release = &tool_pencil_on_release;
             new_tc.on_drag = &tool_pencil_on_drag;
             new_tc.ssz_tool_name = "pencil";
+            new_tc.data.pencil = (struct PencilData) {
+                .line_r = 5,
+                .col_rgb = 0x00FF00,
+            };
             break;
     }
     *tc = new_tc;
@@ -336,18 +346,19 @@ void tool_pencil_on_release(
     struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
-    static i32 size = 25;  // FIXME
+    assert(tc->type == Tool_Pencil);
 
     if (!tc->is_dragging) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+        XSetForeground(dc->dp, dc->gc, tc->data.pencil.col_rgb);
         XFillArc(
             dc->dp,
             dc->cv.pm,
             dc->gc,
-            pointer.x - size / 2,
-            pointer.y - size / 2,
-            size,
-            size,
+            pointer.x - tc->data.pencil.line_r / 2,
+            pointer.y - tc->data.pencil.line_r / 2,
+            tc->data.pencil.line_r,
+            tc->data.pencil.line_r,
             0,
             360 * 64
         );
@@ -359,11 +370,20 @@ void tool_pencil_on_drag(
     struct ToolCtx* tc,
     XMotionEvent const* event
 ) {
+    assert(tc->type == Tool_Pencil);
     assert(tc->is_holding);
 
     Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
     Pair prev_pointer = point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc);
-    XSetForeground(dc->dp, dc->gc, 0x00FF00);
+    XSetForeground(dc->dp, dc->gc, tc->data.pencil.col_rgb);
+    XSetLineAttributes(
+        dc->dp,
+        dc->gc,
+        tc->data.pencil.line_r,
+        LineSolid,
+        CapRound,  // fills gaps in lines
+        JoinMiter  // FIXME what is it
+    );
     XDrawLine(
         dc->dp,
         dc->cv.pm,
