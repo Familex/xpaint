@@ -92,6 +92,9 @@ struct Ctx {
             Tool_Selection,
             Tool_Pencil,
         } type;
+        struct ToolSharedData {
+            u32 col_rgb;
+        } sdata;
         union ToolData {
             struct SelectionData {
                 // selection begin
@@ -101,7 +104,6 @@ struct Ctx {
             } sel;
             struct PencilData {
                 u32 line_r;
-                u32 col_rgb;
             } pencil;
         } data;
     } tc;
@@ -309,7 +311,6 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             new_tc.ssz_tool_name = "pencil";
             new_tc.data.pencil = (struct PencilData) {
                 .line_r = 5,
-                .col_rgb = 0x00FF00,
             };
             break;
     }
@@ -384,7 +385,7 @@ void tool_pencil_on_release(
 
     if (!tc->is_dragging) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-        XSetForeground(dc->dp, dc->gc, tc->data.pencil.col_rgb);
+        XSetForeground(dc->dp, dc->gc, tc->sdata.col_rgb);
         XFillArc(
             dc->dp,
             dc->cv.pm,
@@ -409,7 +410,7 @@ void tool_pencil_on_drag(
 
     Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
     Pair prev_pointer = point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc);
-    XSetForeground(dc->dp, dc->gc, tc->data.pencil.col_rgb);
+    XSetForeground(dc->dp, dc->gc, tc->sdata.col_rgb);
     XSetLineAttributes(
         dc->dp,
         dc->gc,
@@ -770,10 +771,10 @@ void update_screen(struct Ctx* ctx) {
                     strlen(tc->ssz_tool_name)
                 );
             }
-            if (tc->type == Tool_Pencil) {
+            /* color */ {
                 u32 const col_value_size = 1 + 6;
                 char col_value[col_value_size + 2];  // FIXME ?
-                sprintf(col_value, "#%06X", tc->data.pencil.col_rgb);
+                sprintf(col_value, "#%06X", tc->sdata.col_rgb);
                 XDrawImageString(
                     dc->dp,
                     dc->screen,
@@ -1096,31 +1097,29 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             break;
         case XK_Up:
-        case XK_Down:
-            if (ctx->tc.type == Tool_Pencil) {
-                u32 colors[] = {
-                    0x000000,
-                    0xFF0000,
-                    0x00FF00,
-                    0x0000FF,
-                    0xFFFF00,
-                    0x00FFFF,
-                    0xFF00FF,
-                    0xFFFFFF,
-                };
-                u32 col_num = LENGTH(colors);
-                i32 curr_col = 0;  // first by default
-                for (i32 i = 0; i < col_num; ++i) {
-                    if (ctx->tc.data.pencil.col_rgb == colors[i]) {
-                        curr_col = i;
-                        break;
-                    }
+        case XK_Down: {
+            u32 colors[] = {
+                0x000000,
+                0xFF0000,
+                0x00FF00,
+                0x0000FF,
+                0xFFFF00,
+                0x00FFFF,
+                0xFF00FF,
+                0xFFFFFF,
+            };
+            u32 col_num = LENGTH(colors);
+            i32 curr_col = 0;  // first by default
+            for (i32 i = 0; i < col_num; ++i) {
+                if (ctx->tc.sdata.col_rgb == colors[i]) {
+                    curr_col = i;
+                    break;
                 }
-                ctx->tc.data.pencil.col_rgb =
-                    colors[(curr_col + (key_sym == XK_Up ? 1 : -1)) % col_num];
-                update_screen(ctx);
             }
-            break;
+            ctx->tc.sdata.col_rgb =
+                colors[(curr_col + (key_sym == XK_Up ? 1 : -1)) % col_num];
+            update_screen(ctx);
+        } break;
     }
     return True;
 }
