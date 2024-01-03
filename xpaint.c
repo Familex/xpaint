@@ -861,6 +861,8 @@ void update_screen(struct Ctx* ctx) {
                 );
             }
             /* color */ {
+                static i32 const col_name_len = 50;  // FIXME
+                static i32 const col_rect_w = 30;
                 u32 const col_value_size = 1 + 6;
                 char col_value[col_value_size + 2];  // FIXME ?
                 sprintf(col_value, "#%06X", tc->sdata.col_rgb);
@@ -868,10 +870,20 @@ void update_screen(struct Ctx* ctx) {
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
-                    dc->width - 50,  // FIXME
+                    dc->width - col_name_len,
                     dc->height,
                     col_value,
                     col_value_size
+                );
+                XSetForeground(dc->dp, dc->screen_gc, tc->sdata.col_rgb);
+                XFillRectangle(
+                    dc->dp,
+                    dc->screen,
+                    dc->screen_gc,
+                    dc->width - col_name_len - col_rect_w,
+                    dc->height - STATUSLINE.height_px,
+                    col_rect_w,
+                    STATUSLINE.height_px
                 );
             }
         }
