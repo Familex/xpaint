@@ -144,6 +144,7 @@ get_curr_sel_dims(struct SelectionCircle const*);
 
 static void set_current_tool_selection(struct ToolCtx*);
 static void set_current_tool_pencil(struct ToolCtx*);
+static void set_current_tool_fill(struct ToolCtx*);
 
 static void
 tool_selection_on_press(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
@@ -295,6 +296,7 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
         .type = type,
         .prev_x = tc->prev_x,
         .prev_y = tc->prev_y,
+        .sdata = tc->sdata,
     };
     switch (type) {
         case Tool_Selection:
@@ -442,12 +444,78 @@ void tool_pencil_on_drag(
     );
 }
 
+static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
+    static i32 d_rows[] = {1, 0, 0, -1};
+    static i32 d_cols[] = {0, 1, -1, 0};
+
+    u64 area_col = XGetPixel(im, x, y);
+    if (area_col == targ_col) {
+        return;
+    }
+
+    Pair* queue = NULL;
+    Pair first = {x, y};
+    arrpush(queue, first);
+
+    while (arrlen(queue)) {
+        Pair curr = arrpop(queue);
+
+        for (i32 dir = 0; dir < 4; ++dir) {
+            Pair d_curr = {curr.x + d_rows[dir], curr.y + d_cols[dir]};
+
+            if (d_curr.x < 0 || d_curr.y < 0 || d_curr.x >= im->width
+                || d_curr.y >= im->height) {
+                continue;
+            }
+
+            if (XGetPixel(im, d_curr.x, d_curr.y) == area_col) {
+                XPutPixel(im, d_curr.x, d_curr.y, targ_col);
+                arrpush(queue, d_curr);
+            }
+        }
+    }
+
+    arrfree(queue);
+}
+
 void tool_fill_on_release(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
-    puts("fill!");
+    XImage* cv_im = XGetImage(
+        dc->dp,
+        dc->cv.pm,
+        0,
+        0,
+        dc->cv.width,
+        dc->cv.height,
+        AllPlanes,
+        ZPixmap
+    );
+    if (cv_im == NULL) {
+        trace("tool_fill_on_release: XGetImage on canvas failed");
+        return;
+    }
+
+    Pair const pointer = point_from_scr_to_cv(event->x, event->y, dc);
+
+    flood_fill(cv_im, tc->sdata.col_rgb, pointer.x, pointer.y);
+
+    XPutImage(
+        dc->dp,
+        dc->cv.pm,
+        dc->gc,
+        cv_im,
+        0,
+        0,
+        0,
+        0,
+        dc->cv.width,
+        dc->cv.height
+    );
+
+    XDestroyImage(cv_im);
 }
 
 Bool history_move(struct Ctx* ctx, Bool forward) {
