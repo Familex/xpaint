@@ -48,6 +48,12 @@ enum {
     A_Last,
 };
 
+enum {
+    I_Select,
+    I_Pencil,
+    I_Last,
+};
+
 struct SelectonCircleDims {
     struct CircleDims {
         u32 x;
@@ -60,6 +66,7 @@ struct Ctx {
     struct DrawCtx {
         Display* dp;
         Drawable screen;
+        XVisualInfo vinfo;
         GC gc;
         GC screen_gc;
         Window window;
@@ -109,7 +116,7 @@ struct Ctx {
         u32 item_count;
         struct Item {
             void (*on_select)(struct ToolCtx*);
-            i32 hicon;
+            i32 hicon;  // I_*
         }* items;
     } sc;
     struct SelectionBuffer {
@@ -122,6 +129,8 @@ static void trace(char const*, ...);
 
 static Pair point_from_cv_to_scr(i32, i32, struct DrawCtx const*);
 static Pair point_from_scr_to_cv(i32, i32, struct DrawCtx const*);
+
+static XImage* read_png_file(struct DrawCtx const*, char const*);
 
 static void init_sel_circ_tools(struct SelectionCircle*, i32, i32);
 static void free_sel_circ(struct SelectionCircle*);
@@ -174,6 +183,7 @@ static void cleanup(struct Ctx*);
 
 static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
+static XImage* images[I_Last];
 
 i32 main(i32 argc, char** argv) {
     for (i32 i = 1; i < argc; ++i) {
@@ -230,6 +240,30 @@ Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
         .x = x - ((i32)dc->width - (i32)dc->cv.width) / 2,
         .y = y - ((i32)dc->height - (i32)dc->cv.height) / 2,
     };
+}
+
+XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
+    i32 width = NIL;
+    i32 height = NIL;
+    i32 comp = NIL;
+    stbi_uc* image_data = stbi_load(file_name, &width, &height, &comp, 4);
+    if (image_data == NULL) {
+        return NULL;
+    }
+    XImage* result = XCreateImage(
+        dc->dp,
+        dc->vinfo.visual,
+        dc->vinfo.depth,
+        ZPixmap,
+        32,
+        (char*)image_data,
+        width,
+        height,
+        32,  // FIXME what is it? (must be 32)
+        width * 4
+    );
+
+    return result;
 }
 
 struct SelectonCircleDims
@@ -429,8 +463,7 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
         ctx->dc.window,
         ctx->dc.width,
         ctx->dc.height,
-        // FIXME
-        DefaultDepth(ctx->dc.dp, 0)
+        ctx->dc.vinfo.depth
     );
     XCopyArea(
         ctx->dc.dp,
@@ -469,8 +502,8 @@ void tool_ctx_clear(struct ToolCtx* tc) {
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
     static struct Item tools[] = {
-        [0] = {&set_current_tool_selection, 0},
-        [1] = {&set_current_tool_pencil, 0},
+        [0] = {.on_select = &set_current_tool_selection, .hicon = I_Select},
+        [1] = {.on_select = &set_current_tool_pencil, .hicon = I_Pencil},
     };
 
     sc->is_active = True;
@@ -524,7 +557,7 @@ void draw_selection_circle(
         SELECTION_CIRCLE.cap_style,
         SELECTION_CIRCLE.join_style
     );
-    XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.line_col_rgb);
+    XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.background_rgb);
     XFillArc(
         dc->dp,
         dc->screen,
@@ -537,7 +570,7 @@ void draw_selection_circle(
         360 * 64
     );
 
-    XSetForeground(dc->dp, dc->screen_gc, 0x000000);
+    XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.line_col_rgb);
     XDrawArc(
         dc->dp,
         dc->screen,
@@ -580,20 +613,28 @@ void draw_selection_circle(
             }
         }
 
-        for (u32 image_num = 0; image_num < sc->item_count; ++image_num) {
-            XSetForeground(dc->dp, dc->screen_gc, 0xFFFFFF);
-            XDrawImageString(
+        for (u32 item = 0; item < sc->item_count; ++item) {
+            XImage* image = images[sc->items[item].hicon];
+            assert(image != NULL);
+
+            // FIXME client-side transparency?
+            XPutImage(
                 dc->dp,
                 dc->screen,
                 dc->screen_gc,
+                image,
+                0,
+                0,
                 sc->x
-                    + cos(segment_rad * (image_num + 0.5))
-                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5),
+                    + cos(segment_rad * (item - 0.5))
+                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
+                    - image->width / 2.0,
                 sc->y
-                    + sin(segment_rad * (image_num + 0.5))
-                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5),
-                "T",
-                1
+                    + sin(segment_rad * (item - 0.5))
+                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
+                    - image->height / 2.0,
+                image->width,
+                image->height
             );
         }
 
@@ -601,7 +642,11 @@ void draw_selection_circle(
         i32 const current_item =
             current_sel_circ_item(sc, pointer_x, pointer_y);
         if (current_item != NIL) {
-            XSetForeground(dc->dp, dc->screen_gc, 0x888888);
+            XSetForeground(
+                dc->dp,
+                dc->screen_gc,
+                SELECTION_CIRCLE.active_background_rgb
+            );
             XFillArc(
                 dc->dp,
                 dc->screen,
@@ -613,7 +658,11 @@ void draw_selection_circle(
                 (current_item * segment_deg) * 64,
                 segment_deg * 64
             );
-            XSetForeground(dc->dp, dc->screen_gc, 0xAAAAAA);
+            XSetForeground(
+                dc->dp,
+                dc->screen_gc,
+                SELECTION_CIRCLE.active_inner_background_rgb
+            );
             XFillArc(
                 dc->dp,
                 dc->screen,
@@ -729,8 +778,7 @@ void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height) {
         dc->window,
         new_width,
         new_height,
-        // FIXME
-        DefaultDepth(dc->dp, 0)
+        dc->vinfo.depth
     );
 
     XSetForeground(dc->dp, dc->gc, CANVAS.background_rgb);
@@ -795,8 +843,6 @@ struct Ctx setup(Display* dp) {
         .sel_buf.im = NULL,
     };
 
-    i32 screen = DefaultScreen(dp);
-
     /* atoms */ {
         atoms[A_Clipboard] = XInternAtom(dp, "CLIPBOARD", False);
         atoms[A_Targets] = XInternAtom(dp, "TARGETS", False);
@@ -804,56 +850,61 @@ struct Ctx setup(Display* dp) {
         atoms[A_ImagePng] = XInternAtom(dp, "image/png", False);
     }
 
-    /* drawing contexts for an window */
-    u32 foreground = BlackPixel(dp, screen);
-    u32 background = WhitePixel(dp, screen);
-    // FIXME check values
-    XSizeHints hint = {
-        .x = 200,
-        .y = 300,
-        .width = ctx.dc.width,
-        .height = ctx.dc.height,
-        .flags = PPosition | PSize,
-    };
+    i32 screen = DefaultScreen(dp);
+    Window root = DefaultRootWindow(dp);
+
+    i32 result = XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx.dc.vinfo);
+    assert(result != 0);
 
     /* create window */
-    ctx.dc.window = XCreateSimpleWindow(
+    ctx.dc.window = XCreateWindow(
         dp,
-        DefaultRootWindow(dp),
-        hint.x,
-        hint.y,
-        hint.width,
-        hint.height,
-        5,
-        foreground,
-        background
+        root,
+        0,
+        0,
+        ctx.dc.width,
+        ctx.dc.height,
+        0,  // border width
+        ctx.dc.vinfo.depth,
+        InputOutput,
+        ctx.dc.vinfo.visual,
+        CWColormap | CWBorderPixel | CWBackPixel | CWEventMask,
+        &(XSetWindowAttributes
+        ) {.colormap =
+               XCreateColormap(dp, root, ctx.dc.vinfo.visual, AllocNone),
+           .border_pixel = 0,
+           .background_pixel = 0x80800000,
+           .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
+               | ExposureMask | PointerMotionMask | StructureNotifyMask}
     );
     ctx.dc.screen = ctx.dc.window;
+    ctx.dc.screen_gc = XCreateGC(dp, ctx.dc.window, 0, 0);
+
+    XSetWMName(
+        dp,
+        ctx.dc.window,
+        &(XTextProperty
+        ) {.value = (char unsigned*)title,
+           .nitems = strlen(title),
+           .format = 8,
+           .encoding = atoms[A_Utf8string]}
+    );
 
     /* turn on protocol support */ {
         Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
         XSetWMProtocols(dp, ctx.dc.window, &wm_delete_window, 1);
     }
 
-    XSetStandardProperties(
-        dp,
-        ctx.dc.window,
-        title,
-        NULL,
-        None,
-        NULL,
-        0,
-        &hint
-    );
-
-    ctx.dc.screen_gc = XCreateGC(dp, ctx.dc.window, 0, 0);
-
-    XSelectInput(
-        dp,
-        ctx.dc.window,
-        ButtonPressMask | ButtonReleaseMask | KeyPressMask | ExposureMask
-            | PointerMotionMask | StructureNotifyMask
-    );
+    /* static images */ {
+        for (i32 i = 0; i < I_Last; ++i) {
+            images[i] = read_png_file(
+                &ctx.dc,
+                i == I_Select       ? "./res/tool-select.png"
+                    : i == I_Pencil ? "./res/tool-pencil.png"
+                                    : "null"
+            );
+        }
+    }
 
     /* canvas */ {
         ctx.dc.cv.width = CANVAS.default_width;
@@ -863,8 +914,7 @@ struct Ctx setup(Display* dp) {
             ctx.dc.window,
             ctx.dc.cv.width,
             ctx.dc.cv.height,
-            // FIXME
-            DefaultDepth(dp, 0)
+            ctx.dc.vinfo.depth
         );
         XGCValues canvas_gc_vals = {
             .line_style = LineSolid,
@@ -1228,6 +1278,11 @@ void cleanup(struct Ctx* ctx) {
     XFreePixmap(ctx->dc.dp, ctx->dc.cv.pm);
     if (ctx->sel_buf.im != NULL) {
         XDestroyImage(ctx->sel_buf.im);
+    }
+    for (u32 i = 0; i < I_Last; ++i) {
+        if (images[i] != NULL) {
+            XDestroyImage(images[i]);
+        }
     }
     XDestroyWindow(ctx->dc.dp, ctx->dc.window);
 }
