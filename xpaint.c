@@ -756,18 +756,34 @@ void update_screen(struct Ctx* ctx) {
             dc->width,
             STATUSLINE.height_px
         );
-        if (tc->ssz_tool_name) {
+        /* captions */ {
             XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
             XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
-            XDrawImageString(
-                dc->dp,
-                dc->screen,
-                dc->screen_gc,
-                0,
-                dc->height,
-                tc->ssz_tool_name,
-                strlen(tc->ssz_tool_name)
-            );
+            if (tc->ssz_tool_name) {
+                XDrawImageString(
+                    dc->dp,
+                    dc->screen,
+                    dc->screen_gc,
+                    0,
+                    dc->height,
+                    tc->ssz_tool_name,
+                    strlen(tc->ssz_tool_name)
+                );
+            }
+            if (tc->type == Tool_Pencil) {
+                u32 const col_value_size = 1 + 6;
+                char col_value[col_value_size + 2];  // FIXME ?
+                sprintf(col_value, "#%06X", tc->data.pencil.col_rgb);
+                XDrawImageString(
+                    dc->dp,
+                    dc->screen,
+                    dc->screen_gc,
+                    dc->width - 50,  // FIXME
+                    dc->height,
+                    col_value,
+                    col_value_size
+                );
+            }
         }
     }
 }
@@ -1006,7 +1022,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         return True;
     }
 
-    switch (XLookupKeysym(&e, 0)) {
+    KeySym const key_sym = XLookupKeysym(&e, 0);
+    switch (key_sym) {
         case XK_q:
             return False;
         case XK_u:
@@ -1076,6 +1093,32 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                         ctx->sel_buf.im->green_mask
                     );
                 }
+            }
+            break;
+        case XK_Up:
+        case XK_Down:
+            if (ctx->tc.type == Tool_Pencil) {
+                u32 colors[] = {
+                    0x000000,
+                    0xFF0000,
+                    0x00FF00,
+                    0x0000FF,
+                    0xFFFF00,
+                    0x00FFFF,
+                    0xFF00FF,
+                    0xFFFFFF,
+                };
+                u32 col_num = LENGTH(colors);
+                i32 curr_col = 0;  // first by default
+                for (i32 i = 0; i < col_num; ++i) {
+                    if (ctx->tc.data.pencil.col_rgb == colors[i]) {
+                        curr_col = i;
+                        break;
+                    }
+                }
+                ctx->tc.data.pencil.col_rgb =
+                    colors[(curr_col + (key_sym == XK_Up ? 1 : -1)) % col_num];
+                update_screen(ctx);
             }
             break;
     }
