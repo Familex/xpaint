@@ -51,6 +51,7 @@ enum {
 enum {
     I_Select,
     I_Pencil,
+    I_Fill,
     I_Last,
 };
 
@@ -91,6 +92,7 @@ struct Ctx {
         enum ToolType {
             Tool_Selection,
             Tool_Pencil,
+            Tool_Fill,
         } type;
         struct ToolSharedData {
             u32 col_rgb;
@@ -153,6 +155,8 @@ static void
 tool_pencil_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
 static void
 tool_pencil_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
+static void
+tool_fill_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
 
 static Bool history_move(struct Ctx*, Bool forward);
 static Bool history_push(struct History**, struct Ctx*);
@@ -313,6 +317,10 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
                 .line_r = 5,
             };
             break;
+        case Tool_Fill:
+            new_tc.on_release = &tool_fill_on_release;
+            new_tc.ssz_tool_name = "fill";
+            break;
     }
     *tc = new_tc;
 }
@@ -323,6 +331,10 @@ void set_current_tool_selection(struct ToolCtx* tc) {
 
 void set_current_tool_pencil(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Pencil);
+}
+
+void set_current_tool_fill(struct ToolCtx* tc) {
+    set_current_tool(tc, Tool_Fill);
 }
 
 void tool_selection_on_press(
@@ -430,6 +442,14 @@ void tool_pencil_on_drag(
     );
 }
 
+void tool_fill_on_release(
+    struct DrawCtx* dc,
+    struct ToolCtx* tc,
+    XButtonReleasedEvent const* event
+) {
+    puts("fill!");
+}
+
 Bool history_move(struct Ctx* ctx, Bool forward) {
     struct History** hist_pop = forward ? &ctx->hist_prev : &ctx->hist_next;
     struct History** hist_save = forward ? &ctx->hist_next : &ctx->hist_prev;
@@ -503,8 +523,9 @@ void tool_ctx_clear(struct ToolCtx* tc) {
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
     static struct Item tools[] = {
-        [0] = {.on_select = &set_current_tool_selection, .hicon = I_Select},
-        [1] = {.on_select = &set_current_tool_pencil, .hicon = I_Pencil},
+        {.on_select = &set_current_tool_selection, .hicon = I_Select},
+        {.on_select = &set_current_tool_pencil, .hicon = I_Pencil},
+        {.on_select = &set_current_tool_fill, .hicon = I_Fill},
     };
 
     sc->is_active = True;
@@ -627,11 +648,11 @@ void draw_selection_circle(
                 0,
                 0,
                 sc->x
-                    + cos(segment_rad * (item - 0.5))
+                    + cos(-segment_rad * (item + 0.5))
                         * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
                     - image->width / 2.0,
                 sc->y
-                    + sin(segment_rad * (item - 0.5))
+                    + sin(-segment_rad * (item + 0.5))
                         * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
                     - image->height / 2.0,
                 image->width,
@@ -918,6 +939,7 @@ struct Ctx setup(Display* dp) {
                 &ctx.dc,
                 i == I_Select       ? "./res/tool-select.png"
                     : i == I_Pencil ? "./res/tool-pencil.png"
+                    : i == I_Fill   ? "./res/tool-fill.png"
                                     : "null"
             );
         }
@@ -997,6 +1019,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         }
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
+        return True;  // something selected. do nothing else
     }
     if (ctx->tc.on_release) {
         ctx->tc.on_release(&ctx->dc, &ctx->tc, e);
