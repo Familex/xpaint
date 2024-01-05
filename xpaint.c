@@ -35,10 +35,14 @@
 // default value for signed integers
 #define NIL             -1
 
+// clang-format off
 #define HAS_SELECTION(p_ctx) \
-    p_ctx->tc.type == Tool_Selection && p_ctx->tc.data.sel.ex != NIL \
-        && p_ctx->tc.data.sel.ey != NIL && p_ctx->tc.data.sel.bx != NIL \
-        && p_ctx->tc.data.sel.by != NIL
+    p_ctx->tc.type == Tool_Selection \
+    && p_ctx->tc.data.sel.ex != NIL && p_ctx->tc.data.sel.ey != NIL \
+    && p_ctx->tc.data.sel.bx != NIL && p_ctx->tc.data.sel.by != NIL \
+    && p_ctx->tc.data.sel.ex != p_ctx->tc.data.sel.bx \
+    && p_ctx->tc.data.sel.ey != p_ctx->tc.data.sel.by
+// clang-format on
 
 enum {
     A_Clipboard,
