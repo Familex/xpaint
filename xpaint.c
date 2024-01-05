@@ -126,6 +126,10 @@ struct Ctx {
     struct SelectionBuffer {
         XImage* im;
     } sel_buf;
+    enum InputState {
+        InputS_Interact,
+        InputS_Color,
+    } input_state;
 };
 
 static void die(char const*, ...);
@@ -847,23 +851,40 @@ void update_screen(struct Ctx* ctx) {
             STATUSLINE.height_px
         );
         /* captions */ {
+            static u32 const input_state_w = 70;  // FIXME
+            static u32 const col_name_len = 50;  // FIXME
+            static u32 const col_rect_w = 30;
+            static u32 const col_value_size = 1 + 6;
+
             XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
             XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
-            if (tc->ssz_tool_name) {
+            /* input state */ {
+                char const* const input_state_name =
+                    ctx->input_state == InputS_Interact ? "intearct"
+                    : ctx->input_state == InputS_Color  ? "color"
+                                                        : "unknown";
                 XDrawImageString(
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
                     0,
                     dc->height,
+                    input_state_name,
+                    strlen(input_state_name)
+                );
+            }
+            if (tc->ssz_tool_name) {
+                XDrawImageString(
+                    dc->dp,
+                    dc->screen,
+                    dc->screen_gc,
+                    input_state_w,
+                    dc->height,
                     tc->ssz_tool_name,
                     strlen(tc->ssz_tool_name)
                 );
             }
             /* color */ {
-                static i32 const col_name_len = 50;  // FIXME
-                static i32 const col_rect_w = 30;
-                u32 const col_value_size = 1 + 6;
                 char col_value[col_value_size + 2];  // FIXME ?
                 sprintf(col_value, "#%06X", tc->sdata.col_rgb);
                 XDrawImageString(
@@ -959,6 +980,7 @@ struct Ctx setup(Display* dp) {
         .hist_next = NULL,
         .hist_prev = NULL,
         .sel_buf.im = NULL,
+        .input_state = InputS_Interact,
     };
 
     /* atoms */ {
@@ -1127,102 +1149,135 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     KeySym const key_sym = XLookupKeysym(&e, 0);
+
+    switch (ctx->input_state) {
+        case InputS_Interact:
+            switch (key_sym) {
+                case XK_u:
+                case XK_z:
+                    if (e.state & ControlMask) {
+                        if (!history_move(ctx, !(e.state & ShiftMask))) {
+                            trace("xpaint: can't undo/revert history");
+                        }
+                        update_screen(ctx);
+                    }
+                    break;
+                case XK_c: {
+                    if (e.state & ControlMask) {
+                        if (HAS_SELECTION(ctx)) {
+                            XSetSelectionOwner(
+                                ctx->dc.dp,
+                                atoms[A_Clipboard],
+                                ctx->dc.window,
+                                CurrentTime
+                            );
+                            i32 x =
+                                MIN(ctx->tc.data.sel.bx, ctx->tc.data.sel.ex);
+                            i32 y =
+                                MIN(ctx->tc.data.sel.by, ctx->tc.data.sel.ey);
+                            u32 width =
+                                MAX(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx)
+                                - x;
+                            u32 height =
+                                MAX(ctx->tc.data.sel.ey, ctx->tc.data.sel.by)
+                                - y;
+                            if (ctx->sel_buf.im != NULL) {
+                                XDestroyImage(ctx->sel_buf.im);
+                            }
+                            ctx->sel_buf.im = XGetImage(
+                                ctx->dc.dp,
+                                ctx->dc.cv.pm,
+                                x,
+                                y,
+                                width,
+                                height,
+                                AllPlanes,
+                                ZPixmap
+                            );
+                            assert(ctx->sel_buf.im != NULL);
+                            assert(
+                                ctx->sel_buf.im->width == width
+                                && ctx->sel_buf.im->height == height
+                            );
+                            if (ctx->sel_buf.im->red_mask == 0
+                                && ctx->sel_buf.im->green_mask == 0
+                                && ctx->sel_buf.im->blue_mask == 0) {
+                                puts("ximage: XGetImage returned empty masks");
+                                ctx->sel_buf.im->red_mask = 0xFF0000;
+                                ctx->sel_buf.im->green_mask = 0xFF00;
+                                ctx->sel_buf.im->blue_mask = 0xFF;
+                            }
+                            if (is_verbose_output) {
+                                u32 const image_size =
+                                    ctx->sel_buf.im->bits_per_pixel
+                                    * ctx->sel_buf.im->height;
+                                for (u32 i = 0; i < MIN(image_size, 32); ++i) {
+                                    trace("%X", ctx->sel_buf.im->data[i]);
+                                }
+                                trace(
+                                    "\nsize: %d\nwidth: %d\nheight: %d\nbpp: %d\nbbo: %d\n"
+                                    "format: %d\nred: %lX\nblue: %lX\ngreen %lX\n",
+                                    image_size,
+                                    ctx->sel_buf.im->width,
+                                    ctx->sel_buf.im->height,
+                                    ctx->sel_buf.im->bits_per_pixel,
+                                    ctx->sel_buf.im->bitmap_bit_order,
+                                    ctx->sel_buf.im->format,
+                                    ctx->sel_buf.im->red_mask,
+                                    ctx->sel_buf.im->blue_mask,
+                                    ctx->sel_buf.im->green_mask
+                                );
+                            }
+                        } else {
+                            trace("^c without selection");
+                        }
+                    } else {  // without ctrl
+                        ctx->input_state = InputS_Color;
+                        update_screen(ctx);
+                    }
+                } break;
+            }
+            break;
+        case InputS_Color:
+            switch (key_sym) {
+                case XK_Up:
+                case XK_Down: {
+                    u32 colors[] = {
+                        0x000000,
+                        0xFF0000,
+                        0x00FF00,
+                        0x0000FF,
+                        0xFFFF00,
+                        0x00FFFF,
+                        0xFF00FF,
+                        0xFFFFFF,
+                    };
+                    u32 col_num = LENGTH(colors);
+                    i32 curr_col = 0;  // first by default
+                    for (i32 i = 0; i < col_num; ++i) {
+                        if (ctx->tc.sdata.col_rgb == colors[i]) {
+                            curr_col = i;
+                            break;
+                        }
+                    }
+                    ctx->tc.sdata.col_rgb = colors
+                        [(curr_col + (key_sym == XK_Up ? 1 : -1)) % col_num];
+                    update_screen(ctx);
+                } break;
+                case XK_c:
+                case XK_Escape:
+                    ctx->input_state = InputS_Interact;
+                    update_screen(ctx);
+                    break;
+            }
+            break;
+        default:
+            assert(False && "unknown input state");
+    }
+    // independent
     switch (key_sym) {
         case XK_q:
             return False;
-        case XK_u:
-        case XK_z:
-            if (e.state & ControlMask) {
-                if (!history_move(ctx, !(e.state & ShiftMask))) {
-                    trace("xpaint: can't undo/revert history");
-                }
-                update_screen(ctx);
-            }
-            break;
-        case XK_c:
-            if (e.state & ControlMask && HAS_SELECTION(ctx)) {
-                XSetSelectionOwner(
-                    ctx->dc.dp,
-                    atoms[A_Clipboard],
-                    ctx->dc.window,
-                    CurrentTime
-                );
-                i32 x = MIN(ctx->tc.data.sel.bx, ctx->tc.data.sel.ex);
-                i32 y = MIN(ctx->tc.data.sel.by, ctx->tc.data.sel.ey);
-                u32 width = MAX(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx) - x;
-                u32 height = MAX(ctx->tc.data.sel.ey, ctx->tc.data.sel.by) - y;
-                if (ctx->sel_buf.im != NULL) {
-                    XDestroyImage(ctx->sel_buf.im);
-                }
-                ctx->sel_buf.im = XGetImage(
-                    ctx->dc.dp,
-                    ctx->dc.cv.pm,
-                    x,
-                    y,
-                    width,
-                    height,
-                    AllPlanes,
-                    ZPixmap
-                );
-                assert(ctx->sel_buf.im != NULL);
-                assert(
-                    ctx->sel_buf.im->width == width
-                    && ctx->sel_buf.im->height == height
-                );
-                if (ctx->sel_buf.im->red_mask == 0
-                    && ctx->sel_buf.im->green_mask == 0
-                    && ctx->sel_buf.im->blue_mask == 0) {
-                    puts("ximage: XGetImage returned empty masks");
-                    ctx->sel_buf.im->red_mask = 0xFF0000;
-                    ctx->sel_buf.im->green_mask = 0xFF00;
-                    ctx->sel_buf.im->blue_mask = 0xFF;
-                }
-                if (is_verbose_output) {
-                    u32 const image_size = ctx->sel_buf.im->bits_per_pixel
-                        * ctx->sel_buf.im->height;
-                    for (u32 i = 0; i < MIN(image_size, 32); ++i) {
-                        trace("%X", ctx->sel_buf.im->data[i]);
-                    }
-                    trace(
-                        "\nsize: %d\nwidth: %d\nheight: %d\nbpp: %d\nbbo: %d\n"
-                        "format: %d\nred: %lX\nblue: %lX\ngreen %lX\n",
-                        image_size,
-                        ctx->sel_buf.im->width,
-                        ctx->sel_buf.im->height,
-                        ctx->sel_buf.im->bits_per_pixel,
-                        ctx->sel_buf.im->bitmap_bit_order,
-                        ctx->sel_buf.im->format,
-                        ctx->sel_buf.im->red_mask,
-                        ctx->sel_buf.im->blue_mask,
-                        ctx->sel_buf.im->green_mask
-                    );
-                }
-            }
-            break;
-        case XK_Up:
-        case XK_Down: {
-            u32 colors[] = {
-                0x000000,
-                0xFF0000,
-                0x00FF00,
-                0x0000FF,
-                0xFFFF00,
-                0x00FFFF,
-                0xFF00FF,
-                0xFFFFFF,
-            };
-            u32 col_num = LENGTH(colors);
-            i32 curr_col = 0;  // first by default
-            for (i32 i = 0; i < col_num; ++i) {
-                if (ctx->tc.sdata.col_rgb == colors[i]) {
-                    curr_col = i;
-                    break;
-                }
-            }
-            ctx->tc.sdata.col_rgb =
-                colors[(curr_col + (key_sym == XK_Up ? 1 : -1)) % col_num];
-            update_screen(ctx);
-        } break;
     }
     return True;
 }
