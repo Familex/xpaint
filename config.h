@@ -4,6 +4,8 @@
 
 char const title[] = "xpaint";
 
+u32 const MAX_COLORS = 9;
+
 struct {
     u32 background_rgb;
 } const WINDOW = {
@@ -13,10 +15,12 @@ struct {
 struct {
     u32 background_rgb;
     u32 font_rgb;
+    u32 strong_font_rgb;
     u32 height_px;  // FIXME
 } const STATUSLINE = {
     .background_rgb = 0x000000,
     .font_rgb = 0xFFFFFF,
+    .strong_font_rgb = 0xFF0000,
     .height_px = 10,
 };
 

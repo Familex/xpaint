@@ -37,12 +37,13 @@
 
 // clang-format off
 #define HAS_SELECTION(p_ctx) \
-    p_ctx->tc.type == Tool_Selection \
-    && p_ctx->tc.data.sel.ex != NIL && p_ctx->tc.data.sel.ey != NIL \
-    && p_ctx->tc.data.sel.bx != NIL && p_ctx->tc.data.sel.by != NIL \
-    && p_ctx->tc.data.sel.ex != p_ctx->tc.data.sel.bx \
-    && p_ctx->tc.data.sel.ey != p_ctx->tc.data.sel.by
+    ((p_ctx)->tc.type == Tool_Selection \
+    && (p_ctx)->tc.data.sel.ex != NIL && (p_ctx)->tc.data.sel.ey != NIL \
+    && (p_ctx)->tc.data.sel.bx != NIL && (p_ctx)->tc.data.sel.by != NIL \
+    && (p_ctx)->tc.data.sel.ex != (p_ctx)->tc.data.sel.bx \
+    && (p_ctx)->tc.data.sel.ey != (p_ctx)->tc.data.sel.by)
 // clang-format on
+#define CURR_COL(p_tc) ((p_tc)->sdata.colors_rgb[(p_tc)->sdata.curr_col])
 
 enum {
     A_Clipboard,
@@ -74,6 +75,7 @@ struct Ctx {
         XVisualInfo vinfo;
         GC gc;
         GC screen_gc;
+        XFontStruct* font;
         Window window;
         u32 width;
         u32 height;
@@ -99,7 +101,8 @@ struct Ctx {
             Tool_Fill,
         } type;
         struct ToolSharedData {
-            u32 col_rgb;
+            u32* colors_rgb;
+            u32 curr_col;
         } sdata;
         union ToolData {
             struct SelectionData {
@@ -130,10 +133,17 @@ struct Ctx {
     struct SelectionBuffer {
         XImage* im;
     } sel_buf;
-    enum InputState {
-        InputS_Interact,
-        InputS_Color,
-    } input_state;
+    struct Input {
+        enum InputState {
+            InputS_Interact,
+            InputS_Color,
+        } state;
+        union InputData {
+            struct InputColorData {
+                u32 current_digit;
+            } col;
+        } data;
+    } input;
 };
 
 static void die(char const*, ...);
@@ -144,6 +154,8 @@ static Pair point_from_scr_to_cv(i32, i32, struct DrawCtx const*);
 
 static XImage* read_png_file(struct DrawCtx const*, char const*);
 
+static i16 get_string_width(struct DrawCtx const*, char const*, u32);
+
 static void init_sel_circ_tools(struct SelectionCircle*, i32, i32);
 static void free_sel_circ(struct SelectionCircle*);
 static i32 current_sel_circ_item(struct SelectionCircle const*, i32, i32);
@@ -153,6 +165,7 @@ get_curr_sel_dims(struct SelectionCircle const*);
 static void set_current_tool_selection(struct ToolCtx*);
 static void set_current_tool_pencil(struct ToolCtx*);
 static void set_current_tool_fill(struct ToolCtx*);
+static void set_current_input_state(struct Input*, enum InputState);
 
 static void
 tool_selection_on_press(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
@@ -281,6 +294,15 @@ XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
     return result;
 }
 
+i16 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
+    if (dc->font == NULL) {
+        trace("warning: font not found");
+        return 0;
+    }
+
+    return XTextWidth(dc->font, str, len);
+}
+
 struct SelectonCircleDims
 get_curr_sel_dims(struct SelectionCircle const* sel_circ) {
     return (struct SelectonCircleDims) {
@@ -347,6 +369,18 @@ void set_current_tool_fill(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Fill);
 }
 
+void set_current_input_state(struct Input* input, enum InputState const is) {
+    input->state = is;
+
+    switch (is) {
+        case InputS_Color:
+            input->data.col = (struct InputColorData) {.current_digit = 0};
+            break;
+        case InputS_Interact:
+            break;
+    }
+}
+
 void tool_selection_on_press(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
@@ -407,7 +441,7 @@ void tool_pencil_on_release(
 
     if (!tc->is_dragging) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-        XSetForeground(dc->dp, dc->gc, tc->sdata.col_rgb);
+        XSetForeground(dc->dp, dc->gc, CURR_COL(tc));
         XFillArc(
             dc->dp,
             dc->cv.pm,
@@ -432,7 +466,7 @@ void tool_pencil_on_drag(
 
     Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
     Pair prev_pointer = point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc);
-    XSetForeground(dc->dp, dc->gc, tc->sdata.col_rgb);
+    XSetForeground(dc->dp, dc->gc, CURR_COL(tc));
     XSetLineAttributes(
         dc->dp,
         dc->gc,
@@ -508,7 +542,7 @@ void tool_fill_on_release(
 
     Pair const pointer = point_from_scr_to_cv(event->x, event->y, dc);
 
-    flood_fill(cv_im, tc->sdata.col_rgb, pointer.x, pointer.y);
+    flood_fill(cv_im, CURR_COL(tc), pointer.x, pointer.y);
 
     XPutImage(
         dc->dp,
@@ -857,6 +891,8 @@ void update_screen(struct Ctx* ctx) {
         /* captions */ {
             static u32 const input_state_w = 70;  // FIXME
             static u32 const col_name_len = 50;  // FIXME
+            static u32 const col_count_w = 20;  // FIXME use MAX_COLORS
+            // colored rectangle
             static u32 const col_rect_w = 30;
             static u32 const col_value_size = 1 + 6;
 
@@ -864,8 +900,8 @@ void update_screen(struct Ctx* ctx) {
             XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
             /* input state */ {
                 char const* const input_state_name =
-                    ctx->input_state == InputS_Interact ? "intearct"
-                    : ctx->input_state == InputS_Color  ? "color"
+                    ctx->input.state == InputS_Interact ? "intearct"
+                    : ctx->input.state == InputS_Color  ? "color"
                                                         : "unknown";
                 XDrawImageString(
                     dc->dp,
@@ -890,22 +926,60 @@ void update_screen(struct Ctx* ctx) {
             }
             /* color */ {
                 char col_value[col_value_size + 2];  // FIXME ?
-                sprintf(col_value, "#%06X", tc->sdata.col_rgb);
+                sprintf(col_value, "#%06X", CURR_COL(tc));
                 XDrawImageString(
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
-                    dc->width - col_name_len,
+                    dc->width - col_name_len - col_count_w,
                     dc->height,
                     col_value,
                     col_value_size
                 );
-                XSetForeground(dc->dp, dc->screen_gc, tc->sdata.col_rgb);
+                /* color count */ {
+                    char col_count[10];  // FIXME
+                    sprintf(
+                        col_count,
+                        "%d/%td",
+                        tc->sdata.curr_col + 1,
+                        arrlen(tc->sdata.colors_rgb)
+                    );
+                    XDrawImageString(
+                        dc->dp,
+                        dc->screen,
+                        dc->screen_gc,
+                        dc->width - col_count_w,
+                        dc->height,
+                        col_count,
+                        strlen(col_count)
+                    );
+                }
+                if (ctx->input.state == InputS_Color) {
+                    static u32 const hash_w = 1;
+                    u32 curr_dig = ctx->input.data.col.current_digit;
+                    i16 pad =
+                        get_string_width(dc, col_value, curr_dig + hash_w);
+                    XSetForeground(
+                        dc->dp,
+                        dc->screen_gc,
+                        STATUSLINE.strong_font_rgb
+                    );
+                    XDrawImageString(
+                        dc->dp,
+                        dc->screen,
+                        dc->screen_gc,
+                        dc->width - col_name_len + pad - col_count_w,
+                        dc->height,
+                        &col_value[curr_dig + hash_w],
+                        1
+                    );
+                }
+                XSetForeground(dc->dp, dc->screen_gc, CURR_COL(tc));
                 XFillRectangle(
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
-                    dc->width - col_name_len - col_rect_w,
+                    dc->width - col_name_len - col_rect_w - col_count_w,
                     dc->height - STATUSLINE.height_px,
                     col_rect_w,
                     STATUSLINE.height_px
@@ -981,11 +1055,19 @@ struct Ctx setup(Display* dp) {
         .dc.dp = dp,
         .dc.width = CANVAS.default_width,
         .dc.height = CANVAS.default_height,
+        .dc.font = NULL,
         .hist_next = NULL,
         .hist_prev = NULL,
         .sel_buf.im = NULL,
-        .input_state = InputS_Interact,
+        .input.state = InputS_Interact,
+        .tc.sdata.colors_rgb = NULL,
+        .tc.sdata.curr_col = 0,
     };
+
+    /* sdata */ {
+        arrpush(ctx.tc.sdata.colors_rgb, 0x000000);
+        arrpush(ctx.tc.sdata.colors_rgb, 0xFFFFFF);
+    }
 
     /* atoms */ {
         atoms[A_Clipboard] = XInternAtom(dp, "CLIPBOARD", False);
@@ -1037,6 +1119,17 @@ struct Ctx setup(Display* dp) {
     /* turn on protocol support */ {
         Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
         XSetWMProtocols(dp, ctx.dc.window, &wm_delete_window, 1);
+    }
+
+    // FIXME
+    /* font */ {
+        XFontStruct* f = XLoadQueryFont(dp, "fixed");  // FIXME
+        if (f != NULL) {
+            ctx.dc.font = f;
+            XSetFont(dp, ctx.dc.screen_gc, ctx.dc.font->fid);
+        } else {
+            puts("xpaint: font not found");
+        }
     }
 
     /* static images */ {
@@ -1165,8 +1258,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         return True;
     }
 
+    KeySym const key_sym = XLookupKeysym(&e, 0);
+
     HANDLE_KEY_BEGIN(e)
-    switch (ctx->input_state) {
+    switch (ctx->input.state) {
         case InputS_Interact: {
             HANDLE_KEY_CASE_MASK(ControlMask, XK_z) {
                 if (!history_move(ctx, !(e.state & ShiftMask))) {
@@ -1239,38 +1334,44 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
             }
             HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_c) {
-                ctx->input_state = InputS_Color;
+                set_current_input_state(&ctx->input, InputS_Color);
                 update_screen(ctx);
             }
         } break;
+
         case InputS_Color: {
             HANDLE_KEY_CASE(XK_Up) {  // FIXME XK_Down
-                static u32 colors[] = {
-                    0x000000,
-                    0xFF0000,
-                    0x00FF00,
-                    0x0000FF,
-                    0xFFFF00,
-                    0x00FFFF,
-                    0xFF00FF,
-                    0xFFFFFF,
-                };  // FIXME
-                u32 col_num = LENGTH(colors);
-                i32 curr_col = 0;  // first by default
-                for (i32 i = 0; i < col_num; ++i) {
-                    if (ctx->tc.sdata.col_rgb == colors[i]) {
-                        curr_col = i;
-                        break;
-                    }
+                ctx->tc.sdata.curr_col = (ctx->tc.sdata.curr_col + 1)
+                    % arrlen(ctx->tc.sdata.colors_rgb);
+                update_screen(ctx);
+            }
+            HANDLE_KEY_CASE(XK_Right) {
+                ++ctx->input.data.col.current_digit;
+                ctx->input.data.col.current_digit %= 6;  // 3 byte rgb
+                update_screen(ctx);
+            }
+            HANDLE_KEY_CASE(XK_Left) {
+                if (ctx->input.data.col.current_digit == 0) {
+                    ctx->input.data.col.current_digit = 5;
+                } else {
+                    --ctx->input.data.col.current_digit;
                 }
-                ctx->tc.sdata.col_rgb = colors[(curr_col + 1) % col_num];
+                update_screen(ctx);
+            }
+            if ((key_sym >= XK_0 && key_sym <= XK_9)
+                || (key_sym >= XK_a && key_sym <= XK_f)) {
+                u32 val = key_sym - (key_sym <= XK_9 ? XK_0 : XK_a - 10);
+                u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
+                CURR_COL(&ctx->tc) &= ~(0xF << shift);  // clear
+                CURR_COL(&ctx->tc) |= val << shift;  // set
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
-                ctx->input_state = InputS_Interact;
+                set_current_input_state(&ctx->input, InputS_Interact);
                 update_screen(ctx);
             }
         } break;
+
         default:
             assert(False && "unknown input state");
     }
@@ -1474,6 +1575,8 @@ Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
 void cleanup(struct Ctx* ctx) {
     historyarr_clear(ctx->dc.dp, &ctx->hist_next);
     historyarr_clear(ctx->dc.dp, &ctx->hist_prev);
+    arrfree(ctx->tc.sdata.colors_rgb);
+    XFreeFont(ctx->dc.dp, ctx->dc.font);
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
     XFreePixmap(ctx->dc.dp, ctx->dc.cv.pm);
