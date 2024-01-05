@@ -1388,11 +1388,6 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         } break;
 
         case InputS_Color: {
-            HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_Up) {  // FIXME XK_Down
-                CURR_TC(ctx).sdata.curr_col = (CURR_TC(ctx).sdata.curr_col + 1)
-                    % arrlen(CURR_TC(ctx).sdata.colors_rgb);
-                update_screen(ctx);
-            }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
                 u32 const len = arrlen(CURR_TC(ctx).sdata.colors_rgb);
                 if (len != MAX_COLORS) {
@@ -1430,6 +1425,12 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // independent
     HANDLE_KEY_CASE(XK_q) {
         return False;
+    }
+    if ((key_sym == XK_Up || key_sym == XK_Down) && !(e.state & ControlMask)) {
+        CURR_TC(ctx).sdata.curr_col =
+            (CURR_TC(ctx).sdata.curr_col + (key_sym == XK_Up ? 1 : -1))
+            % arrlen(CURR_TC(ctx).sdata.colors_rgb);
+        update_screen(ctx);
     }
     HANDLE_KEY_END()
 
