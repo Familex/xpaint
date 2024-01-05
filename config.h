@@ -5,6 +5,7 @@
 char const title[] = "xpaint";
 
 u32 const MAX_COLORS = 9;
+u32 const TCS_NUM = 3;
 
 struct {
     u32 background_rgb;

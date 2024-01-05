@@ -35,15 +35,16 @@
 // default value for signed integers
 #define NIL             -1
 
+#define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
+#define CURR_COL(p_tc) ((p_tc)->sdata.colors_rgb[(p_tc)->sdata.curr_col])
 // clang-format off
 #define HAS_SELECTION(p_ctx) \
-    ((p_ctx)->tc.type == Tool_Selection \
-    && (p_ctx)->tc.data.sel.ex != NIL && (p_ctx)->tc.data.sel.ey != NIL \
-    && (p_ctx)->tc.data.sel.bx != NIL && (p_ctx)->tc.data.sel.by != NIL \
-    && (p_ctx)->tc.data.sel.ex != (p_ctx)->tc.data.sel.bx \
-    && (p_ctx)->tc.data.sel.ey != (p_ctx)->tc.data.sel.by)
+    (CURR_TC(p_ctx).type == Tool_Selection \
+    && CURR_TC(p_ctx).data.sel.ex != NIL && CURR_TC(p_ctx).data.sel.ey != NIL \
+    && CURR_TC(p_ctx).data.sel.bx != NIL && CURR_TC(p_ctx).data.sel.by != NIL \
+    && CURR_TC(p_ctx).data.sel.ex != CURR_TC(p_ctx).data.sel.bx \
+    && CURR_TC(p_ctx).data.sel.ey != CURR_TC(p_ctx).data.sel.by)
 // clang-format on
-#define CURR_COL(p_tc) ((p_tc)->sdata.colors_rgb[(p_tc)->sdata.curr_col])
 
 enum {
     A_Clipboard,
@@ -115,7 +116,8 @@ struct Ctx {
                 u32 line_r;
             } pencil;
         } data;
-    } tc;
+    }* tcs;
+    u32 curr_tc;
     struct History {
         struct Canvas cv;
         struct ToolCtx tc;
@@ -572,11 +574,11 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     history_push(hist_save, ctx);
 
     canvas_clear(ctx->dc.dp, &ctx->dc.cv);
-    tool_ctx_clear(&ctx->tc);
+    tool_ctx_clear(&CURR_TC(ctx));
 
     // apply history
     ctx->dc.cv = curr.cv;
-    ctx->tc = curr.tc;
+    CURR_TC(ctx) = curr.tc;
 
     return True;
 }
@@ -586,7 +588,7 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
 
     struct History new_item = {
         .cv = ctx->dc.cv,
-        .tc = ctx->tc,
+        .tc = CURR_TC(ctx),
     };
 
     new_item.cv.pm = XCreatePixmap(
@@ -851,7 +853,7 @@ void update_screen(struct Ctx* ctx) {
     );
     /* current selection */ {
         if (HAS_SELECTION(ctx)) {
-            struct SelectionData sd = ctx->tc.data.sel;
+            struct SelectionData sd = CURR_TC(ctx).data.sel;
             XSetLineAttributes(
                 ctx->dc.dp,
                 ctx->dc.screen_gc,
@@ -877,7 +879,7 @@ void update_screen(struct Ctx* ctx) {
     }
     /* statusline */ {
         struct DrawCtx* dc = &ctx->dc;
-        struct ToolCtx* tc = &ctx->tc;
+        struct ToolCtx* tc = &CURR_TC(ctx);
         XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
         XFillRectangle(
             dc->dp,
@@ -892,12 +894,34 @@ void update_screen(struct Ctx* ctx) {
             static u32 const input_state_w = 70;  // FIXME
             static u32 const col_name_len = 50;  // FIXME
             static u32 const col_count_w = 20;  // FIXME use MAX_COLORS
+            static u32 const tc_w = 10;  // FIXME
             // colored rectangle
             static u32 const col_rect_w = 30;
             static u32 const col_value_size = 1 + 6;
 
             XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
             XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
+            for (i32 i = 0; i < TCS_NUM; ++i) {
+                char tc_name[3];  // FIXME
+                sprintf(tc_name, "%d", i + 1);
+                if (ctx->curr_tc == i) {
+                    XSetForeground(
+                        dc->dp,
+                        dc->screen_gc,
+                        STATUSLINE.strong_font_rgb
+                    );
+                }
+                XDrawImageString(
+                    dc->dp,
+                    dc->screen,
+                    dc->screen_gc,
+                    tc_w * i,
+                    dc->height,
+                    tc_name,
+                    strlen(tc_name)
+                );
+                XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
+            }
             /* input state */ {
                 char const* const input_state_name =
                     ctx->input.state == InputS_Interact ? "intearct"
@@ -907,7 +931,7 @@ void update_screen(struct Ctx* ctx) {
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
-                    0,
+                    tc_w * TCS_NUM,
                     dc->height,
                     input_state_name,
                     strlen(input_state_name)
@@ -918,7 +942,7 @@ void update_screen(struct Ctx* ctx) {
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
-                    input_state_w,
+                    input_state_w + tc_w * TCS_NUM,
                     dc->height,
                     tc->ssz_tool_name,
                     strlen(tc->ssz_tool_name)
@@ -1060,13 +1084,16 @@ struct Ctx setup(Display* dp) {
         .hist_prev = NULL,
         .sel_buf.im = NULL,
         .input.state = InputS_Interact,
-        .tc.sdata.colors_rgb = NULL,
-        .tc.sdata.curr_col = 0,
+        .curr_tc = 0,
     };
 
-    /* sdata */ {
-        arrpush(ctx.tc.sdata.colors_rgb, 0x000000);
-        arrpush(ctx.tc.sdata.colors_rgb, 0xFFFFFF);
+    /* init arrays */ {
+        for (i32 i = 0; i < TCS_NUM; ++i) {
+            struct ToolCtx tc = {.sdata.colors_rgb = NULL, .sdata.curr_col = 0};
+            arrpush(ctx.tcs, tc);
+            arrpush(ctx.tcs[i].sdata.colors_rgb, 0x000000);
+            arrpush(ctx.tcs[i].sdata.colors_rgb, 0xFFFFFF);
+        }
     }
 
     /* atoms */ {
@@ -1180,7 +1207,9 @@ struct Ctx setup(Display* dp) {
         );
     }
 
-    set_current_tool_selection(&ctx.tc);
+    for (i32 i = 0; i < TCS_NUM; ++i) {
+        set_current_tool_pencil(&ctx.tcs[i]);
+    }
     history_push(&ctx.hist_prev, &ctx);
 
     /* show up window */
@@ -1195,15 +1224,15 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         init_sel_circ_tools(&ctx->sc, e->x, e->y);
         draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
-    if (ctx->tc.on_press) {
-        ctx->tc.on_press(&ctx->dc, &ctx->tc, e);
+    if (CURR_TC(ctx).on_press) {
+        CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), e);
         update_screen(ctx);
     }
     if (e->button == XLeftMouseBtn) {
         // next history invalidated after user action
         historyarr_clear(ctx->dc.dp, &ctx->hist_next);
         history_push(&ctx->hist_prev, ctx);
-        ctx->tc.is_holding = True;
+        CURR_TC(ctx).is_holding = True;
     }
 
     return True;
@@ -1214,18 +1243,18 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     if (e->button == XRightMouseBtn) {
         i32 const selected_item = current_sel_circ_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
-            ctx->sc.items[selected_item].on_select(&ctx->tc);
+            ctx->sc.items[selected_item].on_select(&CURR_TC(ctx));
         }
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
         return True;  // something selected. do nothing else
     }
-    if (ctx->tc.on_release) {
-        ctx->tc.on_release(&ctx->dc, &ctx->tc, e);
+    if (CURR_TC(ctx).on_release) {
+        CURR_TC(ctx).on_release(&ctx->dc, &CURR_TC(ctx), e);
         update_screen(ctx);
     }
-    ctx->tc.is_holding = False;
-    ctx->tc.is_dragging = False;
+    CURR_TC(ctx).is_holding = False;
+    CURR_TC(ctx).is_dragging = False;
 
     return True;
 }
@@ -1277,12 +1306,16 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                         ctx->dc.window,
                         CurrentTime
                     );
-                    i32 x = MIN(ctx->tc.data.sel.bx, ctx->tc.data.sel.ex);
-                    i32 y = MIN(ctx->tc.data.sel.by, ctx->tc.data.sel.ey);
+                    i32 x =
+                        MIN(CURR_TC(ctx).data.sel.bx, CURR_TC(ctx).data.sel.ex);
+                    i32 y =
+                        MIN(CURR_TC(ctx).data.sel.by, CURR_TC(ctx).data.sel.ey);
                     u32 width =
-                        MAX(ctx->tc.data.sel.ex, ctx->tc.data.sel.bx) - x;
+                        MAX(CURR_TC(ctx).data.sel.ex, CURR_TC(ctx).data.sel.bx)
+                        - x;
                     u32 height =
-                        MAX(ctx->tc.data.sel.ey, ctx->tc.data.sel.by) - y;
+                        MAX(CURR_TC(ctx).data.sel.ey, CURR_TC(ctx).data.sel.by)
+                        - y;
                     if (ctx->sel_buf.im != NULL) {
                         XDestroyImage(ctx->sel_buf.im);
                     }
@@ -1337,19 +1370,26 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 set_current_input_state(&ctx->input, InputS_Color);
                 update_screen(ctx);
             }
+            if (key_sym >= XK_1 && key_sym <= XK_9) {
+                u32 val = key_sym - XK_1;
+                if (val < TCS_NUM) {
+                    ctx->curr_tc = val;
+                    update_screen(ctx);
+                }
+            }
         } break;
 
         case InputS_Color: {
             HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_Up) {  // FIXME XK_Down
-                ctx->tc.sdata.curr_col = (ctx->tc.sdata.curr_col + 1)
-                    % arrlen(ctx->tc.sdata.colors_rgb);
+                CURR_TC(ctx).sdata.curr_col = (CURR_TC(ctx).sdata.curr_col + 1)
+                    % arrlen(CURR_TC(ctx).sdata.colors_rgb);
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
-                u32 const len = arrlen(ctx->tc.sdata.colors_rgb);
+                u32 const len = arrlen(CURR_TC(ctx).sdata.colors_rgb);
                 if (len != MAX_COLORS) {
-                    ctx->tc.sdata.curr_col = len;
-                    arrpush(ctx->tc.sdata.colors_rgb, 0x000000);
+                    CURR_TC(ctx).sdata.curr_col = len;
+                    arrpush(CURR_TC(ctx).sdata.colors_rgb, 0x000000);
                     update_screen(ctx);
                 }
             }
@@ -1370,8 +1410,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 || (key_sym >= XK_a && key_sym <= XK_f)) {
                 u32 val = key_sym - (key_sym <= XK_9 ? XK_0 : XK_a - 10);
                 u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
-                CURR_COL(&ctx->tc) &= ~(0xF << shift);  // clear
-                CURR_COL(&ctx->tc) |= val << shift;  // set
+                CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
+                CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
@@ -1400,18 +1440,18 @@ Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
 
-    if (ctx->tc.is_holding) {
-        ctx->tc.is_dragging = True;
-        if (ctx->tc.on_drag) {
-            ctx->tc.on_drag(&ctx->dc, &ctx->tc, e);
+    if (CURR_TC(ctx).is_holding) {
+        CURR_TC(ctx).is_dragging = True;
+        if (CURR_TC(ctx).on_drag) {
+            CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), e);
             update_screen(ctx);
         }
     }
 
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
-    ctx->tc.prev_x = e->x;
-    ctx->tc.prev_y = e->y;
+    CURR_TC(ctx).prev_x = e->x;
+    CURR_TC(ctx).prev_y = e->y;
 
     return True;
 }
@@ -1583,7 +1623,10 @@ Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
 void cleanup(struct Ctx* ctx) {
     historyarr_clear(ctx->dc.dp, &ctx->hist_next);
     historyarr_clear(ctx->dc.dp, &ctx->hist_prev);
-    arrfree(ctx->tc.sdata.colors_rgb);
+    for (i32 i = 0; i < TCS_NUM; ++i) {
+        arrfree(ctx->tcs[i].sdata.colors_rgb);
+    }
+    arrfree(ctx->tcs);
     XFreeFont(ctx->dc.dp, ctx->dc.font);
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
