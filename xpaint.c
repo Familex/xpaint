@@ -1281,6 +1281,18 @@ Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
         && handle_key_inp_key_sym == p_key)
 #define HANDLE_KEY_CASE(p_key) if (handle_key_inp_key_sym == p_key)
 
+static void to_next_input_digit(struct Input* input, Bool is_increment) {
+    assert(input->state == InputS_Color);
+
+    if (input->data.col.current_digit == 0 && !is_increment) {
+        input->data.col.current_digit = 5;
+    } else if (input->data.col.current_digit == 5 && is_increment) {
+        input->data.col.current_digit = 0;
+    } else {
+        input->data.col.current_digit += is_increment ? 1 : -1;
+    }
+}
+
 Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XKeyPressedEvent e = event->xkey;
     if (e.type == KeyRelease) {
@@ -1394,16 +1406,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
             }
             HANDLE_KEY_CASE(XK_Right) {
-                ++ctx->input.data.col.current_digit;
-                ctx->input.data.col.current_digit %= 6;  // 3 byte rgb
+                to_next_input_digit(&ctx->input, True);
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE(XK_Left) {
-                if (ctx->input.data.col.current_digit == 0) {
-                    ctx->input.data.col.current_digit = 5;
-                } else {
-                    --ctx->input.data.col.current_digit;
-                }
+                to_next_input_digit(&ctx->input, False);
                 update_screen(ctx);
             }
             if ((key_sym >= XK_0 && key_sym <= XK_9)
@@ -1412,6 +1419,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
                 CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
                 CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
+                to_next_input_digit(&ctx->input, True);
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
