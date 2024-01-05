@@ -120,7 +120,6 @@ struct Ctx {
     u32 curr_tc;
     struct History {
         struct Canvas cv;
-        struct ToolCtx tc;
     } *hist_prev, *hist_next;
     struct SelectionCircle {
         Bool is_active;
@@ -578,7 +577,6 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
 
     // apply history
     ctx->dc.cv = curr.cv;
-    CURR_TC(ctx) = curr.tc;
 
     return True;
 }
@@ -588,7 +586,6 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
 
     struct History new_item = {
         .cv = ctx->dc.cv,
-        .tc = CURR_TC(ctx),
     };
 
     new_item.cv.pm = XCreatePixmap(
@@ -620,7 +617,6 @@ void historyarr_clear(Display* dp, struct History** hist) {
     for (u32 i = 0; i < arrlenu(*hist); ++i) {
         struct History* h = &(*hist)[i];
         canvas_clear(dp, &h->cv);
-        tool_ctx_clear(&h->tc);
     }
     arrfree(*hist);
 }
