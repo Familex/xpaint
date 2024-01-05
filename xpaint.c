@@ -1340,10 +1340,18 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         } break;
 
         case InputS_Color: {
-            HANDLE_KEY_CASE(XK_Up) {  // FIXME XK_Down
+            HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_Up) {  // FIXME XK_Down
                 ctx->tc.sdata.curr_col = (ctx->tc.sdata.curr_col + 1)
                     % arrlen(ctx->tc.sdata.colors_rgb);
                 update_screen(ctx);
+            }
+            HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
+                u32 const len = arrlen(ctx->tc.sdata.colors_rgb);
+                if (len != MAX_COLORS) {
+                    ctx->tc.sdata.curr_col = len;
+                    arrpush(ctx->tc.sdata.colors_rgb, 0x000000);
+                    update_screen(ctx);
+                }
             }
             HANDLE_KEY_CASE(XK_Right) {
                 ++ctx->input.data.col.current_digit;
