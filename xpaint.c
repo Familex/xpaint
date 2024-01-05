@@ -186,7 +186,6 @@ static Bool history_push(struct History**, struct Ctx*);
 
 static void historyarr_clear(Display*, struct History**);
 static void canvas_clear(Display*, struct Canvas*);
-static void tool_ctx_clear(struct ToolCtx*);
 
 static void
 draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, i32, i32);
@@ -573,7 +572,6 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     history_push(hist_save, ctx);
 
     canvas_clear(ctx->dc.dp, &ctx->dc.cv);
-    tool_ctx_clear(&CURR_TC(ctx));
 
     // apply history
     ctx->dc.cv = curr.cv;
@@ -623,10 +621,6 @@ void historyarr_clear(Display* dp, struct History** hist) {
 
 void canvas_clear(Display* dp, struct Canvas* cv) {
     XFreePixmap(dp, cv->pm);
-}
-
-void tool_ctx_clear(struct ToolCtx* tc) {
-    // do nothing
 }
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
