@@ -12,11 +12,11 @@ all: xpaint
 clean:
 	@rm -f xpaint
 
-xpaint: ${SRC} ${HEADER}
-	@${CC} -o $@ ${SRC} ${CFLAGS}
+xpaint: $(SRC) $(HEADER)
+	@$(CC) -o $@ $(SRC) $(CFLAGS)
 
-xpaint-d: ${SRC} ${HEADER}
-	@${CC} -o $@ ${SRC} ${CFLAGSD}
+xpaint-d: $(SRC) $(HEADER)
+	@$(CC) -o $@ $(SRC) $(CFLAGSD)
 
 exec: xpaint
 	@./xpaint
