@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <X11/X.h>
-#include <X11/Xatom.h>
+#include <X11/Xatom.h>  // XA_*
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <limits.h>
@@ -593,6 +593,18 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
         ctx->dc.height,
         ctx->dc.vinfo.depth
     );
+    /* highlight invalid area */ {
+        XSetForeground(ctx->dc.dp, ctx->dc.screen_gc, 0xFF00FF);
+        XFillRectangle(
+            ctx->dc.dp,
+            new_item.cv.pm,
+            ctx->dc.screen_gc,
+            0,
+            0,
+            new_item.cv.width,
+            new_item.cv.height
+        );
+    }
     XCopyArea(
         ctx->dc.dp,
         ctx->dc.cv.pm,
@@ -647,7 +659,7 @@ i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
         sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
 
     if (pointer_r <= sel_rect.outer.r && pointer_r >= sel_rect.inner.r) {
-        // FIXME do it right.
+        // FIXME do it right
         double angle = -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
         if (pointer_x_rel < 0) {
             angle += 180;
@@ -829,6 +841,7 @@ void update_screen(struct Ctx* ctx) {
         ctx->dc.width,
         ctx->dc.height
     );
+    // xsetwindowbackgroundpixmap will fill all screen space
     XCopyArea(
         ctx->dc.dp,
         ctx->dc.cv.pm,
@@ -1237,7 +1250,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         }
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
-        return True;  // something selected. do nothing else
+        return True;  // something selected do nothing else
     }
     if (CURR_TC(ctx).on_release) {
         CURR_TC(ctx).on_release(&ctx->dc, &CURR_TC(ctx), e);
