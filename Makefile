@@ -4,18 +4,18 @@ CFLAGSD = -std=c99 -pedantic -Wall -g ${INCS} ${LIBS}
 
 CC ?= cc
 
-# use headers as make-target dependencies, not compile symbols
-SRC = xpaint.c types.h config.h
+SRC = xpaint.c
+HEADER = types.h config.h
 
 all: xpaint
 
 clean:
 	@rm -f xpaint
 
-xpaint: ${SRC}
+xpaint: ${SRC} ${HEADER}
 	@${CC} -o $@ ${SRC} ${CFLAGS}
 
-xpaint-d: ${SRC}
+xpaint-d: ${SRC} ${HEADER}
 	@${CC} -o $@ ${SRC} ${CFLAGSD}
 
 exec: xpaint
