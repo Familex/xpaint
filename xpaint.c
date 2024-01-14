@@ -106,6 +106,7 @@ struct Ctx {
         struct ToolSharedData {
             u32* colors_rgb;
             u32 curr_col;
+            u32 line_w;
         } sdata;
         union ToolData {
             struct SelectionData {
@@ -192,6 +193,7 @@ static void canvas_clear(Display*, struct Canvas*);
 static void canvas_fill(struct DrawCtx*, u32);
 static void canvas_line(struct DrawCtx*, Pair, Pair, u32, u32);
 static void canvas_point(struct DrawCtx*, Pair, u32, u32);
+static void canvas_circle(struct DrawCtx*, Pair, u32, u32, Bool);
 
 static void
 draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, i32, i32);
@@ -456,7 +458,7 @@ void tool_pencil_on_release(
     if (!tc->is_dragging) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
         // FIXME line width
-        canvas_point(dc, pointer, CURR_COL(tc), 1);
+        canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
     }
 }
 
@@ -470,7 +472,7 @@ void tool_pencil_on_drag(
 
     Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
     Pair prev_pointer = point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc);
-    canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), 1);
+    canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
 }
 
 static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
@@ -601,6 +603,15 @@ i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     }
 }
 
+static Bool ximage_put_checked(XImage* im, i32 x, i32 y, u32 col) {
+    if (x < 0 || y < 0 || x >= im->width || y >= im->height) {
+        return False;
+    }
+
+    XPutPixel(im, x, y, col);
+    return True;
+}
+
 void canvas_fill(struct DrawCtx* dc, u32 color) {
     assert(dc->cv.im);
 
@@ -619,7 +630,6 @@ void canvas_line(
     u32 line_w
 ) {
     assert(dc->cv.im);
-    assert(line_w == 1 && "not implemented");
 
     i32 dx = abs(to.x - from.x);
     i32 sx = from.x < to.x ? 1 : -1;
@@ -629,7 +639,7 @@ void canvas_line(
 
     while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
            && from.y < dc->cv.im->height) {
-        XPutPixel(dc->cv.im, from.x, from.y, color);
+        canvas_point(dc, from, color, line_w);
         if (from.x == to.x && from.y == to.y)
             break;
         i32 e2 = 2 * error;
@@ -649,9 +659,50 @@ void canvas_line(
 }
 
 void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w) {
-    assert(line_w == 1 && "not implemented");
+    canvas_circle(dc, c, line_w / 2, col, True);
+}
 
-    XPutPixel(dc->cv.im, c.x, c.y, col);
+static void
+canvas_circle_helper(XImage* im, i32 x, i32 y, i32 dx, i32 dy, u32 col) {
+    ximage_put_checked(im, x + dx, y + dy, col);
+    ximage_put_checked(im, x - dx, y + dy, col);
+    ximage_put_checked(im, x + dx, y - dy, col);
+    ximage_put_checked(im, x - dx, y - dy, col);
+    ximage_put_checked(im, x + dy, y + dx, col);
+    ximage_put_checked(im, x - dy, y + dx, col);
+    ximage_put_checked(im, x + dy, y - dx, col);
+    ximage_put_checked(im, x - dy, y - dx, col);
+}
+
+void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
+    if (fill) {
+        i32 const d = r * 2;
+        i32 const l = center.x - r;
+        i32 const t = center.y - r;
+        for (i32 x = 0; x < d; ++x) {
+            for (i32 y = 0; y < d; ++y) {
+                if ((x - r) * (x - r) + (y - r) * (y - r) <= r * r) {
+                    ximage_put_checked(dc->cv.im, l + x, t + y, col);
+                }
+            }
+        }
+    } else {
+        // Bresenham's alg
+        i32 x = 0;
+        i32 y = r;
+        i32 d = 3 - 2 * r;
+        canvas_circle_helper(dc->cv.im, center.x, center.y, x, y, col);
+        while (y >= x) {
+            ++x;
+            if (d > 0) {
+                --y;
+                d += 4 * (x - y) + 10;
+            } else {
+                d += 4 * x + 6;
+            }
+            canvas_circle_helper(dc->cv.im, center.x, center.y, x, y, col);
+        }
+    }
 }
 
 void draw_selection_circle(
@@ -878,6 +929,7 @@ void update_screen(struct Ctx* ctx) {
             static u32 const col_name_len = 50;  // FIXME
             static u32 const col_count_w = 20;  // FIXME use MAX_COLORS
             static u32 const tc_w = 10;  // FIXME
+            static u32 const tool_name_w = 80;  // FIXME
             // colored rectangle
             static u32 const col_rect_w = 30;
             static u32 const col_value_size = 1 + 6;
@@ -929,6 +981,19 @@ void update_screen(struct Ctx* ctx) {
                     dc->height,
                     tc->ssz_tool_name,
                     strlen(tc->ssz_tool_name)
+                );
+            }
+            /* line width */ {
+                char line_w_value[10];  // FIXME
+                sprintf(line_w_value, "%d", tc->sdata.line_w);  // FIXME
+                XDrawImageString(
+                    dc->dp,
+                    dc->back_buffer,
+                    dc->screen_gc,
+                    input_state_w + tc_w * TCS_NUM + tool_name_w,
+                    dc->height,
+                    line_w_value,
+                    strlen(line_w_value)
                 );
             }
             /* color */ {
@@ -1065,7 +1130,11 @@ struct Ctx setup(Display* dp) {
 
     /* init arrays */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
-            struct ToolCtx tc = {.sdata.colors_rgb = NULL, .sdata.curr_col = 0};
+            struct ToolCtx tc = {
+                .sdata.colors_rgb = NULL,
+                .sdata.curr_col = 0,
+                .sdata.line_w = 5,
+            };
             arrpush(ctx.tcs, tc);
             arrpush(ctx.tcs[i].sdata.colors_rgb, 0x000000);
             arrpush(ctx.tcs[i].sdata.colors_rgb, 0xFFFFFF);
