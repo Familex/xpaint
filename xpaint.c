@@ -84,6 +84,7 @@ struct Ctx {
         u32 width;
         u32 height;
         XdbeBackBuffer back_buffer;  // double buffering
+        u32 canvas_zoom;  // 1 == no zoom
         Pair canvas_scroll;
         struct Canvas {
             XImage* im;
@@ -276,20 +277,16 @@ void trace(char const* fmt, ...) {
 }
 
 Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc) {
-    i32 const center_pad_x = ((i32)dc->width - (i32)dc->cv.width) / 2;
-    i32 const center_pad_y = ((i32)dc->height - (i32)dc->cv.height) / 2;
     return (Pair) {
-        .x = x + center_pad_x - dc->canvas_scroll.x,
-        .y = y + center_pad_y - dc->canvas_scroll.y,
+        .x = x * dc->canvas_zoom - dc->canvas_scroll.x,
+        .y = y * dc->canvas_zoom - dc->canvas_scroll.y,
     };
 }
 
 Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
-    i32 const center_pad_x = ((i32)dc->width - (i32)dc->cv.width) / 2;
-    i32 const center_pad_y = ((i32)dc->height - (i32)dc->cv.height) / 2;
     return (Pair) {
-        .x = x - center_pad_x + dc->canvas_scroll.x,
-        .y = y - center_pad_y + dc->canvas_scroll.y,
+        .x = (x + dc->canvas_scroll.x) / dc->canvas_zoom,
+        .y = (y + dc->canvas_scroll.y) / dc->canvas_zoom,
     };
 }
 
@@ -894,28 +891,53 @@ static void draw_int(struct DrawCtx* dc, i32 i, Pair c, u32 col) {
 void update_screen(struct Ctx* ctx) {
     Pair cv_pivot = point_from_cv_to_scr(0, 0, &ctx->dc);
 
-    XSetForeground(ctx->dc.dp, ctx->dc.screen_gc, WINDOW.background_rgb);
-    XFillRectangle(
-        ctx->dc.dp,
-        ctx->dc.back_buffer,
-        ctx->dc.screen_gc,
-        0,
-        0,
-        ctx->dc.width,
-        ctx->dc.height
-    );
-    XPutImage(
-        ctx->dc.dp,
-        ctx->dc.back_buffer,
-        ctx->dc.screen_gc,  // FIXME or dc.gc?
-        ctx->dc.cv.im,
-        0,
-        0,
-        cv_pivot.x,
-        cv_pivot.y,
-        ctx->dc.cv.width,
-        ctx->dc.cv.height
-    );
+    /* draw canvas */ {
+        XSetForeground(ctx->dc.dp, ctx->dc.screen_gc, WINDOW.background_rgb);
+        XFillRectangle(
+            ctx->dc.dp,
+            ctx->dc.back_buffer,
+            ctx->dc.screen_gc,
+            0,
+            0,
+            ctx->dc.width,
+            ctx->dc.height
+        );
+        u32 const sc = ctx->dc.canvas_zoom;
+        i32 const scaled_w = ctx->dc.cv.width * sc;
+        i32 const scaled_h = ctx->dc.cv.height * sc;
+        XImage* scaled_image =
+            XSubImage(ctx->dc.cv.im, 0, 0, scaled_w, scaled_h);
+        if (sc != 1) {
+            for (i32 y = 0; y < ctx->dc.cv.height; ++y) {
+                for (i32 x = 0; x < ctx->dc.cv.width; ++x) {
+                    u32 const pixel = XGetPixel(ctx->dc.cv.im, x, y);
+                    for (i32 dx = 0; dx < sc; ++dx) {
+                        for (i32 dy = 0; dy < sc; ++dy) {
+                            XPutPixel(
+                                scaled_image,
+                                x * sc + dx,
+                                y * sc + dy,
+                                pixel
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        XPutImage(
+            ctx->dc.dp,
+            ctx->dc.back_buffer,
+            ctx->dc.screen_gc,  // FIXME or dc.gc?
+            scaled_image,
+            0,
+            0,
+            cv_pivot.x,
+            cv_pivot.y,
+            scaled_w,
+            scaled_h
+        );
+        XDestroyImage(scaled_image);
+    }
     /* current selection */ {
         if (HAS_SELECTION(ctx)) {
             struct SelectionData sd = CURR_TC(ctx).data.sel;
@@ -1115,6 +1137,7 @@ struct Ctx setup(Display* dp) {
         .dc.width = CANVAS.default_width,
         .dc.height = CANVAS.default_height,
         .dc.font = NULL,
+        .dc.canvas_zoom = 1,
         .dc.canvas_scroll = {0, 0},
         .hist_next = NULL,
         .hist_prev = NULL,
@@ -1447,6 +1470,14 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                                : key_sym == XK_Up ? value
                                                   : 0)
                 );
+                update_screen(ctx);
+            }
+            HANDLE_KEY_CASE_MASK(ControlMask, XK_equal) {
+                ctx->dc.canvas_zoom = CLAMP(ctx->dc.canvas_zoom + 1, 1, 4);
+                update_screen(ctx);
+            }
+            HANDLE_KEY_CASE_MASK(ControlMask, XK_minus) {
+                ctx->dc.canvas_zoom = CLAMP(ctx->dc.canvas_zoom - 1, 1, 4);
                 update_screen(ctx);
             }
         } break;
