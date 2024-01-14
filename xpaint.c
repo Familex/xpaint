@@ -25,16 +25,18 @@
 #include "config.h"
 #include "types.h"
 
-#define XLeftMouseBtn   Button1
-#define XMiddleMouseBtn Button2
-#define XRightMouseBtn  Button3
-#define MAX(A, B)       ((A) > (B) ? (A) : (B))
-#define MIN(A, B)       ((A) < (B) ? (A) : (B))
-#define CLAMP(X, L, H)  ((X < L) ? L : (X > H) ? H : X)
-#define LENGTH(X)       (sizeof X / sizeof X[0])
-#define PI              3.141
+#define XLeftMouseBtn    Button1
+#define XMiddleMouseBtn  Button2
+#define XRightMouseBtn   Button3
+#define XMouseScrollUp   Button4
+#define XMouseScrollDown Button5
+#define MAX(A, B)        ((A) > (B) ? (A) : (B))
+#define MIN(A, B)        ((A) < (B) ? (A) : (B))
+#define CLAMP(X, L, H)   ((X < L) ? L : (X > H) ? H : X)
+#define LENGTH(X)        (sizeof X / sizeof X[0])
+#define PI               3.141
 // default value for signed integers
-#define NIL             -1
+#define NIL              -1
 
 #define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc) ((p_tc)->sdata.colors_rgb[(p_tc)->sdata.curr_col])
@@ -82,6 +84,7 @@ struct Ctx {
         u32 width;
         u32 height;
         XdbeBackBuffer back_buffer;  // double buffering
+        Pair canvas_scroll;
         struct Canvas {
             XImage* im;
             u32 width;
@@ -273,16 +276,20 @@ void trace(char const* fmt, ...) {
 }
 
 Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc) {
+    i32 const center_pad_x = ((i32)dc->width - (i32)dc->cv.width) / 2;
+    i32 const center_pad_y = ((i32)dc->height - (i32)dc->cv.height) / 2;
     return (Pair) {
-        .x = x + ((i32)dc->width - (i32)dc->cv.width) / 2,
-        .y = y + ((i32)dc->height - (i32)dc->cv.height) / 2,
+        .x = x + center_pad_x - dc->canvas_scroll.x,
+        .y = y + center_pad_y - dc->canvas_scroll.y,
     };
 }
 
 Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
+    i32 const center_pad_x = ((i32)dc->width - (i32)dc->cv.width) / 2;
+    i32 const center_pad_y = ((i32)dc->height - (i32)dc->cv.height) / 2;
     return (Pair) {
-        .x = x - ((i32)dc->width - (i32)dc->cv.width) / 2,
-        .y = y - ((i32)dc->height - (i32)dc->cv.height) / 2,
+        .x = x - center_pad_x + dc->canvas_scroll.x,
+        .y = y - center_pad_y + dc->canvas_scroll.y,
     };
 }
 
@@ -455,7 +462,7 @@ void tool_pencil_on_release(
 ) {
     assert(tc->type == Tool_Pencil);
 
-    if (!tc->is_dragging) {
+    if (event->button == XLeftMouseBtn && !tc->is_dragging) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
         // FIXME line width
         canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
@@ -1108,6 +1115,7 @@ struct Ctx setup(Display* dp) {
         .dc.width = CANVAS.default_width,
         .dc.height = CANVAS.default_height,
         .dc.font = NULL,
+        .dc.canvas_scroll = {0, 0},
         .hist_next = NULL,
         .hist_prev = NULL,
         .sel_buf.im = NULL,
@@ -1284,7 +1292,15 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
         return True;  // something selected do nothing else
+    } else if (e->button == XMouseScrollDown || e->button == XMouseScrollUp) {
+        if (e->state & ShiftMask) {
+            ctx->dc.canvas_scroll.x += e->button == XMouseScrollDown ? -10 : 10;
+        } else {
+            ctx->dc.canvas_scroll.y += e->button == XMouseScrollDown ? -10 : 10;
+        }
+        update_screen(ctx);
     }
+
     if (CURR_TC(ctx).on_release) {
         CURR_TC(ctx).on_release(&ctx->dc, &CURR_TC(ctx), e);
         update_screen(ctx);
