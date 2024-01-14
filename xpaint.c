@@ -860,6 +860,30 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     );
 }
 
+static void
+draw_string(struct DrawCtx* dc, char const* sz_str, Pair c, u32 col) {
+    XSetForeground(dc->dp, dc->screen_gc, col);
+    XDrawImageString(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        c.x,
+        c.y,
+        sz_str,
+        strlen(sz_str)
+    );
+}
+
+static void draw_int(struct DrawCtx* dc, i32 i, Pair c, u32 col) {
+    static u32 const MAX_SIZE = 50;
+    assert(floor(log10(i) + 1) < MAX_SIZE);
+
+    char buf[MAX_SIZE];
+    memset(buf, '\0', MAX_SIZE);
+    sprintf(buf, "%d", i);
+    draw_string(dc, buf, c, col);
+}
+
 void update_screen(struct Ctx* ctx) {
     Pair cv_pivot = point_from_cv_to_scr(0, 0, &ctx->dc);
 
@@ -930,6 +954,15 @@ void update_screen(struct Ctx* ctx) {
             static u32 const col_count_w = 20;  // FIXME use MAX_COLORS
             static u32 const tc_w = 10;  // FIXME
             static u32 const tool_name_w = 80;  // FIXME
+            Pair const tcs_c = {0, dc->height};
+            Pair const input_state_c = {tcs_c.x + tc_w * TCS_NUM, dc->height};
+            Pair const tool_name_c = {
+                input_state_c.x + input_state_w,
+                dc->height
+            };
+            Pair const line_w_c = {tool_name_c.x + tool_name_w, dc->height};
+            Pair const col_count_c = {dc->width - col_count_w, dc->height};
+            Pair const col_c = {col_count_c.x - col_name_len, dc->height};
             // colored rectangle
             static u32 const col_rect_w = 30;
             static u32 const col_value_size = 1 + 6;
@@ -937,77 +970,35 @@ void update_screen(struct Ctx* ctx) {
             XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_rgb);
             XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
             for (i32 i = 0; i < TCS_NUM; ++i) {
-                char tc_name[3];  // FIXME
-                sprintf(tc_name, "%d", i + 1);
-                if (ctx->curr_tc == i) {
-                    XSetForeground(
-                        dc->dp,
-                        dc->screen_gc,
-                        STATUSLINE.strong_font_rgb
-                    );
-                }
-                XDrawImageString(
-                    dc->dp,
-                    dc->back_buffer,
-                    dc->screen_gc,
-                    tc_w * i,
-                    dc->height,
-                    tc_name,
-                    strlen(tc_name)
+                draw_int(
+                    dc,
+                    i + 1,
+                    (Pair) {tcs_c.x + tc_w * i, tcs_c.y},
+                    ctx->curr_tc == i ? STATUSLINE.strong_font_rgb
+                                      : STATUSLINE.font_rgb
                 );
-                XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_rgb);
             }
             /* input state */ {
-                char const* const input_state_name =
-                    ctx->input.state == InputS_Interact ? "intearct"
-                    : ctx->input.state == InputS_Color  ? "color"
-                                                        : "unknown";
-                XDrawImageString(
-                    dc->dp,
-                    dc->back_buffer,
-                    dc->screen_gc,
-                    tc_w * TCS_NUM,
-                    dc->height,
-                    input_state_name,
-                    strlen(input_state_name)
+                draw_string(
+                    dc,
+                    ctx->input.state == InputS_Interact    ? "intearct"
+                        : ctx->input.state == InputS_Color ? "color"
+                                                           : "unknown",
+                    input_state_c,
+                    STATUSLINE.font_rgb
                 );
             }
-            if (tc->ssz_tool_name) {
-                XDrawImageString(
-                    dc->dp,
-                    dc->back_buffer,
-                    dc->screen_gc,
-                    input_state_w + tc_w * TCS_NUM,
-                    dc->height,
-                    tc->ssz_tool_name,
-                    strlen(tc->ssz_tool_name)
-                );
-            }
-            /* line width */ {
-                char line_w_value[10];  // FIXME
-                sprintf(line_w_value, "%d", tc->sdata.line_w);  // FIXME
-                XDrawImageString(
-                    dc->dp,
-                    dc->back_buffer,
-                    dc->screen_gc,
-                    input_state_w + tc_w * TCS_NUM + tool_name_w,
-                    dc->height,
-                    line_w_value,
-                    strlen(line_w_value)
-                );
-            }
+            draw_string(
+                dc,
+                tc->ssz_tool_name ? tc->ssz_tool_name : "N/A",
+                tool_name_c,
+                STATUSLINE.font_rgb
+            );
+            draw_int(dc, tc->sdata.line_w, line_w_c, STATUSLINE.font_rgb);
             /* color */ {
                 char col_value[col_value_size + 2];  // FIXME ?
                 sprintf(col_value, "#%06X", CURR_COL(tc));
-                XDrawImageString(
-                    dc->dp,
-                    dc->back_buffer,
-                    dc->screen_gc,
-                    dc->width - col_name_len - col_count_w,
-                    dc->height,
-                    col_value,
-                    col_value_size
-                );
+                draw_string(dc, col_value, col_c, STATUSLINE.font_rgb);
                 /* color count */ {
                     char col_count[10];  // FIXME
                     sprintf(
@@ -1016,34 +1007,30 @@ void update_screen(struct Ctx* ctx) {
                         tc->sdata.curr_col + 1,
                         arrlen(tc->sdata.colors_rgb)
                     );
-                    XDrawImageString(
-                        dc->dp,
-                        dc->back_buffer,
-                        dc->screen_gc,
-                        dc->width - col_count_w,
-                        dc->height,
+                    draw_string(
+                        dc,
                         col_count,
-                        strlen(col_count)
+                        col_count_c,
+                        STATUSLINE.font_rgb
                     );
                 }
                 if (ctx->input.state == InputS_Color) {
                     static u32 const hash_w = 1;
-                    u32 curr_dig = ctx->input.data.col.current_digit;
-                    i16 pad =
-                        get_string_width(dc, col_value, curr_dig + hash_w);
-                    XSetForeground(
-                        dc->dp,
-                        dc->screen_gc,
+                    u32 const curr_dig = ctx->input.data.col.current_digit;
+                    char const col_digit_value[] =
+                        {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
+                    draw_string(
+                        dc,
+                        col_digit_value,
+                        (Pair
+                        ) {col_c.x
+                               + get_string_width(
+                                   dc,
+                                   col_value,
+                                   curr_dig + hash_w
+                               ),
+                           dc->height},
                         STATUSLINE.strong_font_rgb
-                    );
-                    XDrawImageString(
-                        dc->dp,
-                        dc->back_buffer,
-                        dc->screen_gc,
-                        dc->width - col_name_len + pad - col_count_w,
-                        dc->height,
-                        &col_value[curr_dig + hash_w],
-                        1
                     );
                 }
                 XSetForeground(dc->dp, dc->screen_gc, CURR_COL(tc));
