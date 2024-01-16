@@ -41,12 +41,16 @@
 #define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc) ((p_tc)->sdata.colors_rgb[(p_tc)->sdata.curr_col])
 // clang-format off
-#define HAS_SELECTION(p_ctx) \
-    (CURR_TC(p_ctx).type == Tool_Selection \
-    && CURR_TC(p_ctx).data.sel.ex != NIL && CURR_TC(p_ctx).data.sel.ey != NIL \
-    && CURR_TC(p_ctx).data.sel.bx != NIL && CURR_TC(p_ctx).data.sel.by != NIL \
-    && CURR_TC(p_ctx).data.sel.ex != CURR_TC(p_ctx).data.sel.bx \
-    && CURR_TC(p_ctx).data.sel.ey != CURR_TC(p_ctx).data.sel.by)
+#define HAS_SELECTION(p_tc) \
+    ((p_tc)->type == Tool_Selection \
+    && (p_tc)->data.sel.ex != NIL && (p_tc)->data.sel.ey != NIL \
+    && (p_tc)->data.sel.bx != NIL && (p_tc)->data.sel.by != NIL \
+    && (p_tc)->data.sel.ex != (p_tc)->data.sel.bx \
+    && (p_tc)->data.sel.ey != (p_tc)->data.sel.by)
+#define SELECTION_DRAGGING(p_tc) \
+    ((p_tc)->type == Tool_Selection \
+    && (p_tc)->data.sel.drag_from.x != NIL \
+    && (p_tc)->data.sel.drag_from.y != NIL)
 // clang-format on
 
 enum {
@@ -118,6 +122,8 @@ struct Ctx {
                 i32 by, bx;
                 // selection end
                 i32 ey, ex;
+                // NIL if selection not dragging
+                Pair drag_from, drag_to;
             } sel;
             struct PencilData {
                 u32 line_r;
@@ -159,6 +165,7 @@ static void trace(char const*, ...);
 
 static Pair point_from_cv_to_scr(i32, i32, struct DrawCtx const*);
 static Pair point_from_scr_to_cv(i32, i32, struct DrawCtx const*);
+static Bool point_in_rect(Pair, Pair, Pair);
 
 static XImage* read_png_file(struct DrawCtx const*, char const*);
 
@@ -198,6 +205,7 @@ static void canvas_fill(struct DrawCtx*, u32);
 static void canvas_line(struct DrawCtx*, Pair, Pair, u32, u32);
 static void canvas_point(struct DrawCtx*, Pair, u32, u32);
 static void canvas_circle(struct DrawCtx*, Pair, u32, u32, Bool);
+static void canvas_copy_region(struct DrawCtx*, Pair, Pair, Pair);
 
 static void
 draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, i32, i32);
@@ -290,6 +298,11 @@ Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
     };
 }
 
+static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
+    return MIN(a1.x, a2.x) < p.x && p.x < MAX(a1.x, a2.x)
+        && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
+}
+
 XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
     i32 width = NIL;
     i32 height = NIL;
@@ -359,6 +372,8 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
                 .bx = NIL,
                 .ey = NIL,
                 .ex = NIL,
+                .drag_from = {NIL, NIL},
+                .drag_to = {NIL, NIL},
             };
             break;
         case Tool_Pencil:
@@ -410,10 +425,20 @@ void tool_selection_on_press(
     if (event->button == XLeftMouseBtn) {
         struct SelectionData* sd = &tc->data.sel;
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-        sd->bx = CLAMP(pointer.x, 0, dc->cv.width);
-        sd->by = CLAMP(pointer.y, 0, dc->cv.height);
-        sd->ex = NIL;
-        sd->ey = NIL;
+        if (HAS_SELECTION(tc)
+            && point_in_rect(
+                pointer,
+                (Pair) {sd->bx, sd->by},
+                (Pair) {sd->ex, sd->ey}
+            )) {
+            sd->drag_from = pointer;
+            sd->drag_to = pointer;
+        } else {
+            sd->bx = CLAMP(pointer.x, 0, dc->cv.width);
+            sd->by = CLAMP(pointer.y, 0, dc->cv.height);
+            sd->ex = NIL;
+            sd->ey = NIL;
+        }
     }
 }
 
@@ -422,21 +447,40 @@ void tool_selection_on_release(
     struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
+    assert(tc->type == Tool_Selection);
     if (event->button == XLeftMouseBtn) {
-        if (tc->is_dragging) {
+        struct SelectionData* sd = &tc->data.sel;
+
+        if (SELECTION_DRAGGING(tc)) {
+            // finish drag selection
+            Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+            Pair move_vec = {
+                pointer.x - sd->drag_from.x,
+                pointer.y - sd->drag_from.y
+            };
+            Pair area = {MIN(sd->bx, sd->ex), MIN(sd->by, sd->ey)};
+            canvas_copy_region(
+                dc,
+                area,
+                (Pair
+                ) {MAX(sd->bx, sd->ex) - area.x, MAX(sd->by, sd->ey) - area.y},
+                (Pair) {area.x + move_vec.x, area.y + move_vec.y}
+            );
+        } else if (tc->is_dragging) {
             // select area
             XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
             trace("clipboard owned");
-        } else {
-            // unselect area
-            struct SelectionData* sd = &tc->data.sel;
-            sd->bx = NIL;
-            sd->ey = NIL;
-            sd->by = NIL;
-            sd->ex = NIL;
-            XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
-            trace("clipboard released");
+            return;
         }
+        // unselect area
+        sd->bx = NIL;
+        sd->ey = NIL;
+        sd->by = NIL;
+        sd->ex = NIL;
+        sd->drag_from = (Pair) {NIL, NIL};
+        sd->drag_to = (Pair) {NIL, NIL};
+        XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
+        trace("clipboard released");
     }
 }
 
@@ -445,8 +489,11 @@ void tool_selection_on_drag(
     struct ToolCtx* tc,
     XMotionEvent const* event
 ) {
-    if (tc->is_holding) {
-        Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+    assert(tc->type == Tool_Selection);
+    Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+    if (SELECTION_DRAGGING(tc)) {
+        tc->data.sel.drag_to = pointer;
+    } else if (tc->is_holding) {
         tc->data.sel.ex = CLAMP(pointer.x, 0, dc->cv.width);
         tc->data.sel.ey = CLAMP(pointer.y, 0, dc->cv.height);
     }
@@ -709,6 +756,27 @@ void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
     }
 }
 
+void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to) {
+    if (from.x < 0 || from.y < 0 || to.x < 0 || to.y < 0) {
+        return;
+    }
+    XImage* im = dc->cv.im;
+    i32 w = im->width;
+    i32 h = im->height;
+    for (i32 y = 0; y < dims.y; ++y) {
+        if (from.y + y >= h || to.y + y >= h) {
+            break;
+        }
+        for (i32 x = 0; x < dims.x; ++x) {
+            if (from.x + x >= w || to.x + x >= w) {
+                break;
+            }
+            u32 pixel = XGetPixel(im, from.x + x, from.y + y);
+            XPutPixel(im, to.x + x, to.y + y, pixel);
+        }
+    }
+}
+
 void draw_selection_circle(
     struct DrawCtx* dc,
     struct SelectionCircle const* sc,
@@ -888,19 +956,51 @@ static void draw_int(struct DrawCtx* dc, i32 i, Pair c, u32 col) {
     draw_string(dc, buf, c, col);
 }
 
+static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, u32 col) {
+    XSetForeground(dc->dp, dc->screen_gc, col);
+    return XFillRectangle(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        p.x,
+        p.y,
+        dim.x,
+        dim.y
+    );
+}
+
+static int draw_rect(
+    struct DrawCtx* dc,
+    Pair p,
+    Pair dim,
+    u32 col,
+    u32 line_w,
+    i32 line_st,
+    i32 cap_st,
+    i32 join_st
+) {
+    XSetForeground(dc->dp, dc->screen_gc, col);
+    XSetLineAttributes(dc->dp, dc->screen_gc, line_w, line_st, cap_st, join_st);
+    return XDrawRectangle(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        p.x,
+        p.y,
+        dim.x,
+        dim.y
+    );
+}
+
 void update_screen(struct Ctx* ctx) {
     Pair cv_pivot = point_from_cv_to_scr(0, 0, &ctx->dc);
 
     /* draw canvas */ {
-        XSetForeground(ctx->dc.dp, ctx->dc.screen_gc, WINDOW.background_rgb);
-        XFillRectangle(
-            ctx->dc.dp,
-            ctx->dc.back_buffer,
-            ctx->dc.screen_gc,
-            0,
-            0,
-            ctx->dc.width,
-            ctx->dc.height
+        fill_rect(
+            &ctx->dc,
+            (Pair) {0, 0},
+            (Pair) {ctx->dc.width, ctx->dc.height},
+            WINDOW.background_rgb
         );
         u32 const sc = ctx->dc.canvas_zoom;
         i32 const scaled_w = ctx->dc.cv.width * sc;
@@ -939,29 +1039,34 @@ void update_screen(struct Ctx* ctx) {
         XDestroyImage(scaled_image);
     }
     /* current selection */ {
-        if (HAS_SELECTION(ctx)) {
+        if (HAS_SELECTION(&CURR_TC(ctx))) {
             struct SelectionData sd = CURR_TC(ctx).data.sel;
-            XSetLineAttributes(
-                ctx->dc.dp,
-                ctx->dc.screen_gc,
+            Pair p = {MIN(sd.bx, sd.ex), MIN(sd.by, sd.ey)};
+            Pair dim = {MAX(sd.bx, sd.ex) - p.x, MAX(sd.by, sd.ey) - p.y};
+            draw_rect(
+                &ctx->dc,
+                point_from_cv_to_scr(p.x, p.y, &ctx->dc),
+                point_from_cv_to_scr(dim.x, dim.y, &ctx->dc),
+                0x00000,
                 SELECTION_TOOL.line_w,
                 SELECTION_TOOL.line_style,
                 SELECTION_TOOL.cap_style,
                 SELECTION_TOOL.join_style
             );
-            u32 x = MIN(sd.bx, sd.ex);
-            u32 y = MIN(sd.by, sd.ey);
-            u32 w = MAX(sd.bx, sd.ex) - x;
-            u32 h = MAX(sd.by, sd.ey) - y;
-            XDrawRectangle(
-                ctx->dc.dp,
-                ctx->dc.back_buffer,
-                ctx->dc.screen_gc,
-                cv_pivot.x + x,
-                cv_pivot.y + y,
-                w,
-                h
-            );
+            if (SELECTION_DRAGGING(&CURR_TC(ctx))) {
+                i32 dx = sd.drag_to.x - sd.drag_from.x;
+                i32 dy = sd.drag_to.y - sd.drag_from.y;
+                draw_rect(
+                    &ctx->dc,
+                    point_from_cv_to_scr(p.x + dx, p.y + dy, &ctx->dc),
+                    point_from_cv_to_scr(dim.x, dim.y, &ctx->dc),
+                    SELECTION_TOOL.drag_color,
+                    SELECTION_TOOL.line_w,
+                    SELECTION_TOOL.line_style,
+                    SELECTION_TOOL.cap_style,
+                    SELECTION_TOOL.join_style
+                );
+            }
         }
     }
     /* statusline */ {
@@ -1386,7 +1491,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_c) {
-                if (HAS_SELECTION(ctx)) {
+                if (HAS_SELECTION(&CURR_TC(ctx))) {
                     XSetSelectionOwner(
                         ctx->dc.dp,
                         atoms[A_Clipboard],

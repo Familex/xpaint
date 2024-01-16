@@ -54,11 +54,13 @@ struct {
     i32 line_style;
     i32 cap_style;
     i32 join_style;
+    u32 drag_color;
 } const SELECTION_TOOL = {
     .line_w = 2,
     .line_style = LineOnOffDash,
     .cap_style = CapNotLast,
     .join_style = JoinMiter,
+    .drag_color = 0xFF0000,
 };
 
 struct {
