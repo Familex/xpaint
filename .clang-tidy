@@ -1,0 +1,21 @@
+---
+Checks: >
+    clang-diagnostic-*
+    , clang-analyzer-*
+    , portability-*
+    , readability-*
+    , modernize-*
+    , bugprone-*
+    , misc-*
+    , google-runtime-int
+    , fuchsia-restrict-system-includes
+    , -misc-include-cleaner
+    , -misc-unused-parameters
+    , -readability-magic-numbers
+    , -readability-identifier-length
+    , -bugprone-easily-swappable-parameters
+    , -readability-function-cognitive-complexity
+    , -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+WarningsAsErrors: '*'
+...

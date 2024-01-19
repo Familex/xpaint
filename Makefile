@@ -3,6 +3,7 @@ CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
 CFLAGSD = -std=c99 -pedantic -Wall -g ${INCS} ${LIBS}
 
 CC ?= cc
+CLANGTIDY ?= clang-tidy
 
 SRC = xpaint.c
 HEADER = types.h config.h
@@ -24,4 +25,7 @@ exec: xpaint
 verbose: xpaint-d
 	@./xpaint-d -v
 
-.PHONY: all clean exec verbose
+check:
+	$(CLANGTIDY) $(HEADER) $(SRC) -- -I/usr/include
+
+.PHONY: all clean exec verbose check

@@ -1,14 +1,15 @@
-#define _POSIX_C_SOURCE 200809L
-
 #include <X11/X.h>
 #include <X11/Xatom.h>  // XA_*
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/Xdbe.h>  // back buffer
 #include <X11/extensions/Xrender.h>
+#include <X11/extensions/render.h>
+#include <assert.h>
 #include <limits.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,11 +34,11 @@
 #define XMouseScrollDown Button5
 #define MAX(A, B)        ((A) > (B) ? (A) : (B))
 #define MIN(A, B)        ((A) < (B) ? (A) : (B))
-#define CLAMP(X, L, H)   ((X < L) ? L : (X > H) ? H : X)
-#define LENGTH(X)        (sizeof X / sizeof X[0])
-#define PI               3.141
+#define CLAMP(X, L, H)   (((X) < (L)) ? (L) : ((X) > (H)) ? (H) : (X))
+#define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
+#define PI               (3.141)
 // default value for signed integers
-#define NIL              -1
+#define NIL              (-1)
 
 #define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc) ((p_tc)->sdata.colors_argb[(p_tc)->sdata.curr_col])
@@ -161,75 +162,69 @@ struct Ctx {
     } input;
 };
 
-static void die(char const*, ...);
-static void trace(char const*, ...);
+// clang-format off
+static void die(char const* errstr, ...);
+static void trace(char const* fmt, ...);
 
-static Pair point_from_cv_to_scr(i32, i32, struct DrawCtx const*);
-static Pair point_from_cv_to_scr_no_move(i32, i32, struct DrawCtx const*);
-static Pair point_from_scr_to_cv(i32, i32, struct DrawCtx const*);
-static Bool point_in_rect(Pair, Pair, Pair);
+static Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc);
+static Pair point_from_cv_to_scr_no_move(i32 x, i32 y, struct DrawCtx const* dc);
+static Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc);
+static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
-static XImage* read_png_file(struct DrawCtx const*, char const*);
+static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name);
 
-static i16 get_string_width(struct DrawCtx const*, char const*, u32);
+static i32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 
-static void init_sel_circ_tools(struct SelectionCircle*, i32, i32);
-static void free_sel_circ(struct SelectionCircle*);
-static i32 current_sel_circ_item(struct SelectionCircle const*, i32, i32);
-static struct SelectonCircleDims
-get_curr_sel_dims(struct SelectionCircle const*);
+static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
+static void free_sel_circ(struct SelectionCircle* sel_circ);
+static i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y);
+static struct SelectonCircleDims get_curr_sel_dims(struct SelectionCircle const* sel_circ);
 
-static void set_current_tool_selection(struct ToolCtx*);
-static void set_current_tool_pencil(struct ToolCtx*);
-static void set_current_tool_fill(struct ToolCtx*);
-static void set_current_input_state(struct Input*, enum InputState);
+static void set_current_tool_selection(struct ToolCtx* tc);
+static void set_current_tool_pencil(struct ToolCtx* tc);
+static void set_current_tool_fill(struct ToolCtx* tc);
+static void set_current_input_state(struct Input* input, enum InputState is);
 
-static void
-tool_selection_on_press(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
-static void
-tool_selection_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
-static void
-tool_selection_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
-static void
-tool_pencil_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
-static void
-tool_pencil_on_drag(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
-static void
-tool_fill_on_release(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
+static void tool_selection_on_press(struct DrawCtx* dc, struct ToolCtx* tc, XButtonPressedEvent const* event);
+static void tool_selection_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
+static void tool_selection_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
+static void tool_pencil_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
+static void tool_pencil_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
+static void tool_fill_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
 
-static Bool history_move(struct Ctx*, Bool forward);
-static Bool history_push(struct History**, struct Ctx*);
+static Bool history_move(struct Ctx* ctx, Bool forward);
+static Bool history_push(struct History** hist, struct Ctx* ctx);
 
-static void historyarr_clear(Display*, struct History**);
-static void canvas_clear(Display*, struct Canvas*);
+static void historyarr_clear(Display* dp, struct History** hist);
+static void canvas_clear(Display* dp, struct Canvas* cv);
 
-static void canvas_fill(struct DrawCtx*, u32);
-static void canvas_line(struct DrawCtx*, Pair, Pair, u32, u32);
-static void canvas_point(struct DrawCtx*, Pair, u32, u32);
-static void canvas_circle(struct DrawCtx*, Pair, u32, u32, Bool);
-static void canvas_copy_region(struct DrawCtx*, Pair, Pair, Pair);
+static void canvas_fill(struct DrawCtx* dc, u32 color);
+static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 line_w);
+static void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w);
+static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
+static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to);
 
-static void
-draw_selection_circle(struct DrawCtx*, struct SelectionCircle const*, i32, i32);
-static void clear_selection_circle(struct DrawCtx*, struct SelectionCircle*);
-static void update_screen(struct Ctx*);
+static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
+static void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc);
+static void update_screen(struct Ctx* ctx);
 
-static void resize_canvas(struct DrawCtx*, i32, i32);
+static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
-static struct Ctx setup(Display*);
-static void run(struct Ctx*);
-static Bool button_press_hdlr(struct Ctx*, XEvent*);
-static Bool button_release_hdlr(struct Ctx*, XEvent*);
-static Bool destroy_notify_hdlr(struct Ctx*, XEvent*);
-static Bool expose_hdlr(struct Ctx*, XEvent*);
-static Bool key_press_hdlr(struct Ctx*, XEvent*);
-static Bool mapping_notify_hdlr(struct Ctx*, XEvent*);
-static Bool motion_notify_hdlr(struct Ctx*, XEvent*);
-static Bool configure_notify_hdlr(struct Ctx*, XEvent*);
-static Bool selection_request_hdlr(struct Ctx*, XEvent*);
-static Bool selection_notify_hdlr(struct Ctx*, XEvent*);
-static Bool client_message_hdlr(struct Ctx*, XEvent*);
-static void cleanup(struct Ctx*);
+static struct Ctx setup(Display* dp);
+static void run(struct Ctx* ctx);
+static Bool button_press_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool button_release_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool destroy_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool expose_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool key_press_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static Bool client_message_hdlr(struct Ctx* ctx, XEvent* event);
+static void cleanup(struct Ctx* ctx);
+// clang-format on
 
 static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
@@ -288,19 +283,20 @@ void trace(char const* fmt, ...) {
 
 Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc) {
     return (Pair) {
-        .x = x * dc->canvas_zoom - dc->canvas_scroll.x,
-        .y = y * dc->canvas_zoom - dc->canvas_scroll.y,
+        .x = x * (i32)dc->canvas_zoom - dc->canvas_scroll.x,
+        .y = y * (i32)dc->canvas_zoom - dc->canvas_scroll.y,
     };
 }
 
 Pair point_from_cv_to_scr_no_move(i32 x, i32 y, struct DrawCtx const* dc) {
-    return (Pair) {.x = x * dc->canvas_zoom, .y = y * dc->canvas_zoom};
+    return (Pair
+    ) {.x = x * (i32)dc->canvas_zoom, .y = y * (i32)dc->canvas_zoom};
 }
 
 Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
     return (Pair) {
-        .x = (x + dc->canvas_scroll.x) / dc->canvas_zoom,
-        .y = (y + dc->canvas_scroll.y) / dc->canvas_zoom,
+        .x = (x + dc->canvas_scroll.x) / (i32)dc->canvas_zoom,
+        .y = (y + dc->canvas_scroll.y) / (i32)dc->canvas_zoom,
     };
 }
 
@@ -322,7 +318,7 @@ XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
         dc->vinfo.visual,
         dc->vinfo.depth,
         ZPixmap,
-        32,
+        0,
         (char*)image_data,
         width,
         height,
@@ -333,13 +329,13 @@ XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
     return result;
 }
 
-i16 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
+i32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     if (dc->font == NULL) {
         trace("warning: font not found");
         return 0;
     }
 
-    return XTextWidth(dc->font, str, len);
+    return XTextWidth(dc->font, str, (i32)len);
 }
 
 struct SelectonCircleDims
@@ -514,7 +510,6 @@ void tool_pencil_on_release(
 
     if (event->button == XLeftMouseBtn && !tc->is_dragging) {
         Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-        // FIXME line width
         canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
     }
 }
@@ -528,7 +523,9 @@ void tool_pencil_on_drag(
     assert(tc->is_holding);
 
     Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-    Pair prev_pointer = point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc);
+    Pair prev_pointer = (tc->prev_x != NIL && tc->prev_y != NIL)
+        ? point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc)
+        : pointer;
     canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
 }
 
@@ -650,23 +647,22 @@ i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     double const pointer_r =
         sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
 
-    if (pointer_r <= sel_rect.outer.r && pointer_r >= sel_rect.inner.r) {
-        // FIXME do it right
-        double angle = -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
-        if (pointer_x_rel < 0) {
-            angle += 180;
-        } else if (pointer_y_rel >= 0) {
-            angle += 360;
-        }
-
-        return angle / segment_deg;
-    } else {
+    if (pointer_r > sel_rect.outer.r || pointer_r < sel_rect.inner.r) {
         return NIL;
     }
+    // FIXME do it right
+    double angle = -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
+    if (pointer_x_rel < 0) {
+        angle += 180;
+    } else if (pointer_y_rel >= 0) {
+        angle += 360;
+    }
+
+    return (i32)(angle / segment_deg);
 }
 
-static Bool ximage_put_checked(XImage* im, i32 x, i32 y, u32 col) {
-    if (x < 0 || y < 0 || x >= im->width || y >= im->height) {
+static Bool ximage_put_checked(XImage* im, u32 x, u32 y, u32 col) {
+    if (x >= im->width || y >= im->height) {
         return False;
     }
 
@@ -702,18 +698,21 @@ void canvas_line(
     while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
            && from.y < dc->cv.im->height) {
         canvas_point(dc, from, color, line_w);
-        if (from.x == to.x && from.y == to.y)
+        if (from.x == to.x && from.y == to.y) {
             break;
+        }
         i32 e2 = 2 * error;
         if (e2 >= dy) {
-            if (from.x == to.x)
+            if (from.x == to.x) {
                 break;
+            }
             error += dy;
             from.x += sx;
         }
         if (e2 <= dx) {
-            if (from.y == to.y)
+            if (from.y == to.y) {
                 break;
+            }
             error += dx;
             from.y += sy;
         }
@@ -738,9 +737,9 @@ canvas_circle_helper(XImage* im, i32 x, i32 y, i32 dx, i32 dy, u32 col) {
 
 void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
     if (fill) {
-        i32 const d = r * 2;
-        i32 const l = center.x - r;
-        i32 const t = center.y - r;
+        u32 const d = r * 2;
+        u32 const l = center.x - r;
+        u32 const t = center.y - r;
         for (i32 x = 0; x < d; ++x) {
             for (i32 y = 0; y < d; ++y) {
                 if ((x - r) * (x - r) + (y - r) * (y - r) <= r * r) {
@@ -751,8 +750,8 @@ void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
     } else {
         // Bresenham's alg
         i32 x = 0;
-        i32 y = r;
-        i32 d = 3 - 2 * r;
+        i32 y = (i32)r;
+        u32 d = 3 - 2 * r;
         canvas_circle_helper(dc->cv.im, center.x, center.y, x, y, col);
         while (y >= x) {
             ++x;
@@ -813,8 +812,8 @@ void draw_selection_circle(
         dc->dp,
         dc->screen,
         dc->screen_gc,
-        sel_rect.outer.x,
-        sel_rect.outer.y,
+        (i32)sel_rect.outer.x,
+        (i32)sel_rect.outer.y,
         sel_rect.outer.r * 2,
         sel_rect.outer.r * 2,
         0,
@@ -826,8 +825,8 @@ void draw_selection_circle(
         dc->dp,
         dc->screen,
         dc->screen_gc,
-        sel_rect.inner.x,
-        sel_rect.inner.y,
+        (i32)sel_rect.inner.x,
+        (i32)sel_rect.inner.y,
         sel_rect.inner.r * 2,
         sel_rect.inner.r * 2,
         0,
@@ -838,8 +837,8 @@ void draw_selection_circle(
         dc->dp,
         dc->screen,
         dc->screen_gc,
-        sel_rect.outer.x,
-        sel_rect.outer.y,
+        (i32)sel_rect.outer.x,
+        (i32)sel_rect.outer.y,
         sel_rect.outer.r * 2,
         sel_rect.outer.r * 2,
         0,
@@ -856,10 +855,14 @@ void draw_selection_circle(
                     dc->dp,
                     dc->screen,
                     dc->screen_gc,
-                    sc->x + cos(segment_rad * line_num) * sel_rect.inner.r,
-                    sc->y + sin(segment_rad * line_num) * sel_rect.inner.r,
-                    sc->x + cos(segment_rad * line_num) * sel_rect.outer.r,
-                    sc->y + sin(segment_rad * line_num) * sel_rect.outer.r
+                    sc->x
+                        + (i32)(cos(segment_rad * line_num) * sel_rect.inner.r),
+                    sc->y
+                        + (i32)(sin(segment_rad * line_num) * sel_rect.inner.r),
+                    sc->x
+                        + (i32)(cos(segment_rad * line_num) * sel_rect.outer.r),
+                    sc->y
+                        + (i32)(sin(segment_rad * line_num) * sel_rect.outer.r)
                 );
             }
         }
@@ -876,14 +879,14 @@ void draw_selection_circle(
                 image,
                 0,
                 0,
-                sc->x
-                    + cos(-segment_rad * (item + 0.5))
-                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
-                    - image->width / 2.0,
-                sc->y
-                    + sin(-segment_rad * (item + 0.5))
-                        * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
-                    - image->height / 2.0,
+                (i32)(sc->x
+                      + cos(-segment_rad * (item + 0.5))
+                          * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
+                      - image->width / 2.0),
+                (i32)(sc->y
+                      + sin(-segment_rad * (item + 0.5))
+                          * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
+                      - image->height / 2.0),
                 image->width,
                 image->height
             );
@@ -902,12 +905,12 @@ void draw_selection_circle(
                 dc->dp,
                 dc->screen,
                 dc->screen_gc,
-                sel_rect.outer.x,
-                sel_rect.outer.y,
+                (i32)sel_rect.outer.x,
+                (i32)sel_rect.outer.y,
                 sel_rect.outer.r * 2,
                 sel_rect.outer.r * 2,
-                (current_item * segment_deg) * 64,
-                segment_deg * 64
+                (i32)(current_item * segment_deg) * 64,
+                (i32)segment_deg * 64
             );
             XSetForeground(
                 dc->dp,
@@ -918,12 +921,12 @@ void draw_selection_circle(
                 dc->dp,
                 dc->screen,
                 dc->screen_gc,
-                sel_rect.inner.x,
-                sel_rect.inner.y,
+                (i32)sel_rect.inner.x,
+                (i32)sel_rect.inner.y,
                 sel_rect.inner.r * 2,
                 sel_rect.inner.r * 2,
-                (current_item * segment_deg) * 64,
-                segment_deg * 64
+                (i32)(current_item * segment_deg) * 64,
+                (i32)segment_deg * 64
             );
         }
     }
@@ -935,8 +938,8 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     XClearArea(
         dc->dp,
         dc->screen,
-        sel_rect.outer.x - 1,
-        sel_rect.outer.y - 1,
+        (i32)sel_rect.outer.x - 1,
+        (i32)sel_rect.outer.y - 1,
         sel_rect.outer.r * 2 + 2,
         sel_rect.outer.r * 2 + 2,
         True  // Expose to draw background
@@ -953,7 +956,7 @@ draw_string(struct DrawCtx* dc, char const* sz_str, Pair c, u32 col) {
         c.x,
         c.y,
         sz_str,
-        strlen(sz_str)
+        (i32)strlen(sz_str)
     );
 }
 
@@ -962,7 +965,7 @@ static void draw_int(struct DrawCtx* dc, i32 i, Pair c, u32 col) {
     assert(floor(log10(i) + 1) < MAX_SIZE);
 
     char buf[MAX_SIZE];
-    memset(buf, '\0', MAX_SIZE);
+    memset(buf, '\0', MAX_SIZE);  // FIXME memset_s
     sprintf(buf, "%d", i);
     draw_string(dc, buf, c, col);
 }
@@ -1003,12 +1006,16 @@ static int draw_rect(
     );
 }
 
+static u32 digit_count(u32 number) {
+    return (u32)floor(log10(number)) + 1;
+}
+
 void update_screen(struct Ctx* ctx) {
     /* draw canvas */ {
         fill_rect(
             &ctx->dc,
             (Pair) {0, 0},
-            (Pair) {ctx->dc.width, ctx->dc.height},
+            (Pair) {(i32)ctx->dc.width, (i32)ctx->dc.height},
             WINDOW.background_rgb
         );
         /* put scaled image */ {
@@ -1120,7 +1127,7 @@ void update_screen(struct Ctx* ctx) {
             dc->back_buffer,
             dc->screen_gc,
             0,
-            dc->height - STATUSLINE.height_px,
+            (i32)(dc->height - STATUSLINE.height_px),
             dc->width,
             STATUSLINE.height_px
         );
@@ -1130,15 +1137,27 @@ void update_screen(struct Ctx* ctx) {
             static u32 const col_count_w = 20;  // FIXME use MAX_COLORS
             static u32 const tc_w = 10;  // FIXME
             static u32 const tool_name_w = 80;  // FIXME
-            Pair const tcs_c = {0, dc->height};
-            Pair const input_state_c = {tcs_c.x + tc_w * TCS_NUM, dc->height};
-            Pair const tool_name_c = {
-                input_state_c.x + input_state_w,
-                dc->height
+            Pair const tcs_c = {0, (i32)dc->height};
+            Pair const input_state_c = {
+                (i32)(tcs_c.x + tc_w * TCS_NUM),
+                (i32)dc->height
             };
-            Pair const line_w_c = {tool_name_c.x + tool_name_w, dc->height};
-            Pair const col_count_c = {dc->width - col_count_w, dc->height};
-            Pair const col_c = {col_count_c.x - col_name_len, dc->height};
+            Pair const tool_name_c = {
+                (i32)(input_state_c.x + input_state_w),
+                (i32)dc->height
+            };
+            Pair const line_w_c = {
+                (i32)(tool_name_c.x + tool_name_w),
+                (i32)dc->height
+            };
+            Pair const col_count_c = {
+                (i32)(dc->width - col_count_w),
+                (i32)dc->height
+            };
+            Pair const col_c = {
+                (i32)(col_count_c.x - col_name_len),
+                (i32)dc->height
+            };
             // colored rectangle
             static u32 const col_rect_w = 30;
             static u32 const col_value_size = 1 + 6;
@@ -1149,7 +1168,7 @@ void update_screen(struct Ctx* ctx) {
                 draw_int(
                     dc,
                     i + 1,
-                    (Pair) {tcs_c.x + tc_w * i, tcs_c.y},
+                    (Pair) {(i32)(tcs_c.x + tc_w * i), tcs_c.y},
                     ctx->curr_tc == i ? STATUSLINE.strong_font_argb
                                       : STATUSLINE.font_argb
                 );
@@ -1170,13 +1189,14 @@ void update_screen(struct Ctx* ctx) {
                 tool_name_c,
                 STATUSLINE.font_argb
             );
-            draw_int(dc, tc->sdata.line_w, line_w_c, STATUSLINE.font_argb);
+            draw_int(dc, (i32)tc->sdata.line_w, line_w_c, STATUSLINE.font_argb);
             /* color */ {
                 char col_value[col_value_size + 2];  // FIXME ?
                 sprintf(col_value, "#%06X", CURR_COL(tc) & 0xFFFFFF);
                 draw_string(dc, col_value, col_c, STATUSLINE.font_argb);
                 /* color count */ {
-                    char col_count[10];  // FIXME
+                    // FIXME how it possible
+                    char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
                     sprintf(
                         col_count,
                         "%d/%td",
@@ -1205,7 +1225,7 @@ void update_screen(struct Ctx* ctx) {
                                    col_value,
                                    curr_dig + hash_w
                                ),
-                           dc->height},
+                           (i32)dc->height},
                         STATUSLINE.strong_font_argb
                     );
                 }
@@ -1214,8 +1234,8 @@ void update_screen(struct Ctx* ctx) {
                     dc->dp,
                     dc->back_buffer,
                     dc->screen_gc,
-                    dc->width - col_name_len - col_rect_w - col_count_w,
-                    dc->height - STATUSLINE.height_px,
+                    (i32)(dc->width - col_name_len - col_rect_w - col_count_w),
+                    (i32)(dc->height - STATUSLINE.height_px),
                     col_rect_w,
                     STATUSLINE.height_px
                 );
@@ -1279,6 +1299,7 @@ void run(struct Ctx* ctx) {
 }
 
 struct Ctx setup(Display* dp) {
+    assert(dp);
     struct Ctx ctx = {
         .dc.dp = dp,
         .dc.width = CANVAS.default_width,
@@ -1299,6 +1320,8 @@ struct Ctx setup(Display* dp) {
                 .sdata.colors_argb = NULL,
                 .sdata.curr_col = 0,
                 .sdata.line_w = 5,
+                .prev_x = NIL,
+                .prev_y = NIL,
             };
             arrpush(ctx.tcs, tc);
             arrpush(ctx.tcs[i].sdata.colors_argb, 0xFF000000);
@@ -1462,7 +1485,9 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
         return True;  // something selected do nothing else
-    } else if (e->button == XMouseScrollDown || e->button == XMouseScrollUp) {
+    }
+
+    if (e->button == XMouseScrollDown || e->button == XMouseScrollUp) {
         if (e->state & ShiftMask) {
             ctx->dc.canvas_scroll.x += e->button == XMouseScrollDown ? -10 : 10;
         } else {
@@ -1493,15 +1518,16 @@ Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
 #define HANDLE_KEY_BEGIN(p_xkeypressedevent) \
     { \
         KeySym const handle_key_inp_key_sym = \
-            XLookupKeysym(&p_xkeypressedevent, 0); \
+            XLookupKeysym(&(p_xkeypressedevent), 0); \
         XKeyPressedEvent const handle_key_inp_event = p_xkeypressedevent;
 #define HANDLE_KEY_END() }
 #define HANDLE_KEY_CASE_MASK(p_mask, p_key) \
-    if (handle_key_inp_event.state & p_mask && handle_key_inp_key_sym == p_key)
+    if (handle_key_inp_event.state & (p_mask) \
+        && handle_key_inp_key_sym == (p_key))
 #define HANDLE_KEY_CASE_MASK_NOT(p_mask, p_key) \
-    if (!(handle_key_inp_event.state & p_mask) \
-        && handle_key_inp_key_sym == p_key)
-#define HANDLE_KEY_CASE(p_key) if (handle_key_inp_key_sym == p_key)
+    if (!(handle_key_inp_event.state & (p_mask)) \
+        && handle_key_inp_key_sym == (p_key))
+#define HANDLE_KEY_CASE(p_key) if (handle_key_inp_key_sym == (p_key))
 
 static void to_next_input_digit(struct Input* input, Bool is_increment) {
     assert(input->state == InputS_Color);
@@ -1608,14 +1634,14 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 u32 const value = e.state & ShiftMask ? 25 : 5;
                 resize_canvas(
                     &ctx->dc,
-                    ctx->dc.cv.width
-                        + (key_sym == XK_Left        ? -value
-                               : key_sym == XK_Right ? value
-                                                     : 0),
-                    ctx->dc.cv.height
-                        + (key_sym == XK_Down     ? -value
-                               : key_sym == XK_Up ? value
-                                                  : 0)
+                    (i32)(ctx->dc.cv.width
+                          + (key_sym == XK_Left        ? -value
+                                 : key_sym == XK_Right ? value
+                                                       : 0)),
+                    (i32)(ctx->dc.cv.height
+                          + (key_sym == XK_Down     ? -value
+                                 : key_sym == XK_Up ? value
+                                                    : 0))
                 );
                 update_screen(ctx);
             }
@@ -1670,9 +1696,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         return False;
     }
     if ((key_sym == XK_Up || key_sym == XK_Down) && !(e.state & ControlMask)) {
+        u32 col_num = arrlen(CURR_TC(ctx).sdata.colors_argb);
+        assert(col_num != 0);
         CURR_TC(ctx).sdata.curr_col =
             (CURR_TC(ctx).sdata.curr_col + (key_sym == XK_Up ? 1 : -1))
-            % arrlen(CURR_TC(ctx).sdata.colors_argb);
+            % col_num;
         update_screen(ctx);
     }
     HANDLE_KEY_END()
@@ -1715,7 +1743,9 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 
 // FIXME remove
 static unsigned char* ximage_to_rgb(XImage* image, i32 const w, i32 const h) {
-    unsigned char* data = (unsigned char*)malloc(w * h * 3);
+    size_t data_size = (size_t)w * h * 3;
+    unsigned char* data = (unsigned char*)malloc(data_size);
+    memset(data, '\0', data_size);
     if (data == NULL) {
         return NULL;
     }
@@ -1727,8 +1757,8 @@ static unsigned char* ximage_to_rgb(XImage* image, i32 const w, i32 const h) {
         for (i32 x = 0; x < w; ++x) {
             u64 pixel = XGetPixel(image, x, y);
             unsigned char blue = (pixel & blue_mask);
-            unsigned char green = (pixel & green_mask) >> 8;
-            unsigned char red = (pixel & red_mask) >> 16;
+            unsigned char green = (pixel & green_mask) >> 8U;
+            unsigned char red = (pixel & red_mask) >> 16U;
             data[ii + 2] = blue;
             data[ii + 1] = green;
             data[ii + 0] = red;
@@ -1815,11 +1845,11 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     target = None;
 
     if (selection.property != None) {
-        Atom actual_type;
-        i32 actual_format;
-        u64 bytes_after;
-        Atom* data;
-        u64 count;
+        Atom actual_type = 0;
+        i32 actual_format = 0;
+        u64 bytes_after = 0;
+        Atom* data = NULL;
+        u64 count = 0;
         XGetWindowProperty(
             ctx->dc.dp,
             ctx->dc.window,
@@ -1845,7 +1875,7 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     break;
                 }
             }
-            if (target != None)
+            if (target != None) {
                 XConvertSelection(
                     ctx->dc.dp,
                     atoms[A_Clipboard],
@@ -1854,6 +1884,7 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     ctx->dc.window,
                     CurrentTime
                 );
+            }
         } else if (selection.target == target) {
             // the data is in {data, count}
         }
