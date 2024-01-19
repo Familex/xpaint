@@ -1,4 +1,4 @@
-LIBS = -lX11 -lm -lXext
+LIBS = -lX11 -lm -lXext -lXrender
 CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
 CFLAGSD = -std=c99 -pedantic -Wall -g ${INCS} ${LIBS}
 
