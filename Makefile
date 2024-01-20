@@ -1,4 +1,5 @@
-LIBS = -lX11 -lm -lXext -lXrender
+INCS = -I/usr/include/freetype2 -I/usr/include
+LIBS = -lX11 -lm -lXext -lXft -lXrender
 CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
 CFLAGSD = -std=c99 -pedantic -Wall -g ${INCS} ${LIBS}
 
@@ -26,6 +27,9 @@ verbose: xpaint-d
 	@./xpaint-d -v
 
 check:
-	$(CLANGTIDY) $(HEADER) $(SRC) -- -I/usr/include
+	$(CLANGTIDY) $(HEADER) $(SRC) -- $(INCS)
 
-.PHONY: all clean exec verbose check
+dev:
+	bear -- make verbose
+
+.PHONY: all clean exec verbose check dev
