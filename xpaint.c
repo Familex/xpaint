@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #define STB_DS_IMPLEMENTATION
 #include "lib/stb_ds.h"
@@ -81,7 +82,6 @@ struct SelectonCircleDims {
 struct Ctx {
     struct DrawCtx {
         Display* dp;
-        Drawable screen;
         XVisualInfo vinfo;
         GC gc;
         GC screen_gc;
@@ -102,6 +102,7 @@ struct Ctx {
         void (*on_press)(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
         void (*on_release)(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
         void (*on_drag)(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
+        void (*on_move)(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
         // static zero terminated string pointer
         char* ssz_tool_name;
         i32 prev_x;
@@ -129,6 +130,8 @@ struct Ctx {
             } sel;
             struct PencilData {
                 u32 line_r;
+                u64 last_proc_drag_ev_us;
+                Pair last_processed_pointer;
             } pencil;
         } data;
     }* tcs;
@@ -166,9 +169,11 @@ struct Ctx {
 static void die(char const* errstr, ...);
 static void trace(char const* fmt, ...);
 
-static Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc);
-static Pair point_from_cv_to_scr_no_move(i32 x, i32 y, struct DrawCtx const* dc);
-static Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc);
+static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
+static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
+static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
+static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
+static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name);
@@ -190,6 +195,7 @@ static void tool_selection_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XB
 static void tool_selection_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
 static void tool_pencil_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
 static void tool_pencil_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
+static void tool_pencil_on_move(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
 static void tool_fill_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
 
 static Bool history_move(struct Ctx* ctx, Bool forward);
@@ -203,12 +209,11 @@ static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 l
 static void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w);
 static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to);
+static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc);
 static void update_screen(struct Ctx* ctx);
-
-static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
 static struct Ctx setup(Display* dp);
 static void run(struct Ctx* ctx);
@@ -281,19 +286,27 @@ void trace(char const* fmt, ...) {
     }
 }
 
-Pair point_from_cv_to_scr(i32 x, i32 y, struct DrawCtx const* dc) {
+Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
+    return point_from_cv_to_scr_xy(dc, p.x, p.y);
+}
+
+Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
         .x = x * (i32)dc->canvas_zoom - dc->canvas_scroll.x,
         .y = y * (i32)dc->canvas_zoom - dc->canvas_scroll.y,
     };
 }
 
-Pair point_from_cv_to_scr_no_move(i32 x, i32 y, struct DrawCtx const* dc) {
+Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p) {
     return (Pair
-    ) {.x = x * (i32)dc->canvas_zoom, .y = y * (i32)dc->canvas_zoom};
+    ) {.x = p.x * (i32)dc->canvas_zoom, .y = p.y * (i32)dc->canvas_zoom};
 }
 
-Pair point_from_scr_to_cv(i32 x, i32 y, struct DrawCtx const* dc) {
+Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p) {
+    return point_from_scr_to_cv_xy(dc, p.x, p.y);
+}
+
+Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
         .x = (x + dc->canvas_scroll.x) / (i32)dc->canvas_zoom,
         .y = (y + dc->canvas_scroll.y) / (i32)dc->canvas_zoom,
@@ -381,9 +394,12 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
         case Tool_Pencil:
             new_tc.on_release = &tool_pencil_on_release;
             new_tc.on_drag = &tool_pencil_on_drag;
+            new_tc.on_move = &tool_pencil_on_move;
             new_tc.ssz_tool_name = "pencil";
             new_tc.data.pencil = (struct PencilData) {
                 .line_r = 5,
+                .last_proc_drag_ev_us = 0,
+                .last_processed_pointer = (Pair) {NIL, NIL},
             };
             break;
         case Tool_Fill:
@@ -426,7 +442,7 @@ void tool_selection_on_press(
     assert(tc->type == Tool_Selection);
     if (event->button == XLeftMouseBtn) {
         struct SelectionData* sd = &tc->data.sel;
-        Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+        Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
         if (HAS_SELECTION(tc)
             && point_in_rect(
                 pointer,
@@ -455,7 +471,7 @@ void tool_selection_on_release(
 
         if (SELECTION_DRAGGING(tc)) {
             // finish drag selection
-            Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+            Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
             Pair move_vec = {
                 pointer.x - sd->drag_from.x,
                 pointer.y - sd->drag_from.y
@@ -492,7 +508,7 @@ void tool_selection_on_drag(
     XMotionEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
-    Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (SELECTION_DRAGGING(tc)) {
         tc->data.sel.drag_to = pointer;
     } else if (tc->is_holding) {
@@ -509,7 +525,7 @@ void tool_pencil_on_release(
     assert(tc->type == Tool_Pencil);
 
     if (event->button == XLeftMouseBtn && !tc->is_dragging) {
-        Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
+        Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
         canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
     }
 }
@@ -522,11 +538,34 @@ void tool_pencil_on_drag(
     assert(tc->type == Tool_Pencil);
     assert(tc->is_holding);
 
-    Pair pointer = point_from_scr_to_cv(event->x, event->y, dc);
-    Pair prev_pointer = (tc->prev_x != NIL && tc->prev_y != NIL)
-        ? point_from_scr_to_cv(tc->prev_x, tc->prev_y, dc)
+    struct PencilData* pd = &tc->data.pencil;
+
+    struct timeval current_time;
+    gettimeofday(&current_time, 0x0);
+    if (current_time.tv_usec - pd->last_proc_drag_ev_us
+        < PENCIL_TOOL.drag_period_us) {
+        return;
+    }
+    pd->last_proc_drag_ev_us = current_time.tv_usec;
+
+    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    Pair prev_pointer = (pd->last_processed_pointer.x != NIL)
+        ? point_from_scr_to_cv(dc, pd->last_processed_pointer)
         : pointer;
     canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
+    pd->last_processed_pointer = (Pair) {event->x, event->y};
+}
+
+void tool_pencil_on_move(
+    struct DrawCtx* dc,
+    struct ToolCtx* tc,
+    XMotionEvent const* event
+) {
+    assert(tc);
+    assert(tc->type == Tool_Pencil);
+
+    tc->data.pencil.last_proc_drag_ev_us = 0;
+    tc->data.pencil.last_processed_pointer = (Pair) {NIL, NIL};
 }
 
 static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
@@ -573,7 +612,7 @@ void tool_fill_on_release(
     struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
-    Pair const pointer = point_from_scr_to_cv(event->x, event->y, dc);
+    Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
     flood_fill(dc->cv.im, CURR_COL(tc), pointer.x, pointer.y);
 }
@@ -810,7 +849,7 @@ void draw_selection_circle(
     XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.background_argb);
     XFillArc(
         dc->dp,
-        dc->screen,
+        dc->window,
         dc->screen_gc,
         (i32)sel_rect.outer.x,
         (i32)sel_rect.outer.y,
@@ -823,7 +862,7 @@ void draw_selection_circle(
     XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.line_col_argb);
     XDrawArc(
         dc->dp,
-        dc->screen,
+        dc->window,
         dc->screen_gc,
         (i32)sel_rect.inner.x,
         (i32)sel_rect.inner.y,
@@ -835,7 +874,7 @@ void draw_selection_circle(
 
     XDrawArc(
         dc->dp,
-        dc->screen,
+        dc->window,
         dc->screen_gc,
         (i32)sel_rect.outer.x,
         (i32)sel_rect.outer.y,
@@ -853,7 +892,7 @@ void draw_selection_circle(
             for (u32 line_num = 0; line_num < sc->item_count; ++line_num) {
                 XDrawLine(
                     dc->dp,
-                    dc->screen,
+                    dc->window,
                     dc->screen_gc,
                     sc->x
                         + (i32)(cos(segment_rad * line_num) * sel_rect.inner.r),
@@ -874,7 +913,7 @@ void draw_selection_circle(
             // FIXME use XRender transparency
             XPutImage(
                 dc->dp,
-                dc->screen,
+                dc->window,
                 dc->screen_gc,
                 image,
                 0,
@@ -903,7 +942,7 @@ void draw_selection_circle(
             );
             XFillArc(
                 dc->dp,
-                dc->screen,
+                dc->window,
                 dc->screen_gc,
                 (i32)sel_rect.outer.x,
                 (i32)sel_rect.outer.y,
@@ -919,7 +958,7 @@ void draw_selection_circle(
             );
             XFillArc(
                 dc->dp,
-                dc->screen,
+                dc->window,
                 dc->screen_gc,
                 (i32)sel_rect.inner.x,
                 (i32)sel_rect.inner.y,
@@ -937,7 +976,7 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
 
     XClearArea(
         dc->dp,
-        dc->screen,
+        dc->window,
         (i32)sel_rect.outer.x - 1,
         (i32)sel_rect.outer.y - 1,
         sel_rect.outer.r * 2 + 2,
@@ -1094,8 +1133,8 @@ void update_screen(struct Ctx* ctx) {
             Pair dim = {MAX(sd.bx, sd.ex) - p.x, MAX(sd.by, sd.ey) - p.y};
             draw_rect(
                 &ctx->dc,
-                point_from_cv_to_scr(p.x, p.y, &ctx->dc),
-                point_from_cv_to_scr_no_move(dim.x, dim.y, &ctx->dc),
+                point_from_cv_to_scr(&ctx->dc, p),
+                point_from_cv_to_scr_no_move(&ctx->dc, dim),
                 0x00000,
                 SELECTION_TOOL.line_w,
                 SELECTION_TOOL.line_style,
@@ -1107,8 +1146,8 @@ void update_screen(struct Ctx* ctx) {
                 i32 dy = sd.drag_to.y - sd.drag_from.y;
                 draw_rect(
                     &ctx->dc,
-                    point_from_cv_to_scr(p.x + dx, p.y + dy, &ctx->dc),
-                    point_from_cv_to_scr_no_move(dim.x, dim.y, &ctx->dc),
+                    point_from_cv_to_scr_xy(&ctx->dc, p.x + dx, p.y + dy),
+                    point_from_cv_to_scr_no_move(&ctx->dc, dim),
                     SELECTION_TOOL.drag_argb,
                     SELECTION_TOOL.line_w,
                     SELECTION_TOOL.line_style,
@@ -1246,7 +1285,7 @@ void update_screen(struct Ctx* ctx) {
     XdbeSwapBuffers(
         ctx->dc.dp,
         &(XdbeSwapInfo) {
-            .swap_window = ctx->dc.screen,  // FIXME screen or window?
+            .swap_window = ctx->dc.window,
             .swap_action = 0,
         },
         1
@@ -1363,7 +1402,6 @@ struct Ctx setup(Display* dp) {
            .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
                | ExposureMask | PointerMotionMask | StructureNotifyMask}
     );
-    ctx.dc.screen = ctx.dc.window;
     ctx.dc.screen_gc = XCreateGC(dp, ctx.dc.window, 0, 0);
 
     XSetWMName(
@@ -1720,6 +1758,11 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         CURR_TC(ctx).is_dragging = True;
         if (CURR_TC(ctx).on_drag) {
             CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), e);
+            update_screen(ctx);
+        }
+    } else {
+        if (CURR_TC(ctx).on_move) {
+            CURR_TC(ctx).on_move(&ctx->dc, &CURR_TC(ctx), e);
             update_screen(ctx);
         }
     }

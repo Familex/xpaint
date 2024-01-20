@@ -64,6 +64,12 @@ struct {
 };
 
 struct {
+    u32 drag_period_us;
+} const PENCIL_TOOL = {
+    .drag_period_us = 10000,
+};
+
+struct {
     u32 background_argb;
     u32 default_width;
     u32 default_height;
