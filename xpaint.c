@@ -169,6 +169,7 @@ struct Ctx {
 // clang-format off
 static void die(char const* errstr, ...);
 static void trace(char const* fmt, ...);
+static void* ecalloc(u32 n, u32 size);
 
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
@@ -285,6 +286,15 @@ void trace(char const* fmt, ...) {
         fprintf(stdout, "\n");
         va_end(ap);
     }
+}
+
+void* ecalloc(u32 n, u32 size) {
+    void* p = calloc(n, size);
+
+    if (!p) {
+        die("calloc:");
+    }
+    return p;
 }
 
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
@@ -1788,8 +1798,7 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 // FIXME remove
 static unsigned char* ximage_to_rgb(XImage* image, i32 const w, i32 const h) {
     size_t data_size = (size_t)w * h * 3;
-    unsigned char* data = (unsigned char*)malloc(data_size);
-    memset(data, '\0', data_size);
+    unsigned char* data = (unsigned char*)ecalloc(1, data_size);
     if (data == NULL) {
         return NULL;
     }
