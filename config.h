@@ -6,6 +6,7 @@ char const title[] = "xpaint";
 
 u32 const MAX_COLORS = 9;
 u32 const TCS_NUM = 3;
+char const FONT_NAME[] = "monospace:size=10";
 
 struct {
     u32 background_rgb;
@@ -17,12 +18,10 @@ struct {
     u32 background_argb;
     u32 font_argb;
     u32 strong_font_argb;
-    u32 height_px;  // FIXME
 } const STATUSLINE = {
     .background_argb = 0xFF000000,
     .font_argb = 0xFFFFFFFF,
     .strong_font_argb = 0xFFFF0000,
-    .height_px = 10,
 };
 
 struct {

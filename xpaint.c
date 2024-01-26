@@ -1,6 +1,7 @@
 #include <X11/X.h>
 #include <X11/Xatom.h>  // XA_*
 #include <X11/Xft/Xft.h>
+#include <X11/Xft/XftCompat.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/Xdbe.h>  // back buffer
@@ -38,9 +39,12 @@
 #define MIN(A, B)        ((A) < (B) ? (A) : (B))
 #define CLAMP(X, L, H)   (((X) < (L)) ? (L) : ((X) > (H)) ? (H) : (X))
 #define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
+#define BETWEEN(X, A, B) ((A) <= (X) && (X) <= (B))
 #define PI               (3.141)
 // default value for signed integers
 #define NIL              (-1)
+#define UTF_INVALID      0xFFFD
+#define UTF_SIZ          4
 
 #define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc) ((p_tc)->sdata.colors_argb[(p_tc)->sdata.curr_col])
@@ -56,6 +60,13 @@
     && (p_tc)->data.sel.drag_from.x != NIL \
     && (p_tc)->data.sel.drag_from.y != NIL)
 // clang-format on
+
+static unsigned char const utfbyte[UTF_SIZ + 1] = {0x80, 0, 0xC0, 0xE0, 0xF0};
+static unsigned char const utfmask[UTF_SIZ + 1] =
+    {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
+static i64 const utfmin[UTF_SIZ + 1] = {0, 0, 0x80, 0x800, 0x10000};
+static i64 const utfmax[UTF_SIZ + 1] =
+    {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
 enum {
     A_Clipboard,
@@ -86,7 +97,6 @@ struct Ctx {
         XVisualInfo vinfo;
         GC gc;
         GC screen_gc;
-        XFontStruct* font;
         Window window;
         u32 width;
         u32 height;
@@ -98,6 +108,10 @@ struct Ctx {
             u32 width;
             u32 height;
         } cv;
+        struct Fnt {
+            XftFont* xfont;
+            u32 h;
+        } fnt;
     } dc;
     struct ToolCtx {
         void (*on_press)(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
@@ -170,6 +184,7 @@ struct Ctx {
 static void die(char const* errstr, ...);
 static void trace(char const* fmt, ...);
 static void* ecalloc(u32 n, u32 size);
+static u32 digit_count(u32 number);
 
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
@@ -179,8 +194,6 @@ static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name);
-
-static i32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -297,6 +310,10 @@ void* ecalloc(u32 n, u32 size) {
     return p;
 }
 
+u32 digit_count(u32 number) {
+    return (u32)floor(log10(number)) + 1;
+}
+
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
     return point_from_cv_to_scr_xy(dc, p.x, p.y);
 }
@@ -351,15 +368,6 @@ XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
     );
 
     return result;
-}
-
-i32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
-    if (dc->font == NULL) {
-        trace("warning: font not found");
-        return 0;
-    }
-
-    return XTextWidth(dc->font, str, (i32)len);
 }
 
 struct SelectonCircleDims
@@ -996,23 +1004,84 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     );
 }
 
-static void
-draw_string(struct DrawCtx* dc, char const* sz_str, Pair c, u32 col) {
-    XSetForeground(dc->dp, dc->screen_gc, col);
-    XDrawImageString(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
+static long utf8decodebyte(const char c, size_t* i) {
+    for (*i = 0; *i < (UTF_SIZ + 1); ++(*i)) {
+        if (((unsigned char)c & utfmask[*i]) == utfbyte[*i]) {
+            return (unsigned char)c & ~utfmask[*i];
+        }
+    }
+    return 0;
+}
+
+static size_t utf8validate(long* u, size_t i) {
+    if (!BETWEEN(*u, utfmin[i], utfmax[i]) || BETWEEN(*u, 0xD800, 0xDFFF)) {
+        *u = UTF_INVALID;
+    }
+    for (i = 1; *u > utfmax[i]; ++i) {
+        ;
+    }
+    return i;
+}
+
+static size_t utf8decode(const char* c, long* u, size_t clen) {
+    size_t i;
+    size_t j;
+    size_t len;
+    size_t type;
+    long udecoded;
+
+    *u = UTF_INVALID;
+    if (!clen) {
+        return 0;
+    }
+    udecoded = utf8decodebyte(c[0], &len);
+    if (!BETWEEN(len, 1, UTF_SIZ)) {
+        return 1;
+    }
+    for (i = 1, j = 1; i < clen && j < len; ++i, ++j) {
+        udecoded = (udecoded << 6) | utf8decodebyte(c[i], &type);
+        if (type) {
+            return j;
+        }
+    }
+    if (j < len) {
+        return 0;
+    }
+    *u = udecoded;
+    utf8validate(u, len);
+
+    return len;
+}
+
+// FIXME use themes to pass color (dc)
+static void draw_string(struct DrawCtx* dc, char const* str, Pair c, u32 col) {
+    Colormap cm = DefaultColormap(dc->dp, DefaultScreen(dc->dp));
+    XftDraw* d = XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, cm);
+    u32 utf8strlen = 0;
+    for (char const* s = str; *s; ++s) {
+        i64 utf8codepoint = 0;
+        utf8strlen += utf8decode(s, &utf8codepoint, UTF_SIZ);
+    }
+    XftColor xft_col;
+    // FIXME use themes to pass color
+    char xft_col_name[6 + 1 + 1];
+    sprintf(xft_col_name, "#%X", col & 0xFFFFFF);
+    XftColorAllocName(dc->dp, dc->vinfo.visual, cm, xft_col_name, &xft_col);
+    XftDrawStringUtf8(
+        d,
+        &xft_col,
+        dc->fnt.xfont,
         c.x,
         c.y,
-        sz_str,
-        (i32)strlen(sz_str)
+        (XftChar8*)str,
+        (i32)utf8strlen
     );
+    XftDrawDestroy(d);
 }
 
 static void draw_int(struct DrawCtx* dc, i32 i, Pair c, u32 col) {
     static u32 const MAX_SIZE = 50;
-    assert(floor(log10(i) + 1) < MAX_SIZE);
+    assert(digit_count(i) < MAX_SIZE);
 
     char buf[MAX_SIZE];
     memset(buf, '\0', MAX_SIZE);  // FIXME memset_s
@@ -1056,8 +1125,18 @@ static int draw_rect(
     );
 }
 
-static u32 digit_count(u32 number) {
-    return (u32)floor(log10(number)) + 1;
+static u32
+get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
+    XGlyphInfo ext;
+
+    XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
+    return ext.xOff;
+}
+
+static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
+    char buf[50] = {0};  // XXX magic value
+    sprintf(buf, format, i);
+    return get_string_width(dc, buf, strlen(buf));
 }
 
 void update_screen(struct Ctx* ctx) {
@@ -1171,57 +1250,73 @@ void update_screen(struct Ctx* ctx) {
     /* statusline */ {
         struct DrawCtx* dc = &ctx->dc;
         struct ToolCtx* tc = &CURR_TC(ctx);
+        u32 const statusline_h = dc->fnt.xfont->ascent;
         XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
         XFillRectangle(
             dc->dp,
             dc->back_buffer,
             dc->screen_gc,
             0,
-            (i32)(dc->height - STATUSLINE.height_px),
+            (i32)(dc->height - statusline_h),
             dc->width,
-            STATUSLINE.height_px
+            statusline_h
         );
         /* captions */ {
-            static u32 const input_state_w = 70;  // FIXME
-            static u32 const col_name_len = 50;  // FIXME
-            static u32 const col_count_w = 20;  // FIXME use MAX_COLORS
-            static u32 const tc_w = 10;  // FIXME
-            static u32 const tool_name_w = 80;  // FIXME
+            // clang-format off
+            static Bool statics_initialized = False;
+            static u32 const gap = 5;
+            static u32 const small_gap = gap / 2;
+            static u32 input_state_w = 0;
+            static u32 col_name_w = 0;
+            static u32 tcs_w = 0;
+            static u32 col_count_w = 0;
+            static u32 tool_name_w = 0;
+            if (!statics_initialized) {
+                // XXX uses 'F' as average character
+                /* col_count_w */ {
+                    col_count_w =
+                        get_string_width(dc, "/", 1) +
+                        get_int_width(dc, "%d", MAX_COLORS) * 2 +
+                        gap;
+                }
+                /* tcs_w */ {
+                    for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                        tcs_w += get_int_width(dc, "%d", tc_name) + small_gap;
+                    }
+                    tcs_w += gap;
+                }
+                col_name_w = get_string_width(dc, "#FFFFFF", 7) + gap;
+                // FIXME how many symbols?
+                input_state_w = get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
+                tool_name_w = get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
+                statics_initialized = True;
+            }
             Pair const tcs_c = {0, (i32)dc->height};
-            Pair const input_state_c = {
-                (i32)(tcs_c.x + tc_w * TCS_NUM),
-                (i32)dc->height
-            };
-            Pair const tool_name_c = {
-                (i32)(input_state_c.x + input_state_w),
-                (i32)dc->height
-            };
-            Pair const line_w_c = {
-                (i32)(tool_name_c.x + tool_name_w),
-                (i32)dc->height
-            };
-            Pair const col_count_c = {
-                (i32)(dc->width - col_count_w),
-                (i32)dc->height
-            };
-            Pair const col_c = {
-                (i32)(col_count_c.x - col_name_len),
-                (i32)dc->height
-            };
+            Pair const input_state_c = { (i32)(tcs_c.x + tcs_w), (i32)dc->height };
+            Pair const tool_name_c = { (i32)(input_state_c.x + input_state_w), (i32)dc->height };
+            Pair const line_w_c = { (i32)(tool_name_c.x + tool_name_w), (i32)dc->height };
+            Pair const col_count_c = { (i32)(dc->width - col_count_w), (i32)dc->height };
+            Pair const col_c = { (i32)(col_count_c.x - col_name_w), (i32)dc->height };
+            // clang-format on
             // colored rectangle
             static u32 const col_rect_w = 30;
             static u32 const col_value_size = 1 + 6;
 
             XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
             XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_argb);
-            for (i32 i = 0; i < TCS_NUM; ++i) {
-                draw_int(
-                    dc,
-                    i + 1,
-                    (Pair) {(i32)(tcs_c.x + tc_w * i), tcs_c.y},
-                    ctx->curr_tc == i ? STATUSLINE.strong_font_argb
-                                      : STATUSLINE.font_argb
-                );
+            /* tc */ {
+                i32 x = tcs_c.x;
+                for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                    draw_int(
+                        dc,
+                        tc_name,
+                        (Pair) {x, tcs_c.y},
+                        ctx->curr_tc == (tc_name - 1)
+                            ? STATUSLINE.strong_font_argb
+                            : STATUSLINE.font_argb
+                    );
+                    x += (i32)(get_int_width(dc, "%d", tc_name) + small_gap);
+                }
             }
             /* input state */ {
                 draw_string(
@@ -1270,7 +1365,7 @@ void update_screen(struct Ctx* ctx) {
                         col_digit_value,
                         (Pair
                         ) {col_c.x
-                               + get_string_width(
+                               + (i32)get_string_width(
                                    dc,
                                    col_value,
                                    curr_dig + hash_w
@@ -1284,10 +1379,10 @@ void update_screen(struct Ctx* ctx) {
                     dc->dp,
                     dc->back_buffer,
                     dc->screen_gc,
-                    (i32)(dc->width - col_name_len - col_rect_w - col_count_w),
-                    (i32)(dc->height - STATUSLINE.height_px),
+                    (i32)(dc->width - col_name_w - col_rect_w - col_count_w),
+                    (i32)(dc->height - statusline_h),
                     col_rect_w,
-                    STATUSLINE.height_px
+                    statusline_h
                 );
             }
         }
@@ -1354,7 +1449,6 @@ struct Ctx setup(Display* dp) {
         .dc.dp = dp,
         .dc.width = CANVAS.default_width,
         .dc.height = CANVAS.default_height,
-        .dc.font = NULL,
         .dc.canvas_zoom = 1,
         .dc.canvas_scroll = {0, 0},
         .hist_next = NULL,
@@ -1432,15 +1526,11 @@ struct Ctx setup(Display* dp) {
         XSetWMProtocols(dp, ctx.dc.window, &wm_delete_window, 1);
     }
 
-    // FIXME
     /* font */ {
-        XFontStruct* f = XLoadQueryFont(dp, "fixed");  // FIXME
-        if (f != NULL) {
-            ctx.dc.font = f;
-            XSetFont(dp, ctx.dc.screen_gc, ctx.dc.font->fid);
-        } else {
-            puts("xpaint: font not found");
-        }
+        // XXX valgrind detects leak here
+        XftFont* xfont = XftFontOpenName(dp, screen, FONT_NAME);
+        ctx.dc.fnt.xfont = xfont;
+        ctx.dc.fnt.h = xfont->ascent + xfont->descent;
     }
 
     /* static images */ {
@@ -1961,7 +2051,7 @@ void cleanup(struct Ctx* ctx) {
         arrfree(ctx->tcs[i].sdata.colors_argb);
     }
     arrfree(ctx->tcs);
-    XFreeFont(ctx->dc.dp, ctx->dc.font);
+    XftFontClose(ctx->dc.dp, ctx->dc.fnt.xfont);
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
     XDestroyImage(ctx->dc.cv.im);
