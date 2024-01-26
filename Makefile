@@ -1,7 +1,7 @@
 INCS = -I/usr/include/freetype2 -I/usr/include
 LIBS = -lX11 -lm -lXext -lXft -lXrender
 CFLAGS = -std=c99 -pedantic -Wall -O2 ${INCS} ${LIBS}
-CFLAGSD = -std=c99 -pedantic -Wall -g ${INCS} ${LIBS}
+CFLAGSD = -std=c99 -pedantic -Wall -g -Og ${INCS} ${LIBS}
 
 CC ?= cc
 CLANGTIDY ?= clang-tidy
