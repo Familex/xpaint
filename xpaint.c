@@ -43,8 +43,8 @@
 #define PI               (3.141)
 // default value for signed integers
 #define NIL              (-1)
-#define UTF_INVALID      0xFFFD
-#define UTF_SIZ          4
+#define UTF_INVALID      (0xFFFD)
+#define UTF_SIZ          (4)
 
 #define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc) ((p_tc)->sdata.colors_argb[(p_tc)->sdata.curr_col])
@@ -60,13 +60,6 @@
     && (p_tc)->data.sel.drag_from.x != NIL \
     && (p_tc)->data.sel.drag_from.y != NIL)
 // clang-format on
-
-static unsigned char const utfbyte[UTF_SIZ + 1] = {0x80, 0, 0xC0, 0xE0, 0xF0};
-static unsigned char const utfmask[UTF_SIZ + 1] =
-    {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
-static i64 const utfmin[UTF_SIZ + 1] = {0, 0, 0x80, 0x800, 0x10000};
-static i64 const utfmax[UTF_SIZ + 1] =
-    {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
 enum {
     A_Clipboard,
@@ -1004,41 +997,48 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     );
 }
 
-static long utf8decodebyte(const char c, size_t* i) {
+static i64 utf8decodebyte(const char c, usize* i) {
+    static unsigned char const UTFBYTE[UTF_SIZ + 1] =
+        {0x80, 0, 0xC0, 0xE0, 0xF0};
+    static unsigned char const UTFMASK[UTF_SIZ + 1] =
+        {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
+
     for (*i = 0; *i < (UTF_SIZ + 1); ++(*i)) {
-        if (((unsigned char)c & utfmask[*i]) == utfbyte[*i]) {
-            return (unsigned char)c & ~utfmask[*i];
+        if (((unsigned char)c & UTFMASK[*i]) == UTFBYTE[*i]) {
+            return (unsigned char)c & ~UTFMASK[*i];
         }
     }
     return 0;
 }
 
-static size_t utf8validate(long* u, size_t i) {
-    if (!BETWEEN(*u, utfmin[i], utfmax[i]) || BETWEEN(*u, 0xD800, 0xDFFF)) {
+static usize utf8validate(i64* u, usize i) {
+    static i64 const UTFMIN[UTF_SIZ + 1] = {0, 0, 0x80, 0x800, 0x10000};
+    static i64 const UTFMAX[UTF_SIZ + 1] =
+        {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
+
+    if (!BETWEEN(*u, UTFMIN[i], UTFMAX[i]) || BETWEEN(*u, 0xD800, 0xDFFF)) {
         *u = UTF_INVALID;
     }
-    for (i = 1; *u > utfmax[i]; ++i) {
+    for (i = 1; *u > UTFMAX[i]; ++i) {
         ;
     }
     return i;
 }
 
-static size_t utf8decode(const char* c, long* u, size_t clen) {
-    size_t i;
-    size_t j;
-    size_t len;
-    size_t type;
-    long udecoded;
-
+static u64 utf8decode(const char* c, i64* u, usize clen) {
     *u = UTF_INVALID;
     if (!clen) {
         return 0;
     }
-    udecoded = utf8decodebyte(c[0], &len);
+    usize len;
+
+    i64 udecoded = utf8decodebyte(c[0], &len);
     if (!BETWEEN(len, 1, UTF_SIZ)) {
         return 1;
     }
-    for (i = 1, j = 1; i < clen && j < len; ++i, ++j) {
+    usize j = 1;
+    for (usize i = 1; i < clen && j < len; ++i, ++j) {
+        usize type;
         udecoded = (udecoded << 6) | utf8decodebyte(c[i], &type);
         if (type) {
             return j;
