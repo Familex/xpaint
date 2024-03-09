@@ -1279,7 +1279,8 @@ void update_screen(struct Ctx* ctx) {
     /* statusline */ {
         struct DrawCtx* dc = &ctx->dc;
         struct ToolCtx* tc = &CURR_TC(ctx);
-        u32 const statusline_h = dc->fnt.xfont->ascent;
+        u32 const statusline_h =
+            dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
         XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
         XFillRectangle(
             dc->dp,
@@ -1292,15 +1293,16 @@ void update_screen(struct Ctx* ctx) {
         );
         /* captions */ {
             // clang-format off
-            static Bool statics_initialized = False;
+            static Bool widths_initialized = False;
             static u32 const gap = 5;
             static u32 const small_gap = gap / 2;
-            static u32 input_state_w = 0;
-            static u32 col_name_w = 0;
-            static u32 tcs_w = 0;
-            static u32 col_count_w = 0;
-            static u32 tool_name_w = 0;
-            if (!statics_initialized) {
+            // widths of captions
+            static u32 input_state_w = NIL;
+            static u32 col_name_w = NIL;
+            static u32 tcs_w = NIL;
+            static u32 col_count_w = NIL;
+            static u32 tool_name_w = NIL;
+            if (!widths_initialized) {
                 // XXX uses 'F' as average character
                 /* col_count_w */ {
                     col_count_w =
@@ -1318,14 +1320,15 @@ void update_screen(struct Ctx* ctx) {
                 // FIXME how many symbols?
                 input_state_w = get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
                 tool_name_w = get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
-                statics_initialized = True;
+                widths_initialized = True;
             }
-            Pair const tcs_c = {0, (i32)dc->height};
-            Pair const input_state_c = { (i32)(tcs_c.x + tcs_w), (i32)dc->height };
-            Pair const tool_name_c = { (i32)(input_state_c.x + input_state_w), (i32)dc->height };
-            Pair const line_w_c = { (i32)(tool_name_c.x + tool_name_w), (i32)dc->height };
-            Pair const col_count_c = { (i32)(dc->width - col_count_w), (i32)dc->height };
-            Pair const col_c = { (i32)(col_count_c.x - col_name_w), (i32)dc->height };
+            // left **bottom** corners of captions
+            Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE.padding_bottom)};
+            Pair const input_state_c = { (i32)(tcs_c.x + tcs_w), tcs_c.y };
+            Pair const tool_name_c = { (i32)(input_state_c.x + input_state_w), input_state_c.y };
+            Pair const line_w_c = { (i32)(tool_name_c.x + tool_name_w), tool_name_c.y };
+            Pair const col_count_c = { (i32)(dc->width - col_count_w), line_w_c.y };
+            Pair const col_c = { (i32)(col_count_c.x - col_name_w), col_count_c.y };
             // clang-format on
             // colored rectangle
             static u32 const col_rect_w = 30;
@@ -1399,7 +1402,7 @@ void update_screen(struct Ctx* ctx) {
                                    col_value,
                                    curr_dig + hash_w
                                ),
-                           (i32)dc->height},
+                           col_c.y},
                         STATUSLINE.strong_font_argb
                     );
                 }
@@ -1841,9 +1844,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 to_next_input_digit(&ctx->input, False);
                 update_screen(ctx);
             }
+            // change selected color digit with pressed key
             if ((key_sym >= XK_0 && key_sym <= XK_9)
                 || (key_sym >= XK_a && key_sym <= XK_f)) {
-                // current_digit from left to right except alpha (aarrggbb <=> --012345)
+                // selected digit counts from left to right except alpha (aarrggbb <=> --012345)
                 u32 val = key_sym - (key_sym <= XK_9 ? XK_0 : XK_a - 10);
                 u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
                 CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear

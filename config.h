@@ -18,10 +18,12 @@ struct {
     u32 background_argb;
     u32 font_argb;
     u32 strong_font_argb;
+    u32 padding_bottom;
 } const STATUSLINE = {
     .background_argb = 0xFF000000,
     .font_argb = 0xFFFFFFFF,
     .strong_font_argb = 0xFFFF0000,
+    .padding_bottom = 4,
 };
 
 struct {
