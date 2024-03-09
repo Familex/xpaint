@@ -221,6 +221,7 @@ static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 l
 static void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w);
 static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to);
+static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
 static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
@@ -867,6 +868,14 @@ void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to) {
     }
 }
 
+void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
+    for (u32 x = c.x; x < (c.x + dims.x); ++x) {
+        for (u32 y = c.y; y < (c.y + dims.y); ++y) {
+            ximage_put_checked(dc->cv.im, x, y, color);
+        }
+    }
+}
+
 void draw_selection_circle(
     struct DrawCtx* dc,
     struct SelectionCircle const* sc,
@@ -1435,14 +1444,33 @@ void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height) {
         trace("resize_canvas: invalid canvas size");
         return;
     }
-
-    XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
-
-    XDestroyImage(dc->cv.im);
-
-    dc->cv.im = new_cv_im;
+    u32 old_width = dc->cv.width;
+    u32 old_height = dc->cv.height;
     dc->cv.width = new_width;
     dc->cv.height = new_height;
+
+    // FIXME can fill color be changed?
+    XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
+    XDestroyImage(dc->cv.im);
+    dc->cv.im = new_cv_im;
+
+    // fill new area if needed
+    if (old_width < new_width) {
+        canvas_fill_rect(
+            dc,
+            (Pair) {(i32)old_width, 0},
+            (Pair) {(i32)(new_width - old_width), new_height},
+            CANVAS.background_argb
+        );
+    }
+    if (old_height < new_height) {
+        canvas_fill_rect(
+            dc,
+            (Pair) {0, (i32)old_height},
+            (Pair) {new_width, (i32)(new_height - old_height)},
+            CANVAS.background_argb
+        );
+    }
 }
 
 void free_sel_circ(struct SelectionCircle* sel_circ) {
