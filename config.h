@@ -74,8 +74,10 @@ struct {
     u32 background_argb;
     u32 default_width;
     u32 default_height;
+    u32 max_zoom;
 } const CANVAS = {
     .background_argb = 0xFFAA0000,
     .default_width = 500,
     .default_height = 800,
+    .max_zoom = 10,
 };

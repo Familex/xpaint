@@ -116,6 +116,7 @@ struct Ctx {
         char* ssz_tool_name;
         i32 prev_x;
         i32 prev_y;
+        u32 holding_button;
         Bool is_holding;
         Bool is_dragging;
         enum ToolType {
@@ -564,6 +565,10 @@ void tool_pencil_on_drag(
     assert(tc->type == Tool_Pencil);
     assert(tc->is_holding);
 
+    if (tc->holding_button != XLeftMouseBtn) {
+        return;
+    }
+
     struct PencilData* pd = &tc->data.pencil;
 
     struct timeval current_time;
@@ -638,6 +643,9 @@ void tool_fill_on_release(
     struct ToolCtx* tc,
     XButtonReleasedEvent const* event
 ) {
+    if (tc->holding_button != XLeftMouseBtn) {
+        return;
+    }
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
     flood_fill(dc->cv.im, CURR_COL(tc), pointer.x, pointer.y);
@@ -1680,16 +1688,18 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         init_sel_circ_tools(&ctx->sc, e->x, e->y);
         draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
-    if (CURR_TC(ctx).on_press) {
-        CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), e);
-        update_screen(ctx);
-    }
     if (e->button == XLeftMouseBtn) {
         // next history invalidated after user action
         historyarr_clear(ctx->dc.dp, &ctx->hist_next);
         history_push(&ctx->hist_prev, ctx);
-        CURR_TC(ctx).is_holding = True;
     }
+    if (CURR_TC(ctx).on_press) {
+        CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), e);
+        update_screen(ctx);
+    }
+
+    CURR_TC(ctx).holding_button = e->button;
+    CURR_TC(ctx).is_holding = True;
 
     return True;
 }
@@ -1707,10 +1717,14 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     if (e->button == XMouseScrollDown || e->button == XMouseScrollUp) {
-        if (e->state & ShiftMask) {
-            ctx->dc.canvas_scroll.x += e->button == XMouseScrollDown ? -10 : 10;
+        i32 sign = e->button == XMouseScrollUp ? 1 : -1;
+        if (e->state & ControlMask) {
+            ctx->dc.canvas_zoom =
+                CLAMP(ctx->dc.canvas_zoom + sign, 1, CANVAS.max_zoom);
+        } else if (e->state & ShiftMask) {
+            ctx->dc.canvas_scroll.x += sign * 10;
         } else {
-            ctx->dc.canvas_scroll.y += e->button == XMouseScrollDown ? -10 : 10;
+            ctx->dc.canvas_scroll.y += sign * 10;
         }
         update_screen(ctx);
     }
@@ -1865,11 +1879,13 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_equal) {
-                ctx->dc.canvas_zoom = CLAMP(ctx->dc.canvas_zoom + 1, 1, 4);
+                ctx->dc.canvas_zoom =
+                    CLAMP(ctx->dc.canvas_zoom + 1, 1, CANVAS.max_zoom);
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_minus) {
-                ctx->dc.canvas_zoom = CLAMP(ctx->dc.canvas_zoom - 1, 1, 4);
+                ctx->dc.canvas_zoom =
+                    CLAMP(ctx->dc.canvas_zoom - 1, 1, CANVAS.max_zoom);
                 update_screen(ctx);
             }
         } break;
@@ -1940,6 +1956,11 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         CURR_TC(ctx).is_dragging = True;
         if (CURR_TC(ctx).on_drag) {
             CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), e);
+            update_screen(ctx);
+        }
+        if (CURR_TC(ctx).holding_button == XMiddleMouseBtn) {
+            ctx->dc.canvas_scroll.x += CURR_TC(ctx).prev_x - e->x;
+            ctx->dc.canvas_scroll.y += CURR_TC(ctx).prev_y - e->y;
             update_screen(ctx);
         }
     } else {
