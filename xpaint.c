@@ -848,24 +848,34 @@ void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
 }
 
 void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to) {
-    if (from.x < 0 || from.y < 0 || to.x < 0 || to.y < 0) {
-        return;
-    }
-    XImage* im = dc->cv.im;
-    i32 w = im->width;
-    i32 h = im->height;
-    for (i32 y = 0; y < dims.y; ++y) {
-        if (from.y + y >= h || to.y + y >= h) {
-            break;
-        }
-        for (i32 x = 0; x < dims.x; ++x) {
-            if (from.x + x >= w || to.x + x >= w) {
+    i32 const w = dc->cv.im->width;
+    i32 const h = dc->cv.im->height;
+
+    u32* region = (u32*)ecalloc(w * h, sizeof(u32));
+    for (i32 get_or_set = 1; get_or_set >= 0; --get_or_set) {
+        for (i32 y = 0; y < dims.y; ++y) {
+            if (from.y + y >= h || to.y + y >= h) {
                 break;
             }
-            u32 pixel = XGetPixel(im, from.x + x, from.y + y);
-            XPutPixel(im, to.x + x, to.y + y, pixel);
+            for (i32 x = 0; x < dims.x; ++x) {
+                if (from.x + x >= w || to.x + x >= w) {
+                    break;
+                }
+                if (get_or_set) {
+                    region[y * w + x] =
+                        XGetPixel(dc->cv.im, from.x + x, from.y + y);
+                } else {
+                    ximage_put_checked(
+                        dc->cv.im,
+                        to.x + x,
+                        to.y + y,
+                        region[y * w + x]
+                    );
+                }
+            }
         }
     }
+    free(region);
 }
 
 void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
