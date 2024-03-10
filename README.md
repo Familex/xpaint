@@ -4,13 +4,14 @@ Simple paint application written for X.
 
 ## Requirements
 
-- x11 headers (libX11-devel on Fedora, libx11-dev on alpine)
-- xft headers (libXft-devel on Fedora, libxft-dev on alpine)
-- x11 extentions headers (libXext-devel on fedora, libxext-dev on alpine)
+- X11 headers (libX11-devel on fedora, libx11-dev on alpine)
+- Xft headers (libXft-devel on fedora, libxft-dev on alpine)
+- X11 extentions headers (libXext-devel on fedora, libxext-dev on alpine)
 
 ## Build
 
-In order to build [xpaint](./xpaint), execute `make all` command in the project root.
+In order to build [xpaint](./xpaint),
+execute `make all` command in the project root.
 
 Execute `make help` command to see list of all available targets.
 
