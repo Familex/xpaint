@@ -9,33 +9,39 @@ CLANGTIDY ?= clang-tidy
 SRC = xpaint.c
 HEADER = types.h config.h
 
-all: xpaint
+all: xpaint ## build application
 
-clean:
-	@rm -f xpaint
+help: ## display this help
+	@echo 'Usage: make [TARGET]...'
+	@echo ''
+	@echo 'targets:'
+	@sed -ne '/@sed/!s/:.*##//p' $(MAKEFILE_LIST) | column -tl 2
 
-xpaint: $(SRC) $(HEADER)
+xpaint: $(SRC) $(HEADER) ## build release application
 	@$(CC) -o $@ $(SRC) $(CFLAGS)
 
-xpaint-d: $(SRC) $(HEADER)
+xpaint-d: $(SRC) $(HEADER) ## build debug application
 	@$(CC) -o $@ $(SRC) $(CFLAGSD)
 
-exec: xpaint
+exec: xpaint ## run release application
 	@./xpaint
 
-verbose: xpaint-d
+verbose: xpaint-d ## run application in verbose mode
 	@./xpaint-d -v
 
-watch: xpaint-d
+watch: xpaint-d ## run debug application. rebuild if sources changed
 	@./xpaint-d -v & echo $$! > xpaintpid.tmp
 	@inotifywait --event close_write --event move --quiet Makefile $(SRC) $(HEADER)
 	@kill `cat xpaintpid.tmp` && rm xpaintpid.tmp
 	@$(MAKE) watch
 
-check:
+clean: ## remove generated files
+	@rm -f xpaint xpaint-d xpaintpid.tmp
+
+check: ## check code with clang-tidy
 	$(CLANGTIDY) $(HEADER) $(SRC) -- $(INCS)
 
-dev:
+dev: ## generate dev files
 	bear -- make verbose
 
 .PHONY: all clean exec verbose watch check dev
