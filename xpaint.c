@@ -220,7 +220,7 @@ static void canvas_fill(struct DrawCtx* dc, u32 color);
 static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 line_w);
 static void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w);
 static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
-static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to);
+static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
 static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
@@ -507,7 +507,8 @@ void tool_selection_on_release(
                 area,
                 (Pair
                 ) {MAX(sd->bx, sd->ex) - area.x, MAX(sd->by, sd->ey) - area.y},
-                (Pair) {area.x + move_vec.x, area.y + move_vec.y}
+                (Pair) {area.x + move_vec.x, area.y + move_vec.y},
+                !(event->state & ShiftMask)
             );
         } else if (tc->is_dragging) {
             // select area
@@ -847,23 +848,31 @@ void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
     }
 }
 
-void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to) {
+void canvas_copy_region(
+    struct DrawCtx* dc,
+    Pair from,
+    Pair dims,
+    Pair to,
+    Bool clear_source
+) {
     i32 const w = dc->cv.im->width;
     i32 const h = dc->cv.im->height;
 
     u32* region = (u32*)ecalloc(w * h, sizeof(u32));
     for (i32 get_or_set = 1; get_or_set >= 0; --get_or_set) {
         for (i32 y = 0; y < dims.y; ++y) {
-            if (from.y + y >= h || to.y + y >= h) {
-                break;
-            }
             for (i32 x = 0; x < dims.x; ++x) {
-                if (from.x + x >= w || to.x + x >= w) {
-                    break;
-                }
                 if (get_or_set) {
                     region[y * w + x] =
                         XGetPixel(dc->cv.im, from.x + x, from.y + y);
+                    if (clear_source) {
+                        ximage_put_checked(
+                            dc->cv.im,
+                            from.x + x,
+                            from.y + y,
+                            CANVAS.background_argb
+                        );
+                    }
                 } else {
                     ximage_put_checked(
                         dc->cv.im,
