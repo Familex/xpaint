@@ -26,10 +26,16 @@ exec: xpaint
 verbose: xpaint-d
 	@./xpaint-d -v
 
+watch: xpaint-d
+	@./xpaint-d -v & echo $$! > xpaintpid.tmp
+	@inotifywait --event close_write --event move --quiet Makefile $(SRC) $(HEADER)
+	@kill `cat xpaintpid.tmp` && rm xpaintpid.tmp
+	@$(MAKE) watch
+
 check:
 	$(CLANGTIDY) $(HEADER) $(SRC) -- $(INCS)
 
 dev:
 	bear -- make verbose
 
-.PHONY: all clean exec verbose check dev
+.PHONY: all clean exec verbose watch check dev

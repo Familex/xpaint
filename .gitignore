@@ -2,5 +2,6 @@ private/
 build/
 xpaint
 xpaint-d
+xpaintpid.tmp
 .cache/
 compile_commands.json
