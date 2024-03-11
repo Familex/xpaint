@@ -189,7 +189,7 @@ static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
-static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name);
+static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -345,13 +345,33 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-XImage* read_png_file(struct DrawCtx const* dc, char const* file_name) {
+XImage* read_png_file(
+    struct DrawCtx const* dc,
+    char const* file_name,
+    u32 transp_argb
+) {
     i32 width = NIL;
     i32 height = NIL;
     i32 comp = NIL;
     stbi_uc* image_data = stbi_load(file_name, &width, &height, &comp, 4);
     if (image_data == NULL) {
         return NULL;
+    }
+    // process image data
+    for (i32 i = 0; i < 4 * width * height; i += 4) {
+        if (!image_data[i]) {
+            // fill transparent pixels with transp_argb value
+            image_data[i + 0] = (transp_argb & 0x000000FF) >> (0 * 8);
+            image_data[i + 1] = (transp_argb & 0x0000FF00) >> (1 * 8);
+            image_data[i + 2] = (transp_argb & 0x00FF0000) >> (2 * 8);
+            image_data[i + 3] = (transp_argb & 0xFF000000) >> (3 * 8);
+        } else {
+            // rgb -> bgr
+            u32 const red = image_data[i + 2];
+            u32 const blue = image_data[i + 0];
+            image_data[i + 2] = blue;
+            image_data[i + 0] = red;
+        }
     }
     XImage* result = XCreateImage(
         dc->dp,
@@ -1628,7 +1648,8 @@ struct Ctx setup(Display* dp) {
                     : i == I_Pencil ? "./res/tool-pencil.png"
                     : i == I_Fill   ? "./res/tool-fill.png"
                     : i == I_Picker ? "./res/tool-picker.png"
-                                    : "null"
+                                    : "null",
+                SELECTION_CIRCLE.background_argb
             );
         }
     }
