@@ -117,6 +117,8 @@ struct Ctx {
         i32 prev_x;
         i32 prev_y;
         u32 holding_button;
+        u64 last_proc_drag_ev_us;
+        Pair last_processed_pointer;
         Bool is_holding;
         Bool is_dragging;
         enum ToolType {
@@ -141,8 +143,6 @@ struct Ctx {
             } sel;
             struct PencilData {
                 u32 line_r;
-                u64 last_proc_drag_ev_us;
-                Pair last_processed_pointer;
             } pencil;
         } data;
     }* tcs;
@@ -413,6 +413,8 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
         .prev_x = tc->prev_x,
         .prev_y = tc->prev_y,
         .sdata = tc->sdata,
+        .last_proc_drag_ev_us = 0,
+        .last_processed_pointer = (Pair) {NIL, NIL},
     };
     switch (type) {
         case Tool_Selection:
@@ -436,8 +438,6 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             new_tc.ssz_tool_name = "pencil";
             new_tc.data.pencil = (struct PencilData) {
                 .line_r = 5,
-                .last_proc_drag_ev_us = 0,
-                .last_processed_pointer = (Pair) {NIL, NIL},
             };
             break;
         case Tool_Fill:
@@ -589,22 +589,11 @@ void tool_pencil_on_drag(
         return;
     }
 
-    struct PencilData* pd = &tc->data.pencil;
-
-    struct timeval current_time;
-    gettimeofday(&current_time, 0x0);
-    if (current_time.tv_usec - pd->last_proc_drag_ev_us
-        < PENCIL_TOOL.drag_period_us) {
-        return;
-    }
-    pd->last_proc_drag_ev_us = current_time.tv_usec;
-
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    Pair prev_pointer = (pd->last_processed_pointer.x != NIL)
-        ? point_from_scr_to_cv(dc, pd->last_processed_pointer)
+    Pair prev_pointer = (tc->last_processed_pointer.x != NIL)
+        ? point_from_scr_to_cv(dc, tc->last_processed_pointer)
         : pointer;
     canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
-    pd->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
 void tool_pencil_on_move(
@@ -614,9 +603,6 @@ void tool_pencil_on_move(
 ) {
     assert(tc);
     assert(tc->type == Tool_Pencil);
-
-    tc->data.pencil.last_proc_drag_ev_us = 0;
-    tc->data.pencil.last_processed_pointer = (Pair) {NIL, NIL};
 }
 
 static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
@@ -1976,8 +1962,15 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     if (CURR_TC(ctx).is_holding) {
         CURR_TC(ctx).is_dragging = True;
         if (CURR_TC(ctx).on_drag) {
-            CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), e);
-            update_screen(ctx);
+            struct timeval current_time;
+            gettimeofday(&current_time, 0x0);
+            if (current_time.tv_usec - CURR_TC(ctx).last_proc_drag_ev_us
+                >= DRAG_PERIOD_US) {
+                CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), e);
+                CURR_TC(ctx).last_proc_drag_ev_us = current_time.tv_usec;
+                CURR_TC(ctx).last_processed_pointer = (Pair) {e->x, e->y};
+                update_screen(ctx);
+            }
         }
         if (CURR_TC(ctx).holding_button == XMiddleMouseBtn) {
             ctx->dc.canvas_scroll.x += CURR_TC(ctx).prev_x - e->x;
@@ -1987,6 +1980,8 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     } else {
         if (CURR_TC(ctx).on_move) {
             CURR_TC(ctx).on_move(&ctx->dc, &CURR_TC(ctx), e);
+            CURR_TC(ctx).last_proc_drag_ev_us = 0;
+            CURR_TC(ctx).last_processed_pointer = (Pair) {NIL, NIL};
             update_screen(ctx);
         }
     }
