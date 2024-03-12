@@ -512,41 +512,41 @@ void tool_selection_on_release(
     XButtonReleasedEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
-    if (event->button == XLeftMouseBtn) {
-        struct SelectionData* sd = &tc->data.sel;
-
-        if (SELECTION_DRAGGING(tc)) {
-            // finish drag selection
-            Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-            Pair move_vec = {
-                pointer.x - sd->drag_from.x,
-                pointer.y - sd->drag_from.y
-            };
-            Pair area = {MIN(sd->bx, sd->ex), MIN(sd->by, sd->ey)};
-            canvas_copy_region(
-                dc,
-                area,
-                (Pair
-                ) {MAX(sd->bx, sd->ex) - area.x, MAX(sd->by, sd->ey) - area.y},
-                (Pair) {area.x + move_vec.x, area.y + move_vec.y},
-                !(event->state & ShiftMask)
-            );
-        } else if (tc->is_dragging) {
-            // select area
-            XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
-            trace("clipboard owned");
-            return;
-        }
-        // unselect area
-        sd->bx = NIL;
-        sd->ey = NIL;
-        sd->by = NIL;
-        sd->ex = NIL;
-        sd->drag_from = (Pair) {NIL, NIL};
-        sd->drag_to = (Pair) {NIL, NIL};
-        XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
-        trace("clipboard released");
+    if (event->button != XLeftMouseBtn) {
+        return;
     }
+    struct SelectionData* sd = &tc->data.sel;
+
+    if (SELECTION_DRAGGING(tc)) {
+        // finish drag selection
+        Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+        Pair move_vec = {
+            pointer.x - sd->drag_from.x,
+            pointer.y - sd->drag_from.y
+        };
+        Pair area = {MIN(sd->bx, sd->ex), MIN(sd->by, sd->ey)};
+        canvas_copy_region(
+            dc,
+            area,
+            (Pair) {MAX(sd->bx, sd->ex) - area.x, MAX(sd->by, sd->ey) - area.y},
+            (Pair) {area.x + move_vec.x, area.y + move_vec.y},
+            !(event->state & ShiftMask)
+        );
+    } else if (tc->is_dragging) {
+        // select area
+        XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
+        trace("clipboard owned");
+        return;
+    }
+    // unselect area
+    sd->bx = NIL;
+    sd->ey = NIL;
+    sd->by = NIL;
+    sd->ex = NIL;
+    sd->drag_from = (Pair) {NIL, NIL};
+    sd->drag_to = (Pair) {NIL, NIL};
+    XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
+    trace("clipboard released");
 }
 
 void tool_selection_on_drag(
@@ -555,6 +555,10 @@ void tool_selection_on_drag(
     XMotionEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
+    if (tc->holding_button != XLeftMouseBtn) {
+        return;
+    }
+
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (SELECTION_DRAGGING(tc)) {
         tc->data.sel.drag_to = pointer;
@@ -1691,10 +1695,6 @@ struct Ctx setup(Display* dp) {
 
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
-    if (e->button == XRightMouseBtn) {
-        init_sel_circ_tools(&ctx->sc, e->x, e->y);
-        draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
-    }
     if (e->button == XLeftMouseBtn) {
         // next history invalidated after user action
         historyarr_clear(ctx->dc.dp, &ctx->hist_next);
@@ -1703,6 +1703,10 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (CURR_TC(ctx).on_press) {
         CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), e);
         update_screen(ctx);
+    }
+    if (e->button == XRightMouseBtn) {
+        init_sel_circ_tools(&ctx->sc, e->x, e->y);
+        draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
 
     CURR_TC(ctx).holding_button = e->button;
@@ -1720,6 +1724,8 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         }
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
+        CURR_TC(ctx).is_holding = False;
+        CURR_TC(ctx).is_dragging = False;
         return True;  // something selected do nothing else
     }
 
@@ -1740,6 +1746,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         CURR_TC(ctx).on_release(&ctx->dc, &CURR_TC(ctx), e);
         update_screen(ctx);
     }
+
     CURR_TC(ctx).is_holding = False;
     CURR_TC(ctx).is_dragging = False;
 
