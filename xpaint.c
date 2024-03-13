@@ -216,6 +216,7 @@ static Bool history_push(struct History** hist, struct Ctx* ctx);
 
 static void historyarr_clear(Display* dp, struct History** hist);
 static void canvas_clear(Display* dp, struct Canvas* cv);
+static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 
 static void canvas_fill(struct DrawCtx* dc, u32 color);
 static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 line_w);
@@ -721,6 +722,18 @@ void historyarr_clear(Display* dp, struct History** hist) {
 
 void canvas_clear(Display* dp, struct Canvas* cv) {
     XDestroyImage(cv->im);
+}
+
+void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
+    double old_zoom = (double)dc->canvas_zoom;
+    dc->canvas_zoom = CLAMP(dc->canvas_zoom + delta, 1, CANVAS.max_zoom);
+    // keep cursor at same position
+    dc->canvas_scroll.x = (i32)(dc->canvas_scroll.x
+                                + (cursor.x + dc->canvas_scroll.x)
+                                    * ((double)dc->canvas_zoom / old_zoom - 1));
+    dc->canvas_scroll.y = (i32)(dc->canvas_scroll.y
+                                + (cursor.y + dc->canvas_scroll.y)
+                                    * ((double)dc->canvas_zoom / old_zoom - 1));
 }
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
@@ -1732,8 +1745,11 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     if (e->button == XMouseScrollDown || e->button == XMouseScrollUp) {
         i32 sign = e->button == XMouseScrollUp ? 1 : -1;
         if (e->state & ControlMask) {
-            ctx->dc.canvas_zoom =
-                CLAMP(ctx->dc.canvas_zoom + sign, 1, CANVAS.max_zoom);
+            canvas_change_zoom(
+                &ctx->dc,
+                (Pair) {CURR_TC(ctx).prev_x, CURR_TC(ctx).prev_y},
+                sign
+            );
         } else if (e->state & ShiftMask) {
             ctx->dc.canvas_scroll.x += sign * 10;
         } else {
@@ -1893,13 +1909,19 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_equal) {
-                ctx->dc.canvas_zoom =
-                    CLAMP(ctx->dc.canvas_zoom + 1, 1, CANVAS.max_zoom);
+                canvas_change_zoom(
+                    &ctx->dc,
+                    (Pair) {CURR_TC(ctx).prev_x, CURR_TC(ctx).prev_y},
+                    1
+                );
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_minus) {
-                ctx->dc.canvas_zoom =
-                    CLAMP(ctx->dc.canvas_zoom - 1, 1, CANVAS.max_zoom);
+                canvas_change_zoom(
+                    &ctx->dc,
+                    (Pair) {CURR_TC(ctx).prev_x, CURR_TC(ctx).prev_y},
+                    -1
+                );
                 update_screen(ctx);
             }
         } break;
