@@ -107,15 +107,25 @@ struct Ctx {
             u32 h;
         } fnt;
     } dc;
+    struct Input {
+        Pair prev_c;
+        enum InputState {
+            InputS_Interact,
+            InputS_Color,
+        } state;
+        union InputData {
+            struct InputColorData {
+                u32 current_digit;
+            } col;
+        } data;
+    } input;
     struct ToolCtx {
-        void (*on_press)(struct DrawCtx*, struct ToolCtx*, XButtonPressedEvent const*);
-        void (*on_release)(struct DrawCtx*, struct ToolCtx*, XButtonReleasedEvent const*);
-        void (*on_drag)(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
-        void (*on_move)(struct DrawCtx*, struct ToolCtx*, XMotionEvent const*);
+        void (*on_press)(struct DrawCtx*, struct ToolCtx*, struct Input*, XButtonPressedEvent const*);
+        void (*on_release)(struct DrawCtx*, struct ToolCtx*, struct Input*, XButtonReleasedEvent const*);
+        void (*on_drag)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
+        void (*on_move)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
         // static zero terminated string pointer
         char* ssz_tool_name;
-        i32 prev_x;
-        i32 prev_y;
         u32 holding_button;
         u64 last_proc_drag_ev_us;
         Pair last_processed_pointer;
@@ -163,17 +173,6 @@ struct Ctx {
     struct SelectionBuffer {
         XImage* im;
     } sel_buf;
-    struct Input {
-        enum InputState {
-            InputS_Interact,
-            InputS_Color,
-        } state;
-        union InputData {
-            struct InputColorData {
-                u32 current_digit;
-            } col;
-        } data;
-    } input;
 };
 
 // clang-format off
@@ -202,14 +201,15 @@ static void set_current_tool_fill(struct ToolCtx* tc);
 static void set_current_tool_picker(struct ToolCtx* tc);
 static void set_current_input_state(struct Input* input, enum InputState is);
 
-static void tool_selection_on_press(struct DrawCtx* dc, struct ToolCtx* tc, XButtonPressedEvent const* event);
-static void tool_selection_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
-static void tool_selection_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
-static void tool_pencil_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
-static void tool_pencil_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
-static void tool_pencil_on_move(struct DrawCtx* dc, struct ToolCtx* tc, XMotionEvent const* event);
-static void tool_fill_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
-static void tool_picker_on_release(struct DrawCtx* dc, struct ToolCtx* tc, XButtonReleasedEvent const* event);
+static void tool_selection_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
+static void tool_selection_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
+static void tool_selection_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
+static void tool_pencil_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
+static void tool_pencil_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
+static void tool_pencil_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
+static void tool_pencil_on_move(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
+static void tool_fill_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
+static void tool_picker_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
 
 static Bool history_move(struct Ctx* ctx, Bool forward);
 static Bool history_push(struct History** hist, struct Ctx* ctx);
@@ -411,8 +411,6 @@ get_curr_sel_dims(struct SelectionCircle const* sel_circ) {
 static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
     struct ToolCtx new_tc = {
         .type = type,
-        .prev_x = tc->prev_x,
-        .prev_y = tc->prev_y,
         .sdata = tc->sdata,
         .last_proc_drag_ev_us = 0,
         .last_processed_pointer = (Pair) {NIL, NIL},
@@ -433,6 +431,7 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             };
             break;
         case Tool_Pencil:
+            new_tc.on_press = &tool_pencil_on_press;
             new_tc.on_release = &tool_pencil_on_release;
             new_tc.on_drag = &tool_pencil_on_drag;
             new_tc.on_move = &tool_pencil_on_move;
@@ -484,6 +483,7 @@ void set_current_input_state(struct Input* input, enum InputState const is) {
 void tool_selection_on_press(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XButtonPressedEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
@@ -510,6 +510,7 @@ void tool_selection_on_press(
 void tool_selection_on_release(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
@@ -553,6 +554,7 @@ void tool_selection_on_release(
 void tool_selection_on_drag(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XMotionEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
@@ -569,22 +571,56 @@ void tool_selection_on_drag(
     }
 }
 
+void tool_pencil_on_press(
+    struct DrawCtx* dc,
+    struct ToolCtx* tc,
+    struct Input* inp,
+    XButtonPressedEvent const* event
+) {
+    assert(tc->type == Tool_Pencil);
+
+    if (event->button != XLeftMouseBtn) {
+        return;
+    }
+
+    if (event->state & ShiftMask) {
+        //
+    } else {
+        tc->last_processed_pointer = (Pair) {NIL, NIL};
+    }
+}
+
 void tool_pencil_on_release(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
     assert(tc->type == Tool_Pencil);
 
-    if (event->button == XLeftMouseBtn && !tc->is_dragging) {
-        Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    if (event->button != XLeftMouseBtn || tc->is_dragging) {
+        return;
+    }
+
+    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    if (event->state & ShiftMask) {
+        canvas_line(
+            dc,
+            point_from_scr_to_cv(dc, tc->last_processed_pointer),
+            pointer,
+            CURR_COL(tc),
+            tc->sdata.line_w
+        );
+    } else {
         canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
     }
+    tc->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
 void tool_pencil_on_drag(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XMotionEvent const* event
 ) {
     assert(tc->type == Tool_Pencil);
@@ -599,11 +635,13 @@ void tool_pencil_on_drag(
         ? point_from_scr_to_cv(dc, tc->last_processed_pointer)
         : pointer;
     canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
+    tc->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
 void tool_pencil_on_move(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XMotionEvent const* event
 ) {
     assert(tc);
@@ -652,6 +690,7 @@ static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
 void tool_fill_on_release(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
     if (tc->holding_button != XLeftMouseBtn) {
@@ -665,6 +704,7 @@ void tool_fill_on_release(
 void tool_picker_on_release(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
+    struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
@@ -1574,8 +1614,6 @@ struct Ctx setup(Display* dp) {
                 .sdata.colors_argb = NULL,
                 .sdata.curr_col = 0,
                 .sdata.line_w = 5,
-                .prev_x = NIL,
-                .prev_y = NIL,
             };
             arrpush(ctx.tcs, tc);
             arrpush(ctx.tcs[i].sdata.colors_argb, 0xFF000000);
@@ -1714,7 +1752,7 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         history_push(&ctx->hist_prev, ctx);
     }
     if (CURR_TC(ctx).on_press) {
-        CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), e);
+        CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
         update_screen(ctx);
     }
     if (e->button == XRightMouseBtn) {
@@ -1745,11 +1783,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     if (e->button == XMouseScrollDown || e->button == XMouseScrollUp) {
         i32 sign = e->button == XMouseScrollUp ? 1 : -1;
         if (e->state & ControlMask) {
-            canvas_change_zoom(
-                &ctx->dc,
-                (Pair) {CURR_TC(ctx).prev_x, CURR_TC(ctx).prev_y},
-                sign
-            );
+            canvas_change_zoom(&ctx->dc, ctx->input.prev_c, sign);
         } else if (e->state & ShiftMask) {
             ctx->dc.canvas_scroll.x += sign * 10;
         } else {
@@ -1759,7 +1793,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     if (CURR_TC(ctx).on_release) {
-        CURR_TC(ctx).on_release(&ctx->dc, &CURR_TC(ctx), e);
+        CURR_TC(ctx).on_release(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
         update_screen(ctx);
     }
 
@@ -1909,19 +1943,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_equal) {
-                canvas_change_zoom(
-                    &ctx->dc,
-                    (Pair) {CURR_TC(ctx).prev_x, CURR_TC(ctx).prev_y},
-                    1
-                );
+                canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1);
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_minus) {
-                canvas_change_zoom(
-                    &ctx->dc,
-                    (Pair) {CURR_TC(ctx).prev_x, CURR_TC(ctx).prev_y},
-                    -1
-                );
+                canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
                 update_screen(ctx);
             }
         } break;
@@ -1995,30 +2021,28 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             gettimeofday(&current_time, 0x0);
             if (current_time.tv_usec - CURR_TC(ctx).last_proc_drag_ev_us
                 >= DRAG_PERIOD_US) {
-                CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), e);
+                CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
                 CURR_TC(ctx).last_proc_drag_ev_us = current_time.tv_usec;
-                CURR_TC(ctx).last_processed_pointer = (Pair) {e->x, e->y};
                 update_screen(ctx);
             }
         }
         if (CURR_TC(ctx).holding_button == XMiddleMouseBtn) {
-            ctx->dc.canvas_scroll.x += CURR_TC(ctx).prev_x - e->x;
-            ctx->dc.canvas_scroll.y += CURR_TC(ctx).prev_y - e->y;
+            ctx->dc.canvas_scroll.x += ctx->input.prev_c.x - e->x;
+            ctx->dc.canvas_scroll.y += ctx->input.prev_c.y - e->y;
             update_screen(ctx);
         }
     } else {
         if (CURR_TC(ctx).on_move) {
-            CURR_TC(ctx).on_move(&ctx->dc, &CURR_TC(ctx), e);
+            CURR_TC(ctx).on_move(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
             CURR_TC(ctx).last_proc_drag_ev_us = 0;
-            CURR_TC(ctx).last_processed_pointer = (Pair) {NIL, NIL};
             update_screen(ctx);
         }
     }
 
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
-    CURR_TC(ctx).prev_x = e->x;
-    CURR_TC(ctx).prev_y = e->y;
+    ctx->input.prev_c.x = e->x;
+    ctx->input.prev_c.y = e->y;
 
     return True;
 }
@@ -2057,6 +2081,7 @@ static unsigned char* ximage_to_rgb(XImage* image, i32 const w, i32 const h) {
     }
     return data;
 }
+
 Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     XSelectionRequestEvent request = event->xselectionrequest;
 
