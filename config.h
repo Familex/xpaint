@@ -9,6 +9,7 @@ u32 const TCS_NUM = 3;
 char const FONT_NAME[] = "monospace:size=10";
 // lag prevention. only one drag event per period will be done
 u32 const DRAG_PERIOD_US = 10000;
+i32 const PNG_SAVE_COMPRESSION = 4;
 
 struct {
     u32 background_rgb;

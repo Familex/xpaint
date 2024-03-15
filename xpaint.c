@@ -172,6 +172,9 @@ struct Ctx {
     struct SelectionBuffer {
         XImage* im;
     } sel_buf;
+    struct FileCtx {
+        char const* path;
+    } finp, fout;
 };
 
 // clang-format off
@@ -188,6 +191,8 @@ static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
+static Bool save_png_file(struct DrawCtx* dc, char const* file_path);
+static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -229,7 +234,8 @@ static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle con
 static void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc);
 static void update_screen(struct Ctx* ctx);
 
-static struct Ctx setup(Display* dp);
+static struct Ctx ctx_init(Display* dp);
+static void setup(Display* dp, struct Ctx* ctx);
 static void run(struct Ctx* ctx);
 static Bool button_press_hdlr(struct Ctx* ctx, XEvent* event);
 static Bool button_release_hdlr(struct Ctx* ctx, XEvent* event);
@@ -250,17 +256,29 @@ static Atom atoms[A_Last];
 static XImage* images[I_Last];
 
 i32 main(i32 argc, char** argv) {
-    for (i32 i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
-            is_verbose_output = True;
-        } else {
-            die("usage: xpaint [-v]");
-        }
-    }
-
     Display* display = XOpenDisplay(NULL);
     if (!display) {
         die("xpaint: cannot open X display");
+    }
+
+    struct Ctx ctx = ctx_init(display);
+
+    for (i32 i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
+            is_verbose_output = True;
+        } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--file")) {
+            if (i + 1 == argc) {
+                die("xpaint: supply argument for -i or --file");
+            }
+            ctx.finp.path = argv[++i];
+        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
+            if (i + 1 == argc) {
+                die("xpaint: supply argument for -o or --output");
+            }
+            ctx.fout.path = argv[++i];
+        } else {
+            die("usage: xpaint [-v] [-i INPUT_FILE] [-o OUTPUT_FILE]");
+        }
     }
 
     /* extentions support */ {
@@ -271,7 +289,7 @@ i32 main(i32 argc, char** argv) {
         }
     }
 
-    struct Ctx ctx = setup(display);
+    setup(display, &ctx);
     run(&ctx);
     cleanup(&ctx);
     XCloseDisplay(display);
@@ -358,7 +376,7 @@ XImage* read_png_file(
     }
     // process image data
     for (i32 i = 0; i < 4 * width * height; i += 4) {
-        if (!image_data[i]) {
+        if (!image_data[i] && transp_argb) {
             // fill transparent pixels with transp_argb value
             image_data[i + 0] = (transp_argb & 0x000000FF) >> (0 * 8);
             image_data[i + 1] = (transp_argb & 0x0000FF00) >> (1 * 8);
@@ -386,6 +404,45 @@ XImage* read_png_file(
     );
 
     return result;
+}
+
+Bool save_png_file(struct DrawCtx* dc, char const* file_path) {
+    unsigned char* data_rgba = ximage_to_rgb(dc->cv.im, True);
+    Bool const result = stbi_write_png(
+        file_path,
+        (i32)dc->cv.width,
+        (i32)dc->cv.height,
+        PNG_SAVE_COMPRESSION,
+        data_rgba,
+        0
+    );
+    free(data_rgba);
+    return result;
+}
+
+unsigned char* ximage_to_rgb(XImage const* image, Bool rgba) {
+    u32 w = image->width;
+    u32 h = image->height;
+    usize pixel_size = rgba ? 4 : 3;
+    usize data_size = (size_t)w * h * pixel_size;
+    unsigned char* data = (unsigned char*)ecalloc(1, data_size);
+    if (data == NULL) {
+        return NULL;
+    }
+    i32 ii = 0;
+    for (i32 y = 0; y < h; ++y) {
+        for (i32 x = 0; x < w; ++x) {
+            u64 pixel = XGetPixel((XImage*)image, x, y);
+            data[ii + 0] = (pixel & 0xFF0000) >> 16U;
+            data[ii + 1] = (pixel & 0xFF00) >> 8U;
+            data[ii + 2] = (pixel & 0xFF);
+            if (rgba) {
+                data[ii + 3] = (pixel & 0xFF000000) >> 24U;
+            }
+            ii += (i32)pixel_size;
+        }
+    }
+    return data;
 }
 
 struct SelectonCircleDims
@@ -1046,7 +1103,6 @@ void draw_selection_circle(
             XImage* image = images[sc->items[item].hicon];
             assert(image != NULL);
 
-            // FIXME use XRender transparency
             XPutImage(
                 dc->dp,
                 dc->window,
@@ -1589,9 +1645,8 @@ void run(struct Ctx* ctx) {
     }
 }
 
-struct Ctx setup(Display* dp) {
-    assert(dp);
-    struct Ctx ctx = {
+struct Ctx ctx_init(Display* dp) {
+    return (struct Ctx) {
         .dc.dp = dp,
         .dc.width = CANVAS.default_width,
         .dc.height = CANVAS.default_height,
@@ -1604,6 +1659,11 @@ struct Ctx setup(Display* dp) {
         .input.last_processed_pointer = {NIL, NIL},
         .curr_tc = 0,
     };
+}
+
+void setup(Display* dp, struct Ctx* ctx) {
+    assert(dp);
+    assert(ctx);
 
     /* init arrays */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
@@ -1612,9 +1672,9 @@ struct Ctx setup(Display* dp) {
                 .sdata.curr_col = 0,
                 .sdata.line_w = 5,
             };
-            arrpush(ctx.tcs, tc);
-            arrpush(ctx.tcs[i].sdata.colors_argb, 0xFF000000);
-            arrpush(ctx.tcs[i].sdata.colors_argb, 0xFFFFFFFF);
+            arrpush(ctx->tcs, tc);
+            arrpush(ctx->tcs[i].sdata.colors_argb, 0xFF000000);
+            arrpush(ctx->tcs[i].sdata.colors_argb, 0xFFFFFFFF);
         }
     }
 
@@ -1628,35 +1688,35 @@ struct Ctx setup(Display* dp) {
     i32 screen = DefaultScreen(dp);
     Window root = DefaultRootWindow(dp);
 
-    i32 result = XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx.dc.vinfo);
+    i32 result = XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx->dc.vinfo);
     assert(result != 0);
 
     /* create window */
-    ctx.dc.window = XCreateWindow(
+    ctx->dc.window = XCreateWindow(
         dp,
         root,
         0,
         0,
-        ctx.dc.width,
-        ctx.dc.height,
+        ctx->dc.width,
+        ctx->dc.height,
         0,  // border width
-        ctx.dc.vinfo.depth,
+        ctx->dc.vinfo.depth,
         InputOutput,
-        ctx.dc.vinfo.visual,
+        ctx->dc.vinfo.visual,
         CWColormap | CWBorderPixel | CWBackPixel | CWEventMask,
         &(XSetWindowAttributes
         ) {.colormap =
-               XCreateColormap(dp, root, ctx.dc.vinfo.visual, AllocNone),
+               XCreateColormap(dp, root, ctx->dc.vinfo.visual, AllocNone),
            .border_pixel = 0,
            .background_pixel = 0xFFFF00FF,
            .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
                | ExposureMask | PointerMotionMask | StructureNotifyMask}
     );
-    ctx.dc.screen_gc = XCreateGC(dp, ctx.dc.window, 0, 0);
+    ctx->dc.screen_gc = XCreateGC(dp, ctx->dc.window, 0, 0);
 
     XSetWMName(
         dp,
-        ctx.dc.window,
+        ctx->dc.window,
         &(XTextProperty
         ) {.value = (char unsigned*)title,
            .nitems = strlen(title),
@@ -1664,24 +1724,24 @@ struct Ctx setup(Display* dp) {
            .encoding = atoms[A_Utf8string]}
     );
 
-    ctx.dc.back_buffer = XdbeAllocateBackBufferName(dp, ctx.dc.window, 0);
+    ctx->dc.back_buffer = XdbeAllocateBackBufferName(dp, ctx->dc.window, 0);
 
     /* turn on protocol support */ {
         Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
-        XSetWMProtocols(dp, ctx.dc.window, &wm_delete_window, 1);
+        XSetWMProtocols(dp, ctx->dc.window, &wm_delete_window, 1);
     }
 
     /* font */ {
         // XXX valgrind detects leak here
         XftFont* xfont = XftFontOpenName(dp, screen, FONT_NAME);
-        ctx.dc.fnt.xfont = xfont;
-        ctx.dc.fnt.h = xfont->ascent + xfont->descent;
+        ctx->dc.fnt.xfont = xfont;
+        ctx->dc.fnt.h = xfont->ascent + xfont->descent;
     }
 
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
             images[i] = read_png_file(
-                &ctx.dc,
+                &ctx->dc,
                 i == I_Select       ? "./res/tool-select.png"
                     : i == I_Pencil ? "./res/tool-pencil.png"
                     : i == I_Fill   ? "./res/tool-fill.png"
@@ -1693,52 +1753,60 @@ struct Ctx setup(Display* dp) {
     }
 
     /* canvas */ {
-        ctx.dc.cv.width = CANVAS.default_width;
-        ctx.dc.cv.height = CANVAS.default_height;
-        Pixmap data = XCreatePixmap(
-            dp,
-            ctx.dc.window,
-            ctx.dc.cv.width,
-            ctx.dc.cv.height,
-            ctx.dc.vinfo.depth
-        );
-        ctx.dc.cv.im = XGetImage(
-            ctx.dc.dp,
-            data,
-            0,
-            0,
-            ctx.dc.cv.width,
-            ctx.dc.cv.height,
-            AllPlanes,
-            ZPixmap
-        );
-        XFreePixmap(ctx.dc.dp, data);
         XGCValues canvas_gc_vals = {
             .line_style = LineSolid,
             .line_width = 5,
             .cap_style = CapButt,
             .fill_style = FillSolid
         };
-        ctx.dc.gc = XCreateGC(
+        ctx->dc.gc = XCreateGC(
             dp,
-            ctx.dc.window,
+            ctx->dc.window,
             GCForeground | GCBackground | GCFillStyle | GCLineStyle
                 | GCLineWidth | GCCapStyle | GCJoinStyle,
             &canvas_gc_vals
         );
-        // initial canvas color
-        canvas_fill(&ctx.dc, CANVAS.background_argb);
+        // read canvas data from file or create empty
+        if (ctx->finp.path) {
+            ctx->dc.cv.im = read_png_file(&ctx->dc, ctx->finp.path, 0);
+            if (!ctx->dc.cv.im) {
+                die("xpaint: failed to read input file");
+            }
+            ctx->dc.cv.width = ctx->dc.cv.im->width;
+            ctx->dc.cv.height = ctx->dc.cv.im->height;
+        } else {
+            ctx->dc.cv.width = CANVAS.default_width;
+            ctx->dc.cv.height = CANVAS.default_height;
+            Pixmap data = XCreatePixmap(
+                dp,
+                ctx->dc.window,
+                ctx->dc.cv.width,
+                ctx->dc.cv.height,
+                ctx->dc.vinfo.depth
+            );
+            ctx->dc.cv.im = XGetImage(
+                ctx->dc.dp,
+                data,
+                0,
+                0,
+                ctx->dc.cv.width,
+                ctx->dc.cv.height,
+                AllPlanes,
+                ZPixmap
+            );
+            XFreePixmap(ctx->dc.dp, data);
+            // initial canvas color
+            canvas_fill(&ctx->dc, CANVAS.background_argb);
+        }
     }
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
-        set_current_tool_pencil(&ctx.tcs[i]);
+        set_current_tool_pencil(&ctx->tcs[i]);
     }
-    history_push(&ctx.hist_prev, &ctx);
+    history_push(&ctx->hist_prev, ctx);
 
     /* show up window */
-    XMapRaised(dp, ctx.dc.window);
-
-    return ctx;
+    XMapRaised(dp, ctx->dc.window);
 }
 
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
@@ -1891,9 +1959,6 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                     if (is_verbose_output) {
                         u32 const image_size = ctx->sel_buf.im->bits_per_pixel
                             * ctx->sel_buf.im->height;
-                        for (u32 i = 0; i < MIN(image_size, 32); ++i) {
-                            trace("%X", ctx->sel_buf.im->data[i]);
-                        }
                         trace(
                             "\nsize: %d\nwidth: %d\nheight: %d\nbpp: %d\nbbo: %d\n"
                             "format: %d\nred: %lX\nblue: %lX\ngreen %lX\n",
@@ -1998,6 +2063,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             % col_num;
         update_screen(ctx);
     }
+    HANDLE_KEY_CASE_MASK(ControlMask, XK_s) {  // save to current file
+        if (save_png_file(&ctx->dc, ctx->fout.path)) {
+            trace("xpaint: file saved");
+        }
+    }
     HANDLE_KEY_END()
 
     return True;
@@ -2053,32 +2123,6 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     return True;
 }
 
-// FIXME remove
-static unsigned char* ximage_to_rgb(XImage* image, i32 const w, i32 const h) {
-    size_t data_size = (size_t)w * h * 3;
-    unsigned char* data = (unsigned char*)ecalloc(1, data_size);
-    if (data == NULL) {
-        return NULL;
-    }
-    u64 red_mask = image->red_mask;
-    u64 green_mask = image->green_mask;
-    u64 blue_mask = image->blue_mask;
-    i32 ii = 0;
-    for (i32 y = 0; y < h; ++y) {
-        for (i32 x = 0; x < w; ++x) {
-            u64 pixel = XGetPixel(image, x, y);
-            unsigned char blue = (pixel & blue_mask);
-            unsigned char green = (pixel & green_mask) >> 8U;
-            unsigned char red = (pixel & red_mask) >> 16U;
-            data[ii + 2] = blue;
-            data[ii + 1] = green;
-            data[ii + 0] = red;
-            ii += 3;
-        }
-    }
-    return data;
-}
-
 Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     XSelectionRequestEvent request = event->xselectionrequest;
 
@@ -2099,11 +2143,7 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
             );
         } else if (request.target == atoms[A_ImagePng]) {
             trace("requested image/png");
-            unsigned char* rgb_data = ximage_to_rgb(
-                ctx->sel_buf.im,
-                ctx->sel_buf.im->width,
-                ctx->sel_buf.im->height
-            );
+            unsigned char* rgb_data = ximage_to_rgb(ctx->sel_buf.im, False);
             i32 png_data_size = NIL;
             stbi_uc* png_data = stbi_write_png_to_mem(
                 rgb_data,
