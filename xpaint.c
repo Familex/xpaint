@@ -109,6 +109,11 @@ struct Ctx {
     } dc;
     struct Input {
         Pair prev_c;
+        Pair last_processed_pointer;
+        u32 holding_button;
+        u64 last_proc_drag_ev_us;
+        Bool is_holding;
+        Bool is_dragging;
         enum InputState {
             InputS_Interact,
             InputS_Color,
@@ -124,13 +129,7 @@ struct Ctx {
         void (*on_release)(struct DrawCtx*, struct ToolCtx*, struct Input*, XButtonReleasedEvent const*);
         void (*on_drag)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
         void (*on_move)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
-        // static zero terminated string pointer
-        char* ssz_tool_name;
-        u32 holding_button;
-        u64 last_proc_drag_ev_us;
-        Pair last_processed_pointer;
-        Bool is_holding;
-        Bool is_dragging;
+        char* ssz_tool_name;  // static zero terminated string pointer
         enum ToolType {
             Tool_Selection,
             Tool_Pencil,
@@ -411,8 +410,6 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
     struct ToolCtx new_tc = {
         .type = type,
         .sdata = tc->sdata,
-        .last_proc_drag_ev_us = 0,
-        .last_processed_pointer = (Pair) {NIL, NIL},
     };
     switch (type) {
         case Tool_Selection:
@@ -533,7 +530,7 @@ void tool_selection_on_release(
             (Pair) {area.x + move_vec.x, area.y + move_vec.y},
             !(event->state & ShiftMask)
         );
-    } else if (tc->is_dragging) {
+    } else if (inp->is_dragging) {
         // select area
         XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
         trace("clipboard owned");
@@ -557,14 +554,14 @@ void tool_selection_on_drag(
     XMotionEvent const* event
 ) {
     assert(tc->type == Tool_Selection);
-    if (tc->holding_button != XLeftMouseBtn) {
+    if (inp->holding_button != XLeftMouseBtn) {
         return;
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (SELECTION_DRAGGING(tc)) {
         tc->data.sel.drag_to = pointer;
-    } else if (tc->is_holding) {
+    } else if (inp->is_holding) {
         tc->data.sel.ex = CLAMP(pointer.x, 0, dc->cv.width);
         tc->data.sel.ey = CLAMP(pointer.y, 0, dc->cv.height);
     }
@@ -585,7 +582,7 @@ void tool_pencil_on_press(
     if (event->state & ShiftMask) {
         //
     } else {
-        tc->last_processed_pointer = (Pair) {NIL, NIL};
+        inp->last_processed_pointer = (Pair) {NIL, NIL};
     }
 }
 
@@ -597,7 +594,7 @@ void tool_pencil_on_release(
 ) {
     assert(tc->type == Tool_Pencil);
 
-    if (event->button != XLeftMouseBtn || tc->is_dragging) {
+    if (event->button != XLeftMouseBtn || inp->is_dragging) {
         return;
     }
 
@@ -605,7 +602,7 @@ void tool_pencil_on_release(
     if (event->state & ShiftMask) {
         canvas_line(
             dc,
-            point_from_scr_to_cv(dc, tc->last_processed_pointer),
+            point_from_scr_to_cv(dc, inp->last_processed_pointer),
             pointer,
             CURR_COL(tc),
             tc->sdata.line_w
@@ -613,7 +610,7 @@ void tool_pencil_on_release(
     } else {
         canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
     }
-    tc->last_processed_pointer = (Pair) {event->x, event->y};
+    inp->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
 void tool_pencil_on_drag(
@@ -623,18 +620,18 @@ void tool_pencil_on_drag(
     XMotionEvent const* event
 ) {
     assert(tc->type == Tool_Pencil);
-    assert(tc->is_holding);
+    assert(inp->is_holding);
 
-    if (tc->holding_button != XLeftMouseBtn) {
+    if (inp->holding_button != XLeftMouseBtn) {
         return;
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    Pair prev_pointer = (tc->last_processed_pointer.x != NIL)
-        ? point_from_scr_to_cv(dc, tc->last_processed_pointer)
+    Pair prev_pointer = (inp->last_processed_pointer.x != NIL)
+        ? point_from_scr_to_cv(dc, inp->last_processed_pointer)
         : pointer;
     canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
-    tc->last_processed_pointer = (Pair) {event->x, event->y};
+    inp->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
 void tool_pencil_on_move(
@@ -692,7 +689,7 @@ void tool_fill_on_release(
     struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
-    if (tc->holding_button != XLeftMouseBtn) {
+    if (inp->holding_button != XLeftMouseBtn) {
         return;
     }
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
@@ -1604,6 +1601,7 @@ struct Ctx setup(Display* dp) {
         .hist_prev = NULL,
         .sel_buf.im = NULL,
         .input.state = InputS_Interact,
+        .input.last_processed_pointer = {NIL, NIL},
         .curr_tc = 0,
     };
 
@@ -1759,8 +1757,8 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
 
-    CURR_TC(ctx).holding_button = e->button;
-    CURR_TC(ctx).is_holding = True;
+    ctx->input.holding_button = e->button;
+    ctx->input.is_holding = True;
 
     return True;
 }
@@ -1774,8 +1772,8 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         }
         free_sel_circ(&ctx->sc);
         clear_selection_circle(&ctx->dc, &ctx->sc);
-        CURR_TC(ctx).is_holding = False;
-        CURR_TC(ctx).is_dragging = False;
+        ctx->input.is_holding = False;
+        ctx->input.is_dragging = False;
         return True;  // something selected do nothing else
     }
 
@@ -1796,8 +1794,8 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         update_screen(ctx);
     }
 
-    CURR_TC(ctx).is_holding = False;
-    CURR_TC(ctx).is_dragging = False;
+    ctx->input.is_holding = False;
+    ctx->input.is_dragging = False;
 
     return True;
 }
@@ -2013,19 +2011,19 @@ Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
 
-    if (CURR_TC(ctx).is_holding) {
-        CURR_TC(ctx).is_dragging = True;
+    if (ctx->input.is_holding) {
+        ctx->input.is_dragging = True;
         if (CURR_TC(ctx).on_drag) {
             struct timeval current_time;
             gettimeofday(&current_time, 0x0);
-            if (current_time.tv_usec - CURR_TC(ctx).last_proc_drag_ev_us
+            if (current_time.tv_usec - ctx->input.last_proc_drag_ev_us
                 >= DRAG_PERIOD_US) {
                 CURR_TC(ctx).on_drag(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
-                CURR_TC(ctx).last_proc_drag_ev_us = current_time.tv_usec;
+                ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
                 update_screen(ctx);
             }
         }
-        if (CURR_TC(ctx).holding_button == XMiddleMouseBtn) {
+        if (ctx->input.holding_button == XMiddleMouseBtn) {
             ctx->dc.cv.scroll.x += ctx->input.prev_c.x - e->x;
             ctx->dc.cv.scroll.y += ctx->input.prev_c.y - e->y;
             update_screen(ctx);
@@ -2033,7 +2031,7 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     } else {
         if (CURR_TC(ctx).on_move) {
             CURR_TC(ctx).on_move(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
-            CURR_TC(ctx).last_proc_drag_ev_us = 0;
+            ctx->input.last_proc_drag_ev_us = 0;
             update_screen(ctx);
         }
     }
