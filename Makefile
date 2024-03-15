@@ -12,7 +12,7 @@ HEADER = types.h config.h
 all: xpaint ## build application
 
 help: ## display this help
-	@echo 'Usage: make [TARGET]...'
+	@echo 'Usage: make [TARGET]... [ARGS="..."]'
 	@echo ''
 	@echo 'targets:'
 	@sed -ne '/@sed/!s/:.*##//p' $(MAKEFILE_LIST) | column -tl 2
@@ -23,11 +23,11 @@ xpaint: $(SRC) $(HEADER) ## build release application
 xpaint-d: $(SRC) $(HEADER) ## build debug application
 	@$(CC) -o $@ $(SRC) $(CFLAGSD)
 
-exec: xpaint ## run release application
-	@./xpaint
+exec: xpaint ## run release application. ARGS may be used
+	@./xpaint $(ARGS)
 
-verbose: xpaint-d ## run application in verbose mode
-	@./xpaint-d -v
+verbose: xpaint-d ## run application in verbose mode. ARGS may be used
+	@./xpaint-d -v $(ARGS)
 
 watch: xpaint-d ## run debug application. rebuild if sources changed
 	@./xpaint-d -v & echo $$! > xpaintpid.tmp
