@@ -95,12 +95,12 @@ struct Ctx {
         u32 width;
         u32 height;
         XdbeBackBuffer back_buffer;  // double buffering
-        u32 canvas_zoom;  // 1 == no zoom
-        Pair canvas_scroll;
         struct Canvas {
             XImage* im;
             u32 width;
             u32 height;
+            u32 zoom;  // 1 == no zoom
+            Pair scroll;
         } cv;
         struct Fnt {
             XftFont* xfont;
@@ -320,14 +320,13 @@ Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
 
 Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
-        .x = x * (i32)dc->canvas_zoom - dc->canvas_scroll.x,
-        .y = y * (i32)dc->canvas_zoom - dc->canvas_scroll.y,
+        .x = x * (i32)dc->cv.zoom - dc->cv.scroll.x,
+        .y = y * (i32)dc->cv.zoom - dc->cv.scroll.y,
     };
 }
 
 Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p) {
-    return (Pair
-    ) {.x = p.x * (i32)dc->canvas_zoom, .y = p.y * (i32)dc->canvas_zoom};
+    return (Pair) {.x = p.x * (i32)dc->cv.zoom, .y = p.y * (i32)dc->cv.zoom};
 }
 
 Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p) {
@@ -336,8 +335,8 @@ Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p) {
 
 Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
-        .x = (x + dc->canvas_scroll.x) / (i32)dc->canvas_zoom,
-        .y = (y + dc->canvas_scroll.y) / (i32)dc->canvas_zoom,
+        .x = (x + dc->cv.scroll.x) / (i32)dc->cv.zoom,
+        .y = (y + dc->cv.scroll.y) / (i32)dc->cv.zoom,
     };
 }
 
@@ -765,15 +764,15 @@ void canvas_clear(Display* dp, struct Canvas* cv) {
 }
 
 void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
-    double old_zoom = (double)dc->canvas_zoom;
-    dc->canvas_zoom = CLAMP(dc->canvas_zoom + delta, 1, CANVAS.max_zoom);
+    double old_zoom = (double)dc->cv.zoom;
+    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, 1, CANVAS.max_zoom);
     // keep cursor at same position
-    dc->canvas_scroll.x = (i32)(dc->canvas_scroll.x
-                                + (cursor.x + dc->canvas_scroll.x)
-                                    * ((double)dc->canvas_zoom / old_zoom - 1));
-    dc->canvas_scroll.y = (i32)(dc->canvas_scroll.y
-                                + (cursor.y + dc->canvas_scroll.y)
-                                    * ((double)dc->canvas_zoom / old_zoom - 1));
+    dc->cv.scroll.x = (i32)(dc->cv.scroll.x
+                            + (cursor.x + dc->cv.scroll.x)
+                                * ((double)dc->cv.zoom / old_zoom - 1));
+    dc->cv.scroll.y = (i32)(dc->cv.scroll.y
+                            + (cursor.y + dc->cv.scroll.y)
+                                * ((double)dc->cv.zoom / old_zoom - 1));
 }
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
@@ -1277,8 +1276,8 @@ void update_screen(struct Ctx* ctx) {
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
-            u32 pb_width = ctx->dc.cv.width * ctx->dc.canvas_zoom;
-            u32 pb_height = ctx->dc.cv.height * ctx->dc.canvas_zoom;
+            u32 pb_width = ctx->dc.cv.width * ctx->dc.cv.zoom;
+            u32 pb_height = ctx->dc.cv.height * ctx->dc.cv.zoom;
             Pixmap pixel_buffer = XCreatePixmap(
                 ctx->dc.dp,
                 ctx->dc.window,
@@ -1322,7 +1321,7 @@ void update_screen(struct Ctx* ctx) {
             );
 
             // clang-format off
-            double const z = 1.0 / ctx->dc.canvas_zoom;
+            double const z = 1.0 / ctx->dc.cv.zoom;
             XRenderSetPictureTransform(ctx->dc.dp, src_pict, &(XTransform){{
                 { XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0) },
                 { XDoubleToFixed(0), XDoubleToFixed(z), XDoubleToFixed(0) },
@@ -1335,7 +1334,7 @@ void update_screen(struct Ctx* ctx) {
                 dst_pict,
                 0, 0,
                 0, 0,
-                -ctx->dc.canvas_scroll.x, -ctx->dc.canvas_scroll.y,
+                -ctx->dc.cv.scroll.x, -ctx->dc.cv.scroll.y,
                 pb_width, pb_height
             );
             // clang-format on
@@ -1599,8 +1598,8 @@ struct Ctx setup(Display* dp) {
         .dc.dp = dp,
         .dc.width = CANVAS.default_width,
         .dc.height = CANVAS.default_height,
-        .dc.canvas_zoom = 1,
-        .dc.canvas_scroll = {0, 0},
+        .dc.cv.zoom = 1,
+        .dc.cv.scroll = {0, 0},
         .hist_next = NULL,
         .hist_prev = NULL,
         .sel_buf.im = NULL,
@@ -1785,9 +1784,9 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         if (e->state & ControlMask) {
             canvas_change_zoom(&ctx->dc, ctx->input.prev_c, sign);
         } else if (e->state & ShiftMask) {
-            ctx->dc.canvas_scroll.x += sign * 10;
+            ctx->dc.cv.scroll.x += sign * 10;
         } else {
-            ctx->dc.canvas_scroll.y += sign * 10;
+            ctx->dc.cv.scroll.y += sign * 10;
         }
         update_screen(ctx);
     }
@@ -2027,8 +2026,8 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         }
         if (CURR_TC(ctx).holding_button == XMiddleMouseBtn) {
-            ctx->dc.canvas_scroll.x += ctx->input.prev_c.x - e->x;
-            ctx->dc.canvas_scroll.y += ctx->input.prev_c.y - e->y;
+            ctx->dc.cv.scroll.x += ctx->input.prev_c.x - e->x;
+            ctx->dc.cv.scroll.y += ctx->input.prev_c.y - e->y;
             update_screen(ctx);
         }
     } else {
