@@ -239,6 +239,7 @@ static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc);
 static void update_screen(struct Ctx* ctx);
+static void update_statusline(struct Ctx* ctx);
 
 static struct Ctx ctx_init(Display* dp);
 static void setup(Display* dp, struct Ctx* ctx);
@@ -1390,37 +1391,40 @@ void update_screen(struct Ctx* ctx) {
             }
         }
     }
-    /* statusline */ {
-        struct DrawCtx* dc = &ctx->dc;
-        struct ToolCtx* tc = &CURR_TC(ctx);
-        u32 const statusline_h =
-            dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
-        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
-        XFillRectangle(
-            dc->dp,
-            dc->back_buffer,
-            dc->screen_gc,
-            0,
-            (i32)(dc->height - statusline_h),
-            dc->width,
-            statusline_h
+
+    update_statusline(ctx);  // backbuffer swaped here
+}
+
+void update_statusline(struct Ctx* ctx) {
+    struct DrawCtx* dc = &ctx->dc;
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    u32 const statusline_h = dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
+    XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
+    XFillRectangle(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        0,
+        (i32)(dc->height - statusline_h),
+        dc->width,
+        statusline_h
+    );
+    if (ctx->input.state == InputS_Console) {
+        char const* command = ctx->input.data.cl.cmdarr;
+        usize const command_len = arrlen(command);
+        char* console_str = ecalloc(2 + command_len, sizeof(char));
+        console_str[0] = ':';
+        console_str[command_len + 1] = '\0';
+        memcpy(console_str + 1, command, command_len);
+        draw_string(
+            &ctx->dc,
+            console_str,
+            (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
+            STATUSLINE.font_argb
         );
-        if (ctx->input.state == InputS_Console) {
-            char const* command = ctx->input.data.cl.cmdarr;
-            usize const command_len = arrlen(command);
-            char* console_str = ecalloc(2 + command_len, sizeof(char));
-            console_str[0] = ':';
-            console_str[command_len + 1] = '\0';
-            memcpy(console_str + 1, command, command_len);
-            draw_string(
-                &ctx->dc,
-                console_str,
-                (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
-                STATUSLINE.font_argb
-            );
-            free(console_str);
-        } else {
-            // clang-format off
+        free(console_str);
+    } else {
+        // clang-format off
             static Bool widths_initialized = False;
             static u32 const gap = 5;
             static u32 const small_gap = gap / 2;
@@ -1457,95 +1461,85 @@ void update_screen(struct Ctx* ctx) {
             Pair const line_w_c = { (i32)(tool_name_c.x + tool_name_w), tool_name_c.y };
             Pair const col_count_c = { (i32)(dc->width - col_count_w), line_w_c.y };
             Pair const col_c = { (i32)(col_count_c.x - col_name_w), col_count_c.y };
-            // clang-format on
-            // colored rectangle
-            static u32 const col_rect_w = 30;
-            static u32 const col_value_size = 1 + 6;
+        // clang-format on
+        // colored rectangle
+        static u32 const col_rect_w = 30;
+        static u32 const col_value_size = 1 + 6;
 
-            XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
-            XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_argb);
-            /* tc */ {
-                i32 x = tcs_c.x;
-                for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                    draw_int(
-                        dc,
-                        tc_name,
-                        (Pair) {x, tcs_c.y},
-                        ctx->curr_tc == (tc_name - 1)
-                            ? STATUSLINE.strong_font_argb
-                            : STATUSLINE.font_argb
-                    );
-                    x += (i32)(get_int_width(dc, "%d", tc_name) + small_gap);
-                }
-            }
-            /* input state */ {
-                draw_string(
+        XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
+        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_argb);
+        /* tc */ {
+            i32 x = tcs_c.x;
+            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                draw_int(
                     dc,
-                    ctx->input.state == InputS_Interact      ? "intearct"
-                        : ctx->input.state == InputS_Color   ? "color"
-                        : ctx->input.state == InputS_Console ? "console"
-                                                             : "unknown",
-                    input_state_c,
-                    STATUSLINE.font_argb
+                    tc_name,
+                    (Pair) {x, tcs_c.y},
+                    ctx->curr_tc == (tc_name - 1) ? STATUSLINE.strong_font_argb
+                                                  : STATUSLINE.font_argb
                 );
+                x += (i32)(get_int_width(dc, "%d", tc_name) + small_gap);
             }
+        }
+        /* input state */ {
             draw_string(
                 dc,
-                tc->ssz_tool_name ? tc->ssz_tool_name : "N/A",
-                tool_name_c,
+                ctx->input.state == InputS_Interact      ? "intearct"
+                    : ctx->input.state == InputS_Color   ? "color"
+                    : ctx->input.state == InputS_Console ? "console"
+                                                         : "unknown",
+                input_state_c,
                 STATUSLINE.font_argb
             );
-            draw_int(dc, (i32)tc->sdata.line_w, line_w_c, STATUSLINE.font_argb);
-            /* color */ {
-                char col_value[col_value_size + 2];  // FIXME ?
-                sprintf(col_value, "#%06X", CURR_COL(tc) & 0xFFFFFF);
-                draw_string(dc, col_value, col_c, STATUSLINE.font_argb);
-                /* color count */ {
-                    // FIXME how it possible
-                    char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
-                    sprintf(
-                        col_count,
-                        "%d/%td",
-                        tc->sdata.curr_col + 1,
-                        arrlen(tc->sdata.colors_argb)
-                    );
-                    draw_string(
-                        dc,
-                        col_count,
-                        col_count_c,
-                        STATUSLINE.font_argb
-                    );
-                }
-                if (ctx->input.state == InputS_Color) {
-                    static u32 const hash_w = 1;
-                    u32 const curr_dig = ctx->input.data.col.current_digit;
-                    char const col_digit_value[] =
-                        {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
-                    draw_string(
-                        dc,
-                        col_digit_value,
-                        (Pair
-                        ) {col_c.x
-                               + (i32)get_string_width(
-                                   dc,
-                                   col_value,
-                                   curr_dig + hash_w
-                               ),
-                           col_c.y},
-                        STATUSLINE.strong_font_argb
-                    );
-                }
-                XSetForeground(dc->dp, dc->screen_gc, CURR_COL(tc));
-                XFillRectangle(
-                    dc->dp,
-                    dc->back_buffer,
-                    dc->screen_gc,
-                    (i32)(dc->width - col_name_w - col_rect_w - col_count_w),
-                    (i32)(dc->height - statusline_h),
-                    col_rect_w,
-                    statusline_h
+        }
+        draw_string(
+            dc,
+            tc->ssz_tool_name ? tc->ssz_tool_name : "N/A",
+            tool_name_c,
+            STATUSLINE.font_argb
+        );
+        draw_int(dc, (i32)tc->sdata.line_w, line_w_c, STATUSLINE.font_argb);
+        /* color */ {
+            char col_value[col_value_size + 2];  // FIXME ?
+            sprintf(col_value, "#%06X", CURR_COL(tc) & 0xFFFFFF);
+            draw_string(dc, col_value, col_c, STATUSLINE.font_argb);
+            /* color count */ {
+                // FIXME how it possible
+                char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
+                sprintf(
+                    col_count,
+                    "%d/%td",
+                    tc->sdata.curr_col + 1,
+                    arrlen(tc->sdata.colors_argb)
+                );
+                draw_string(dc, col_count, col_count_c, STATUSLINE.font_argb);
+            }
+            if (ctx->input.state == InputS_Color) {
+                static u32 const hash_w = 1;
+                u32 const curr_dig = ctx->input.data.col.current_digit;
+                char const col_digit_value[] =
+                    {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
+                draw_string(
+                    dc,
+                    col_digit_value,
+                    (Pair
+                    ) {col_c.x
+                           + (i32
+                           )get_string_width(dc, col_value, curr_dig + hash_w),
+                       col_c.y},
+                    STATUSLINE.strong_font_argb
                 );
             }
+            XSetForeground(dc->dp, dc->screen_gc, CURR_COL(tc));
+            XFillRectangle(
+                dc->dp,
+                dc->back_buffer,
+                dc->screen_gc,
+                (i32)(dc->width - col_name_w - col_rect_w - col_count_w),
+                (i32)(dc->height - statusline_h),
+                col_rect_w,
+                statusline_h
+            );
         }
     }
 
@@ -1855,9 +1849,9 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         if (e->state & ControlMask) {
             canvas_change_zoom(&ctx->dc, ctx->input.prev_c, sign);
         } else if (e->state & ShiftMask) {
-            ctx->dc.cv.scroll.x += sign * 10;
+            ctx->dc.cv.scroll.x -= sign * 10;
         } else {
-            ctx->dc.cv.scroll.y += sign * 10;
+            ctx->dc.cv.scroll.y -= sign * 10;
         }
         update_screen(ctx);
     }
@@ -1998,13 +1992,13 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_c) {
                 set_current_input_state(&ctx->input, InputS_Color);
-                update_screen(ctx);
+                update_statusline(ctx);
             }
             if (key_sym >= XK_1 && key_sym <= XK_9) {
                 u32 val = key_sym - XK_1;
                 if (val < TCS_NUM) {
                     ctx->curr_tc = val;
-                    update_screen(ctx);
+                    update_statusline(ctx);
                 }
             }
             if (key_sym >= XK_Left && key_sym <= XK_Down
@@ -2033,7 +2027,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             HANDLE_KEY_CASE(XK_semicolon) {  // FIXME XK_colon
                 set_current_input_state(&ctx->input, InputS_Console);
-                update_screen(ctx);  // FIXME update only statusbar
+                update_statusline(ctx);
             }
         } break;
 
@@ -2043,27 +2037,28 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 if (len != MAX_COLORS) {
                     CURR_TC(ctx).sdata.curr_col = len;
                     arrpush(CURR_TC(ctx).sdata.colors_argb, 0xFF000000);
-                    update_screen(ctx);
+                    update_statusline(ctx);
                 }
             }
             HANDLE_KEY_CASE(XK_Right) {
                 to_next_input_digit(&ctx->input, True);
-                update_screen(ctx);
+                update_statusline(ctx);
             }
             HANDLE_KEY_CASE(XK_Left) {
                 to_next_input_digit(&ctx->input, False);
-                update_screen(ctx);
+                update_statusline(ctx);
             }
             // change selected color digit with pressed key
             if ((key_sym >= XK_0 && key_sym <= XK_9)
-                || (key_sym >= XK_a && key_sym <= XK_f)) {
+                || (key_sym >= XK_a && key_sym <= XK_f
+                )) {  // FIXME handle by text_buf
                 // selected digit counts from left to right except alpha (aarrggbb <=> --012345)
                 u32 val = key_sym - (key_sym <= XK_9 ? XK_0 : XK_a - 10);
                 u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
                 CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
                 CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
                 to_next_input_digit(&ctx->input, True);
-                update_screen(ctx);
+                update_statusline(ctx);
             }
         } break;
 
@@ -2076,12 +2071,12 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 trace("xpaint: %s", command);
                 free(command);
                 set_current_input_state(&ctx->input, InputS_Interact);
-                update_screen(ctx);
+                update_statusline(ctx);
             } else if (key_sym == XK_BackSpace) {
                 if (arrlen(ctx->input.data.cl.cmdarr)) {
                     (void)arrpoputf8(ctx->input.data.cl.cmdarr);
                 }
-                update_screen(ctx);
+                update_statusline(ctx);
             } else if (key_sym != XK_Escape) {
                 if ((lookup_status == XLookupBoth
                      || lookup_status == XLookupChars)
@@ -2092,7 +2087,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                             lookup_buf[i] & 0xFF
                         );
                     }
-                    update_screen(ctx);  // FIXME only update statusbar
+                    update_statusline(ctx);
                 }
             }
         } break;
@@ -2112,7 +2107,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             CURR_TC(ctx).sdata.curr_col =
                 (CURR_TC(ctx).sdata.curr_col + (key_sym == XK_Up ? 1 : -1))
                 % col_num;
-            update_screen(ctx);
+            update_statusline(ctx);
         }
         HANDLE_KEY_CASE_MASK(ControlMask, XK_s) {  // save to current file
             if (save_png_file(&ctx->dc, ctx->fout.path)) {
@@ -2123,7 +2118,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // independent
     HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
         set_current_input_state(&ctx->input, InputS_Interact);
-        update_screen(ctx);
+        update_statusline(ctx);
     }
     HANDLE_KEY_END()
 
