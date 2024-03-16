@@ -846,9 +846,9 @@ void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
     double old_zoom = (double)dc->cv.zoom;
     dc->cv.zoom = CLAMP(dc->cv.zoom + delta, 1, CANVAS.max_zoom);
     // keep cursor at same position
-    dc->cv.scroll.x -= (i32)((cursor.x - dc->cv.scroll.x)
+    dc->cv.scroll.x += (i32)((dc->cv.scroll.x - cursor.x)
                              * ((double)dc->cv.zoom / old_zoom - 1));
-    dc->cv.scroll.y -= (i32)((cursor.y - dc->cv.scroll.y)
+    dc->cv.scroll.y += (i32)((dc->cv.scroll.y - cursor.y)
                              * ((double)dc->cv.zoom / old_zoom - 1));
 }
 
