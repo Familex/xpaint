@@ -45,8 +45,8 @@
 // default value for signed integers
 #define NIL              (-1)
 
-#define CURR_TC(p_ctx) ((p_ctx)->tcs[(p_ctx)->curr_tc])
-#define CURR_COL(p_tc) ((p_tc)->sdata.colors_argb[(p_tc)->sdata.curr_col])
+#define CURR_TC(p_ctx) ((p_ctx)->tcarr[(p_ctx)->curr_tc])
+#define CURR_COL(p_tc) ((p_tc)->sdata.col_argbarr[(p_tc)->sdata.curr_col])
 // clang-format off
 #define HAS_SELECTION(p_tc) \
     ((p_tc)->type == Tool_Selection \
@@ -142,7 +142,7 @@ struct Ctx {
             Tool_Picker,
         } type;
         struct ToolSharedData {
-            u32* colors_argb;
+            u32* col_argbarr;
             u32 curr_col;
             u32 line_w;
         } sdata;
@@ -159,11 +159,11 @@ struct Ctx {
                 u32 line_r;
             } pencil;
         } data;
-    }* tcs;
+    }* tcarr;
     u32 curr_tc;
     struct History {
         struct Canvas cv;
-    } *hist_prev, *hist_next;  // FIXME use -arr suffix for stb arrays
+    } *hist_prevarr, *hist_nextarr;
     struct SelectionCircle {
         Bool is_active;
         i32 x;
@@ -797,8 +797,10 @@ void tool_picker_on_release(
 }
 
 Bool history_move(struct Ctx* ctx, Bool forward) {
-    struct History** hist_pop = forward ? &ctx->hist_prev : &ctx->hist_next;
-    struct History** hist_save = forward ? &ctx->hist_next : &ctx->hist_prev;
+    struct History** hist_pop =
+        forward ? &ctx->hist_prevarr : &ctx->hist_nextarr;
+    struct History** hist_save =
+        forward ? &ctx->hist_nextarr : &ctx->hist_prevarr;
 
     if (!arrlenu(*hist_pop)) {
         return False;
@@ -830,12 +832,12 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
     return True;
 }
 
-void historyarr_clear(Display* dp, struct History** hist) {
-    for (u32 i = 0; i < arrlenu(*hist); ++i) {
-        struct History* h = &(*hist)[i];
+void historyarr_clear(Display* dp, struct History** histarr) {
+    for (u32 i = 0; i < arrlenu(*histarr); ++i) {
+        struct History* h = &(*histarr)[i];
         canvas_clear(dp, &h->cv);
     }
-    arrfree(*hist);
+    arrfree(*histarr);
 }
 
 void canvas_clear(Display* dp, struct Canvas* cv) {
@@ -1508,7 +1510,7 @@ void update_statusline(struct Ctx* ctx) {
                     col_count,
                     "%d/%td",
                     tc->sdata.curr_col + 1,
-                    arrlen(tc->sdata.colors_argb)
+                    arrlen(tc->sdata.col_argbarr)
                 );
                 draw_string(dc, col_count, col_count_c, STATUSLINE.font_argb);
             }
@@ -1625,8 +1627,8 @@ struct Ctx ctx_init(Display* dp) {
         .dc.height = CANVAS.default_height,
         .dc.cv.zoom = 1,
         .dc.cv.scroll = {0, 0},
-        .hist_next = NULL,
-        .hist_prev = NULL,
+        .hist_nextarr = NULL,
+        .hist_prevarr = NULL,
         .sel_buf.im = NULL,
         .input.state = InputS_Interact,
         .input.last_processed_pointer = {NIL, NIL},
@@ -1641,13 +1643,13 @@ void setup(Display* dp, struct Ctx* ctx) {
     /* init arrays */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
             struct ToolCtx tc = {
-                .sdata.colors_argb = NULL,
+                .sdata.col_argbarr = NULL,
                 .sdata.curr_col = 0,
                 .sdata.line_w = 5,
             };
-            arrpush(ctx->tcs, tc);
-            arrpush(ctx->tcs[i].sdata.colors_argb, 0xFF000000);
-            arrpush(ctx->tcs[i].sdata.colors_argb, 0xFFFFFFFF);
+            arrpush(ctx->tcarr, tc);
+            arrpush(ctx->tcarr[i].sdata.col_argbarr, 0xFF000000);
+            arrpush(ctx->tcarr[i].sdata.col_argbarr, 0xFFFFFFFF);
         }
     }
 
@@ -1798,9 +1800,9 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
-        set_current_tool_pencil(&ctx->tcs[i]);
+        set_current_tool_pencil(&ctx->tcarr[i]);
     }
-    history_push(&ctx->hist_prev, ctx);
+    history_push(&ctx->hist_prevarr, ctx);
 
     /* show up window */
     XMapRaised(dp, ctx->dc.window);
@@ -1810,8 +1812,8 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     if (e->button == XLeftMouseBtn) {
         // next history invalidated after user action
-        historyarr_clear(ctx->dc.dp, &ctx->hist_next);
-        history_push(&ctx->hist_prev, ctx);
+        historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
+        history_push(&ctx->hist_prevarr, ctx);
     }
     if (CURR_TC(ctx).on_press) {
         CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
@@ -2031,10 +2033,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
         case InputS_Color: {
             HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
-                u32 const len = arrlen(CURR_TC(ctx).sdata.colors_argb);
+                u32 const len = arrlen(CURR_TC(ctx).sdata.col_argbarr);
                 if (len != MAX_COLORS) {
                     CURR_TC(ctx).sdata.curr_col = len;
-                    arrpush(CURR_TC(ctx).sdata.colors_argb, 0xFF000000);
+                    arrpush(CURR_TC(ctx).sdata.col_argbarr, 0xFF000000);
                     update_statusline(ctx);
                 }
             }
@@ -2100,7 +2102,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         }
         if ((key_sym == XK_Up || key_sym == XK_Down)
             && !(e.state & ControlMask)) {
-            u32 col_num = arrlen(CURR_TC(ctx).sdata.colors_argb);
+            u32 col_num = arrlen(CURR_TC(ctx).sdata.col_argbarr);
             assert(col_num != 0);
             CURR_TC(ctx).sdata.curr_col =
                 (CURR_TC(ctx).sdata.curr_col + (key_sym == XK_Up ? 1 : -1))
@@ -2307,12 +2309,12 @@ void cleanup(struct Ctx* ctx) {
     if (ctx->input.state == InputS_Console) {
         arrfree(ctx->input.data.cl.cmdarr);
     }
-    historyarr_clear(ctx->dc.dp, &ctx->hist_next);
-    historyarr_clear(ctx->dc.dp, &ctx->hist_prev);
+    historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
+    historyarr_clear(ctx->dc.dp, &ctx->hist_prevarr);
     for (i32 i = 0; i < TCS_NUM; ++i) {
-        arrfree(ctx->tcs[i].sdata.colors_argb);
+        arrfree(ctx->tcarr[i].sdata.col_argbarr);
     }
-    arrfree(ctx->tcs);
+    arrfree(ctx->tcarr);
     XftFontClose(ctx->dc.dp, ctx->dc.fnt.xfont);
     XFreeGC(ctx->dc.dp, ctx->dc.gc);
     XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
