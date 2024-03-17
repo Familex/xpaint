@@ -45,8 +45,11 @@
 // default value for signed integers
 #define NIL              (-1)
 
-#define CURR_TC(p_ctx) ((p_ctx)->tcarr[(p_ctx)->curr_tc])
-#define CURR_COL(p_tc) ((p_tc)->sdata.col_argbarr[(p_tc)->sdata.curr_col])
+#define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
+#define CURR_COL(p_tc)     ((p_tc)->sdata.col_argbarr[(p_tc)->sdata.curr_col])
+// XXX workaround
+#define COL_FG(p_dc, p_sc) ((p_dc)->schemes[(p_sc)].fg.pixel | 0xFF000000)
+#define COL_BG(p_dc, p_sc) ((p_dc)->schemes[(p_sc)].bg.pixel | 0xFF000000)
 // clang-format off
 #define HAS_SELECTION(p_tc) \
     ((p_tc)->type == Tool_Selection \
@@ -107,6 +110,11 @@ struct Ctx {
             XftFont* xfont;
             u32 h;
         } fnt;
+        struct Scheme {
+            XftColor fg;
+            XftColor bg;
+        }* schemes;  // must be len of SchmLast
+        Colormap colmap;
     } dc;
     struct Input {
         Pair prev_c;
@@ -1064,7 +1072,7 @@ void draw_selection_circle(
         SELECTION_CIRCLE.cap_style,
         SELECTION_CIRCLE.join_style
     );
-    XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.background_argb);
+    XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
     XFillArc(
         dc->dp,
         dc->window,
@@ -1077,7 +1085,7 @@ void draw_selection_circle(
         360 * 64
     );
 
-    XSetForeground(dc->dp, dc->screen_gc, SELECTION_CIRCLE.line_col_argb);
+    XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
     XDrawArc(
         dc->dp,
         dc->window,
@@ -1152,11 +1160,7 @@ void draw_selection_circle(
         i32 const current_item =
             current_sel_circ_item(sc, pointer_x, pointer_y);
         if (current_item != NIL) {
-            XSetForeground(
-                dc->dp,
-                dc->screen_gc,
-                SELECTION_CIRCLE.active_background_argb
-            );
+            XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmFocus));
             XFillArc(
                 dc->dp,
                 dc->window,
@@ -1168,11 +1172,7 @@ void draw_selection_circle(
                 (i32)(current_item * segment_deg) * 64,
                 (i32)segment_deg * 64
             );
-            XSetForeground(
-                dc->dp,
-                dc->screen_gc,
-                SELECTION_CIRCLE.active_inner_background_argb
-            );
+            XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
             XFillArc(
                 dc->dp,
                 dc->window,
@@ -1202,18 +1202,18 @@ void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
     );
 }
 
-// FIXME use themes to pass color (dc)
-static void draw_string(struct DrawCtx* dc, char const* str, Pair c, u32 col) {
-    Colormap cm = DefaultColormap(dc->dp, DefaultScreen(dc->dp));
-    XftDraw* d = XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, cm);
-    XftColor xft_col;
-    // FIXME use themes to pass color
-    char xft_col_name[6 + 1 + 1];
-    sprintf(xft_col_name, "#%X", col & 0xFFFFFF);
-    XftColorAllocName(dc->dp, dc->vinfo.visual, cm, xft_col_name, &xft_col);
+static void draw_string(
+    struct DrawCtx* dc,
+    char const* str,
+    Pair c,
+    enum Schm sc,
+    Bool invert
+) {
+    XftDraw* d =
+        XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, dc->colmap);
     XftDrawStringUtf8(
         d,
-        &xft_col,
+        invert ? &dc->schemes[sc].bg : &dc->schemes[sc].fg,
         dc->fnt.xfont,
         c.x,
         c.y,
@@ -1223,14 +1223,15 @@ static void draw_string(struct DrawCtx* dc, char const* str, Pair c, u32 col) {
     XftDrawDestroy(d);
 }
 
-static void draw_int(struct DrawCtx* dc, i32 i, Pair c, u32 col) {
+static void
+draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
     static u32 const MAX_SIZE = 50;
     assert(digit_count(i) < MAX_SIZE);
 
     char buf[MAX_SIZE];
     memset(buf, '\0', MAX_SIZE);  // FIXME memset_s
     sprintf(buf, "%d", i);
-    draw_string(dc, buf, c, col);
+    draw_string(dc, buf, c, sc, invert);
 }
 
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, u32 col) {
@@ -1399,7 +1400,7 @@ void update_statusline(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
     u32 const statusline_h = dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
-    XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
+    XSetForeground(dc->dp, dc->screen_gc, COL_BG(&ctx->dc, SchmNorm));
     XFillRectangle(
         dc->dp,
         dc->back_buffer,
@@ -1420,7 +1421,8 @@ void update_statusline(struct Ctx* ctx) {
             &ctx->dc,
             console_str,
             (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
-            STATUSLINE.font_argb
+            SchmNorm,
+            False
         );
         free(console_str);
     } else {
@@ -1466,8 +1468,8 @@ void update_statusline(struct Ctx* ctx) {
         static u32 const col_rect_w = 30;
         static u32 const col_value_size = 1 + 6;
 
-        XSetBackground(dc->dp, dc->screen_gc, STATUSLINE.background_argb);
-        XSetForeground(dc->dp, dc->screen_gc, STATUSLINE.font_argb);
+        XSetBackground(dc->dp, dc->screen_gc, COL_BG(&ctx->dc, SchmNorm));
+        XSetForeground(dc->dp, dc->screen_gc, COL_FG(&ctx->dc, SchmNorm));
         /* tc */ {
             i32 x = tcs_c.x;
             for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
@@ -1475,8 +1477,8 @@ void update_statusline(struct Ctx* ctx) {
                     dc,
                     tc_name,
                     (Pair) {x, tcs_c.y},
-                    ctx->curr_tc == (tc_name - 1) ? STATUSLINE.strong_font_argb
-                                                  : STATUSLINE.font_argb
+                    ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm,
+                    False
                 );
                 x += (i32)(get_int_width(dc, "%d", tc_name) + small_gap);
             }
@@ -1489,20 +1491,22 @@ void update_statusline(struct Ctx* ctx) {
                     : ctx->input.state == InputS_Console ? "console"
                                                          : "unknown",
                 input_state_c,
-                STATUSLINE.font_argb
+                SchmNorm,
+                False
             );
         }
         draw_string(
             dc,
             tc->ssz_tool_name ? tc->ssz_tool_name : "N/A",
             tool_name_c,
-            STATUSLINE.font_argb
+            SchmNorm,
+            False
         );
-        draw_int(dc, (i32)tc->sdata.line_w, line_w_c, STATUSLINE.font_argb);
+        draw_int(dc, (i32)tc->sdata.line_w, line_w_c, SchmNorm, False);
         /* color */ {
             char col_value[col_value_size + 2];  // FIXME ?
             sprintf(col_value, "#%06X", CURR_COL(tc) & 0xFFFFFF);
-            draw_string(dc, col_value, col_c, STATUSLINE.font_argb);
+            draw_string(dc, col_value, col_c, SchmNorm, False);
             /* color count */ {
                 // FIXME how it possible
                 char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
@@ -1512,7 +1516,7 @@ void update_statusline(struct Ctx* ctx) {
                     tc->sdata.curr_col + 1,
                     arrlen(tc->sdata.col_argbarr)
                 );
-                draw_string(dc, col_count, col_count_c, STATUSLINE.font_argb);
+                draw_string(dc, col_count, col_count_c, SchmNorm, False);
             }
             if (ctx->input.state == InputS_Color) {
                 static u32 const hash_w = 1;
@@ -1527,7 +1531,8 @@ void update_statusline(struct Ctx* ctx) {
                            + (i32
                            )get_string_width(dc, col_value, curr_dig + hash_w),
                        col_c.y},
-                    STATUSLINE.strong_font_argb
+                    SchmFocus,
+                    False
                 );
             }
             XSetForeground(dc->dp, dc->screen_gc, CURR_COL(tc));
@@ -1666,6 +1671,8 @@ void setup(Display* dp, struct Ctx* ctx) {
     i32 result = XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx->dc.vinfo);
     assert(result != 0);
 
+    ctx->dc.colmap = XCreateColormap(dp, root, ctx->dc.vinfo.visual, AllocNone);
+
     /* create window */
     ctx->dc.window = XCreateWindow(
         dp,
@@ -1680,8 +1687,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         ctx->dc.vinfo.visual,
         CWColormap | CWBorderPixel | CWBackPixel | CWEventMask,
         &(XSetWindowAttributes
-        ) {.colormap =
-               XCreateColormap(dp, root, ctx->dc.vinfo.visual, AllocNone),
+        ) {.colormap = ctx->dc.colmap,
            .border_pixel = 0,
            .background_pixel = 0xFFFF00FF,
            .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
@@ -1737,6 +1743,23 @@ void setup(Display* dp, struct Ctx* ctx) {
         ctx->dc.fnt.h = xfont->ascent + xfont->descent;
     }
 
+    /* schemes */ {
+        ctx->dc.schemes = ecalloc(SchmLast, sizeof(ctx->dc.schemes[0]));
+        for (i32 i = 0; i < SchmLast; ++i) {
+            for (i32 j = 0; j < 2; ++j) {
+                if (!XftColorAllocValue(
+                        dp,
+                        ctx->dc.vinfo.visual,
+                        ctx->dc.colmap,
+                        &SCHEMES[i][j],
+                        j ? &ctx->dc.schemes[i].bg : &ctx->dc.schemes[i].fg
+                    )) {
+                    die("can't alloc color");
+                };
+            }
+        }
+    }
+
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
             images[i] = read_png_file(
@@ -1746,7 +1769,7 @@ void setup(Display* dp, struct Ctx* ctx) {
                     : i == I_Fill   ? "./res/tool-fill.png"
                     : i == I_Picker ? "./res/tool-picker.png"
                                     : "null",
-                SELECTION_CIRCLE.background_argb
+                COL_BG(&ctx->dc, SchmNorm)
             );
         }
     }
@@ -2306,6 +2329,20 @@ Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 void cleanup(struct Ctx* ctx) {
+    /* schemes */ {
+        for (i32 i = 0; i < SchmLast; ++i) {
+            for (i32 j = 0; j < 2; ++j) {
+                XftColorFree(
+                    ctx->dc.dp,
+                    ctx->dc.vinfo.visual,
+                    ctx->dc.colmap,
+                    j ? &ctx->dc.schemes[i].bg : &ctx->dc.schemes[i].fg
+                );
+            }
+        }
+        free(ctx->dc.schemes);  // XftColor frees itself somehow
+    }
+    XFreeColormap(ctx->dc.dp, ctx->dc.colmap);
     if (ctx->input.state == InputS_Console) {
         arrfree(ctx->input.data.cl.cmdarr);
     }

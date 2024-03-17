@@ -17,4 +17,10 @@ typedef struct {
     i32 y;
 } Pair;
 
+enum Schm {
+    SchmNorm,
+    SchmFocus,
+    SchmLast,
+};
+
 #endif  // XPAINT_TYPES_H__

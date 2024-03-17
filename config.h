@@ -1,4 +1,5 @@
 #include <X11/X.h>
+#include <X11/extensions/Xrender.h>
 
 #include "types.h"
 
@@ -11,6 +12,13 @@ char const FONT_NAME[] = "monospace:size=10";
 u32 const DRAG_PERIOD_US = 10000;
 i32 const PNG_SAVE_COMPRESSION = 4;
 
+XRenderColor const SCHEMES[SchmLast][2] = {
+    // fg, bg (rgba premultiplied)
+    [SchmNorm] =
+        {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, {0x1818, 0x1818, 0x1818, 0xFFFF}},
+    [SchmFocus] = {{0xFFFF, 0, 0, 0xFFFF}, {0x9999, 0x1818, 0x1818, 0xFFFF}},
+};
+
 struct {
     u32 background_rgb;
 } const WINDOW = {
@@ -18,24 +26,14 @@ struct {
 };
 
 struct {
-    u32 background_argb;
-    u32 font_argb;
-    u32 strong_font_argb;
     u32 padding_bottom;
 } const STATUSLINE = {
-    .background_argb = 0xFF000000,
-    .font_argb = 0xFFFFFFFF,
-    .strong_font_argb = 0xFFFF0000,
     .padding_bottom = 4,
 };
 
 struct {
     u32 outer_r_px;
     u32 inner_r_px;
-    u32 line_col_argb;
-    u32 background_argb;
-    u32 active_background_argb;
-    u32 active_inner_background_argb;
     u32 line_w;
     i32 line_style;
     i32 cap_style;
@@ -43,10 +41,6 @@ struct {
 } const SELECTION_CIRCLE = {
     .outer_r_px = 225,
     .inner_r_px = 40,
-    .line_col_argb = 0xFFAAAA00,
-    .background_argb = 0xFF000000,  // hide png background
-    .active_background_argb = 0xFFAAAA00,
-    .active_inner_background_argb = 0xFF000000,
     .line_w = 2,
     .line_style = LineSolid,
     .cap_style = CapNotLast,
