@@ -79,14 +79,6 @@ enum Icon {
     I_Last,
 };
 
-struct SelectonCircleDims {
-    struct CircleDims {
-        u32 x;
-        u32 y;
-        u32 r;
-    } outer, inner;
-};
-
 struct Ctx {
     struct DrawCtx {
         Display* dp;
@@ -211,7 +203,6 @@ static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
 static i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y);
-static struct SelectonCircleDims get_curr_sel_dims(struct SelectionCircle const* sel_circ);
 
 static void set_current_tool_selection(struct ToolCtx* tc);
 static void set_current_tool_pencil(struct ToolCtx* tc);
@@ -245,6 +236,7 @@ static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
 static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
+// FIXME can be changed to update_screen?
 static void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc);
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
@@ -470,24 +462,6 @@ unsigned char* ximage_to_rgb(XImage const* image, Bool rgba) {
         }
     }
     return data;
-}
-
-struct SelectonCircleDims
-get_curr_sel_dims(struct SelectionCircle const* sel_circ) {
-    return (struct SelectonCircleDims) {
-        .outer =
-            {
-                .x = sel_circ->x - SELECTION_CIRCLE.outer_r_px,
-                .y = sel_circ->y - SELECTION_CIRCLE.outer_r_px,
-                .r = SELECTION_CIRCLE.outer_r_px,
-            },
-        .inner =
-            {
-                .x = sel_circ->x - SELECTION_CIRCLE.inner_r_px,
-                .y = sel_circ->y - SELECTION_CIRCLE.inner_r_px,
-                .r = SELECTION_CIRCLE.inner_r_px,
-            },
-    };
 }
 
 static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
@@ -878,7 +852,6 @@ void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
 }
 
 i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
-    struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
     i32 const pointer_x_rel = x - sc->x;
     i32 const pointer_y_rel = y - sc->y;
     double const segment_rad = PI * 2 / MAX(1, sc->item_count);
@@ -886,7 +859,8 @@ i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     double const pointer_r =
         sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
 
-    if (pointer_r > sel_rect.outer.r || pointer_r < sel_rect.inner.r) {
+    if (pointer_r > SELECTION_CIRCLE.outer_r_px
+        || pointer_r < SELECTION_CIRCLE.inner_r_px) {
         return NIL;
     }
     // FIXME do it right
@@ -1062,7 +1036,8 @@ void draw_selection_circle(
         return;
     }
 
-    struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
+    i32 const outer_r = (i32)SELECTION_CIRCLE.outer_r_px;
+    i32 const inner_r = (i32)SELECTION_CIRCLE.inner_r_px;
 
     XSetLineAttributes(
         dc->dp,
@@ -1072,40 +1047,16 @@ void draw_selection_circle(
         SELECTION_CIRCLE.cap_style,
         SELECTION_CIRCLE.join_style
     );
+
     XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
     XFillArc(
         dc->dp,
         dc->window,
         dc->screen_gc,
-        (i32)sel_rect.outer.x,
-        (i32)sel_rect.outer.y,
-        sel_rect.outer.r * 2,
-        sel_rect.outer.r * 2,
-        0,
-        360 * 64
-    );
-
-    XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
-    XDrawArc(
-        dc->dp,
-        dc->window,
-        dc->screen_gc,
-        (i32)sel_rect.inner.x,
-        (i32)sel_rect.inner.y,
-        sel_rect.inner.r * 2,
-        sel_rect.inner.r * 2,
-        0,
-        360 * 64
-    );
-
-    XDrawArc(
-        dc->dp,
-        dc->window,
-        dc->screen_gc,
-        (i32)sel_rect.outer.x,
-        (i32)sel_rect.outer.y,
-        sel_rect.outer.r * 2,
-        sel_rect.outer.r * 2,
+        sc->x - outer_r,
+        sc->y - outer_r,
+        outer_r * 2,
+        outer_r * 2,
         0,
         360 * 64
     );
@@ -1114,24 +1065,7 @@ void draw_selection_circle(
         double const segment_rad = PI * 2 / MAX(1, sc->item_count);
         double const segment_deg = segment_rad / PI * 180;
 
-        if (sc->item_count >= 2) {
-            for (u32 line_num = 0; line_num < sc->item_count; ++line_num) {
-                XDrawLine(
-                    dc->dp,
-                    dc->window,
-                    dc->screen_gc,
-                    sc->x
-                        + (i32)(cos(segment_rad * line_num) * sel_rect.inner.r),
-                    sc->y
-                        + (i32)(sin(segment_rad * line_num) * sel_rect.inner.r),
-                    sc->x
-                        + (i32)(cos(segment_rad * line_num) * sel_rect.outer.r),
-                    sc->y
-                        + (i32)(sin(segment_rad * line_num) * sel_rect.outer.r)
-                );
-            }
-        }
-
+        // item images
         for (u32 item = 0; item < sc->item_count; ++item) {
             XImage* image = images[sc->items[item].hicon];
             assert(image != NULL);
@@ -1145,18 +1079,18 @@ void draw_selection_circle(
                 0,
                 (i32)(sc->x
                       + cos(-segment_rad * (item + 0.5))
-                          * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
+                          * ((outer_r + inner_r) * 0.5)
                       - image->width / 2.0),
                 (i32)(sc->y
                       + sin(-segment_rad * (item + 0.5))
-                          * ((sel_rect.outer.r + sel_rect.inner.r) * 0.5)
+                          * ((outer_r + inner_r) * 0.5)
                       - image->height / 2.0),
                 image->width,
                 image->height
             );
         }
 
-        // pointer
+        // selected item fill
         i32 const current_item =
             current_sel_circ_item(sc, pointer_x, pointer_y);
         if (current_item != NIL) {
@@ -1165,10 +1099,10 @@ void draw_selection_circle(
                 dc->dp,
                 dc->window,
                 dc->screen_gc,
-                (i32)sel_rect.outer.x,
-                (i32)sel_rect.outer.y,
-                sel_rect.outer.r * 2,
-                sel_rect.outer.r * 2,
+                sc->x - outer_r,
+                sc->y - outer_r,
+                outer_r * 2,
+                outer_r * 2,
                 (i32)(current_item * segment_deg) * 64,
                 (i32)segment_deg * 64
             );
@@ -1177,27 +1111,67 @@ void draw_selection_circle(
                 dc->dp,
                 dc->window,
                 dc->screen_gc,
-                (i32)sel_rect.inner.x,
-                (i32)sel_rect.inner.y,
-                sel_rect.inner.r * 2,
-                sel_rect.inner.r * 2,
+                sc->x - inner_r,
+                sc->y - inner_r,
+                inner_r * 2,
+                inner_r * 2,
                 (i32)(current_item * segment_deg) * 64,
                 (i32)segment_deg * 64
             );
         }
+
+        if (sc->item_count >= 2) {  // segment lines
+            XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
+            for (u32 line_num = 0; line_num < sc->item_count; ++line_num) {
+                XDrawLine(
+                    dc->dp,
+                    dc->window,
+                    dc->screen_gc,
+                    sc->x + (i32)(cos(segment_rad * line_num) * inner_r),
+                    sc->y + (i32)(sin(segment_rad * line_num) * inner_r),
+                    sc->x + (i32)(cos(segment_rad * line_num) * outer_r),
+                    sc->y + (i32)(sin(segment_rad * line_num) * outer_r)
+                );
+            }
+        }
+    }
+
+    /* lines */ {
+        XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
+        XDrawArc(
+            dc->dp,
+            dc->window,
+            dc->screen_gc,
+            sc->x - inner_r,
+            sc->y - inner_r,
+            inner_r * 2,
+            inner_r * 2,
+            0,
+            360 * 64
+        );
+
+        XDrawArc(
+            dc->dp,
+            dc->window,
+            dc->screen_gc,
+            sc->x - outer_r,
+            sc->y - outer_r,
+            outer_r * 2,
+            outer_r * 2,
+            0,
+            360 * 64
+        );
     }
 }
 
 void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
-    struct SelectonCircleDims sel_rect = get_curr_sel_dims(sc);
-
     XClearArea(
         dc->dp,
         dc->window,
-        (i32)sel_rect.outer.x - 1,
-        (i32)sel_rect.outer.y - 1,
-        sel_rect.outer.r * 2 + 2,
-        sel_rect.outer.r * 2 + 2,
+        sc->x - (i32)SELECTION_CIRCLE.outer_r_px - 1,
+        sc->y - (i32)SELECTION_CIRCLE.outer_r_px - 1,
+        SELECTION_CIRCLE.outer_r_px * 2 + 2,
+        SELECTION_CIRCLE.outer_r_px * 2 + 2,
         True  // Expose to draw background
     );
 }
