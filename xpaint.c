@@ -236,8 +236,6 @@ static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
 static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
-// FIXME can be changed to update_screen?
-static void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc);
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
 
@@ -1164,18 +1162,6 @@ void draw_selection_circle(
     }
 }
 
-void clear_selection_circle(struct DrawCtx* dc, struct SelectionCircle* sc) {
-    XClearArea(
-        dc->dp,
-        dc->window,
-        sc->x - (i32)SELECTION_CIRCLE.outer_r_px - 1,
-        sc->y - (i32)SELECTION_CIRCLE.outer_r_px - 1,
-        SELECTION_CIRCLE.outer_r_px * 2 + 2,
-        SELECTION_CIRCLE.outer_r_px * 2 + 2,
-        True  // Expose to draw background
-    );
-}
-
 static void draw_string(
     struct DrawCtx* dc,
     char const* str,
@@ -1835,7 +1821,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
             ctx->sc.items[selected_item].on_select(&CURR_TC(ctx));
         }
         free_sel_circ(&ctx->sc);
-        clear_selection_circle(&ctx->dc, &ctx->sc);
+        update_screen(ctx);
         ctx->input.is_holding = False;
         ctx->input.is_dragging = False;
         return True;  // something selected do nothing else
