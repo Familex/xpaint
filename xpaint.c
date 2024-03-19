@@ -2329,41 +2329,53 @@ Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 void cleanup(struct Ctx* ctx) {
-    /* schemes */ {
-        for (i32 i = 0; i < SchmLast; ++i) {
-            for (i32 j = 0; j < 2; ++j) {
-                XftColorFree(
-                    ctx->dc.dp,
-                    ctx->dc.vinfo.visual,
-                    ctx->dc.colmap,
-                    j ? &ctx->dc.schemes[i].bg : &ctx->dc.schemes[i].fg
-                );
+    /* global */ {
+        for (u32 i = 0; i < I_Last; ++i) {
+            if (images[i] != NULL) {
+                XDestroyImage(images[i]);
             }
         }
-        free(ctx->dc.schemes);  // XftColor frees itself somehow
     }
-    XFreeColormap(ctx->dc.dp, ctx->dc.colmap);
-    if (ctx->input.state == InputS_Console) {
-        arrfree(ctx->input.data.cl.cmdarr);
-    }
-    historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
-    historyarr_clear(ctx->dc.dp, &ctx->hist_prevarr);
-    for (i32 i = 0; i < TCS_NUM; ++i) {
-        arrfree(ctx->tcarr[i].sdata.col_argbarr);
-    }
-    arrfree(ctx->tcarr);
-    XftFontClose(ctx->dc.dp, ctx->dc.fnt.xfont);
-    XFreeGC(ctx->dc.dp, ctx->dc.gc);
-    XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
-    XDestroyImage(ctx->dc.cv.im);
-    XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
-    if (ctx->sel_buf.im != NULL) {
-        XDestroyImage(ctx->sel_buf.im);
-    }
-    for (u32 i = 0; i < I_Last; ++i) {
-        if (images[i] != NULL) {
-            XDestroyImage(images[i]);
+    /* SelectionBuffer */ {
+        if (ctx->sel_buf.im != NULL) {
+            XDestroyImage(ctx->sel_buf.im);
         }
     }
-    XDestroyWindow(ctx->dc.dp, ctx->dc.window);
+    /* History */ {
+        historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
+        historyarr_clear(ctx->dc.dp, &ctx->hist_prevarr);
+    }
+    /* ToolCtx */ {
+        for (i32 i = 0; i < TCS_NUM; ++i) {
+            arrfree(ctx->tcarr[i].sdata.col_argbarr);
+        }
+        arrfree(ctx->tcarr);
+    }
+    /* Input */ {
+        if (ctx->input.state == InputS_Console) {
+            arrfree(ctx->input.data.cl.cmdarr);
+        }
+    }
+    /* DrawCtx */ {
+        /* Scheme */ {  // depends on VisualInfo and Colormap
+            for (i32 i = 0; i < SchmLast; ++i) {
+                for (i32 j = 0; j < 2; ++j) {
+                    XftColorFree(
+                        ctx->dc.dp,
+                        ctx->dc.vinfo.visual,
+                        ctx->dc.colmap,
+                        j ? &ctx->dc.schemes[i].bg : &ctx->dc.schemes[i].fg
+                    );
+                }
+            }
+            free(ctx->dc.schemes);
+        }
+        XftFontClose(ctx->dc.dp, ctx->dc.fnt.xfont);
+        XDestroyImage(ctx->dc.cv.im);
+        XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
+        XFreeGC(ctx->dc.dp, ctx->dc.gc);
+        XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
+        XFreeColormap(ctx->dc.dp, ctx->dc.colmap);
+        XDestroyWindow(ctx->dc.dp, ctx->dc.window);
+    }
 }
