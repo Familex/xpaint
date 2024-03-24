@@ -20,9 +20,9 @@ XRenderColor const SCHEMES[SchmLast][2] = {
 };
 
 struct {
-    u32 background_rgb;
+    u32 background_argb;
 } const WINDOW = {
-    .background_rgb = 0xFF181818,
+    .background_argb = 0xFF181818,
 };
 
 struct {
@@ -59,6 +59,12 @@ struct {
     .cap_style = CapNotLast,
     .join_style = JoinMiter,
     .drag_argb = 0xFFFF0000,
+};
+
+struct {
+    u32 default_line_w;
+} const TOOLS = {
+    .default_line_w = 5,
 };
 
 struct {

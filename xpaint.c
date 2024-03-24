@@ -127,6 +127,9 @@ struct Ctx {
             struct InputConsoleData {
                 char* cmdarr;
             } cl;
+            struct InputMessageData {
+                char* str;
+            } msg;
         } data;
     } input;
     struct ToolCtx {
@@ -199,6 +202,8 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_png_file(struct DrawCtx* dc, char const* file_path);
 static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
+// returns True, if show_message was called
+static Bool process_console_cmd(struct Ctx* ctx, char const* cmd);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -238,6 +243,7 @@ static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
+static void show_message(struct Ctx* ctx, char const* msg);
 
 static struct Ctx ctx_init(Display* dp);
 static void setup(Display* dp, struct Ctx* ctx);
@@ -462,6 +468,50 @@ unsigned char* ximage_to_rgb(XImage const* image, Bool rgba) {
     return data;
 }
 
+Bool process_console_cmd(struct Ctx* ctx, char const* cmd) {
+    assert(cmd);
+    Bool message_shown = False;
+    usize const cmd_len = strlen(cmd);
+    if (!cmd_len) {
+        show_message(ctx, "no commands");
+        return True;
+    }
+    char* cmd_buf = ecalloc(cmd_len + 1, sizeof(char));
+    strncpy(cmd_buf, cmd, cmd_len);
+
+    // naive split by spaces must work on utf8
+    char const* command = strtok(cmd_buf, " ");
+    if (!strcmp(command, "echo")) {
+        char const* user_msg = strtok(NULL, "");
+        show_message(ctx, user_msg ? user_msg : "");
+        message_shown = True;
+    } else if (!strcmp(command, "set")) {
+        char const* prop = strtok(NULL, " ");
+        if (!prop) {
+            show_message(ctx, "provide argument to 'set' command");
+            message_shown = True;
+        } else if (!strcmp(prop, "line_w")) {
+            char const* args = strtok(NULL, "");
+            CURR_TC(ctx).sdata.line_w =
+                args ? strtol(args, NULL, 0) : TOOLS.default_line_w;
+        } else if (!strcmp(prop, "col")) {
+            CURR_COL(&CURR_TC(ctx)) =
+                strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF;
+        }
+    } else {
+        char* message = ecalloc(
+            strlen("no such command: ''") + strlen(command) + 1,
+            sizeof(char)
+        );
+        sprintf(message, "no such command: '%s'", command);
+        show_message(ctx, message);
+        free(message);
+        message_shown = True;
+    }
+    free(cmd_buf);
+    return message_shown;
+}
+
 static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
     struct ToolCtx new_tc = {
         .type = type,
@@ -521,8 +571,12 @@ void set_current_tool_picker(struct ToolCtx* tc) {
 }
 
 void set_current_input_state(struct Input* input, enum InputState const is) {
-    if (input->state == InputS_Console) {
-        arrfree(input->data.cl.cmdarr);
+    switch (input->state) {
+        case InputS_Console:
+            arrfree(input->data.cl.cmdarr);
+            break;
+        default:
+            break;
     }
 
     input->state = is;
@@ -532,7 +586,8 @@ void set_current_input_state(struct Input* input, enum InputState const is) {
             input->data.col = (struct InputColorData) {.current_digit = 0};
             break;
         case InputS_Console:
-            input->data.cl.cmdarr = NULL;
+            input->data.cl = (struct InputConsoleData) {.cmdarr = NULL};
+            break;
         case InputS_Interact:
             break;
     }
@@ -931,7 +986,11 @@ void canvas_line(
 }
 
 void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w) {
-    canvas_circle(dc, c, line_w / 2, col, True);
+    if (line_w == 1) {
+        ximage_put_checked(dc->cv.im, c.x, c.y, col);
+    } else {
+        canvas_circle(dc, c, line_w / 2, col, True);
+    }
 }
 
 static void
@@ -1194,8 +1253,9 @@ draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
     draw_string(dc, buf, c, sc, invert);
 }
 
+// XXX always opaque
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, u32 col) {
-    XSetForeground(dc->dp, dc->screen_gc, col);
+    XSetForeground(dc->dp, dc->screen_gc, col | 0xFF000000);
     return XFillRectangle(
         dc->dp,
         dc->back_buffer,
@@ -1250,7 +1310,7 @@ void update_screen(struct Ctx* ctx) {
             &ctx->dc,
             (Pair) {0, 0},
             (Pair) {(i32)ctx->dc.width, (i32)ctx->dc.height},
-            WINDOW.background_rgb
+            WINDOW.background_argb
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
@@ -1360,15 +1420,11 @@ void update_statusline(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
     u32 const statusline_h = dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
-    XSetForeground(dc->dp, dc->screen_gc, COL_BG(&ctx->dc, SchmNorm));
-    XFillRectangle(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
-        0,
-        (i32)(dc->height - statusline_h),
-        dc->width,
-        statusline_h
+    fill_rect(
+        dc,
+        (Pair) {0, (i32)(dc->height - statusline_h)},
+        (Pair) {(i32)dc->width, (i32)statusline_h},
+        COL_BG(&ctx->dc, SchmNorm)
     );
     if (ctx->input.state == InputS_Console) {
         char const* command = ctx->input.data.cl.cmdarr;
@@ -1495,19 +1551,44 @@ void update_statusline(struct Ctx* ctx) {
                     False
                 );
             }
-            XSetForeground(dc->dp, dc->screen_gc, CURR_COL(tc));
-            XFillRectangle(
-                dc->dp,
-                dc->back_buffer,
-                dc->screen_gc,
-                (i32)(dc->width - col_name_w - col_rect_w - col_count_w),
-                (i32)(dc->height - statusline_h),
-                col_rect_w,
-                statusline_h
+            fill_rect(
+                dc,
+                (Pair
+                ) {(i32)(dc->width - col_name_w - col_rect_w - col_count_w),
+                   (i32)(dc->height - statusline_h)},
+                (Pair) {(i32)col_rect_w, (i32)statusline_h},
+                CURR_COL(tc)
             );
         }
     }
 
+    XdbeSwapBuffers(
+        ctx->dc.dp,
+        &(XdbeSwapInfo) {
+            .swap_window = ctx->dc.window,
+            .swap_action = 0,
+        },
+        1
+    );
+}
+
+// FIXME DRY
+void show_message(struct Ctx* ctx, char const* msg) {
+    u32 const statusline_h =
+        ctx->dc.fnt.xfont->ascent + STATUSLINE.padding_bottom;
+    fill_rect(
+        &ctx->dc,
+        (Pair) {0, (i32)(ctx->dc.height - statusline_h)},
+        (Pair) {(i32)ctx->dc.width, (i32)statusline_h},
+        COL_BG(&ctx->dc, SchmNorm)
+    );
+    draw_string(
+        &ctx->dc,
+        msg,
+        (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
+        SchmNorm,
+        False
+    );
     XdbeSwapBuffers(
         ctx->dc.dp,
         &(XdbeSwapInfo) {
@@ -1610,7 +1691,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             struct ToolCtx tc = {
                 .sdata.col_argbarr = NULL,
                 .sdata.curr_col = 0,
-                .sdata.line_w = 5,
+                .sdata.line_w = TOOLS.default_line_w,
             };
             arrpush(ctx->tcarr, tc);
             arrpush(ctx->tcarr[i].sdata.col_argbarr, 0xFF000000);
@@ -2051,10 +2132,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 char* command = ecalloc(cmd_len + 1, sizeof(char));
                 memcpy(command, ctx->input.data.cl.cmdarr, cmd_len);
                 command[cmd_len] = '\0';
-                trace("xpaint: %s", command);
-                free(command);
                 set_current_input_state(&ctx->input, InputS_Interact);
-                update_statusline(ctx);
+                if (!process_console_cmd(ctx, command)) {
+                    update_statusline(ctx);
+                }
+                free(command);
             } else if (key_sym == XK_BackSpace) {
                 if (arrlen(ctx->input.data.cl.cmdarr)) {
                     (void)arrpoputf8(ctx->input.data.cl.cmdarr);
