@@ -191,6 +191,8 @@ static void trace(char const* fmt, ...);
 static void* ecalloc(u32 n, u32 size);
 static u32 digit_count(u32 number);
 static void arrpoputf8(char const* strarr);
+// needs to be 'free'd after use
+char* str_new(char const* fmt, ...);
 
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
@@ -202,8 +204,15 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_png_file(struct DrawCtx* dc, char const* file_path);
 static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
-// returns True, if show_message was called
-static Bool process_console_cmd(struct Ctx* ctx, char const* cmd);
+typedef struct {
+    enum {
+        PCCR_MSG = 0x1, // wants to show message
+        PCCR_EXIT = 0x2, // wants to exit application
+    } bit_status;
+    char* msg_dyn; // NULL if not PCCR_MSG
+                   // FIXME use dyn suffix for all dynamic objects
+} PCCResult;
+static PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -354,6 +363,20 @@ void arrpoputf8(char const* strarr) {
     }
 }
 
+// FIXME use everythere
+char* str_new(char const* fmt, ...) {
+    va_list ap1;
+    va_list ap2;
+    va_start(ap1, fmt);
+    va_copy(ap2, ap1);
+    usize len = vsnprintf(NULL, 0, fmt, ap1);
+    char* result = ecalloc(len + 1, sizeof(char));
+    vsnprintf(result, len + 1, fmt, ap2);
+    va_end(ap1);
+    va_end(ap2);
+    return result;
+}
+
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
     return point_from_cv_to_scr_xy(dc, p.x, p.y);
 }
@@ -468,48 +491,41 @@ unsigned char* ximage_to_rgb(XImage const* image, Bool rgba) {
     return data;
 }
 
-Bool process_console_cmd(struct Ctx* ctx, char const* cmd) {
+PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
     assert(cmd);
-    Bool message_shown = False;
+    char* msg_to_show = NULL;  // counts as PCCR_MSG at func end
+    usize bit_status = 0;
     usize const cmd_len = strlen(cmd);
     if (!cmd_len) {
-        show_message(ctx, "no commands");
-        return True;
+        return (PCCResult
+        ) {.bit_status = PCCR_MSG, .msg_dyn = str_new("no commands")};
     }
-    char* cmd_buf = ecalloc(cmd_len + 1, sizeof(char));
-    strncpy(cmd_buf, cmd, cmd_len);
-
-    // naive split by spaces must work on utf8
+    char* cmd_buf = str_new("%s", cmd);
+    // naive split by spaces (0x20) works on utf8
     char const* command = strtok(cmd_buf, " ");
     if (!strcmp(command, "echo")) {
         char const* user_msg = strtok(NULL, "");
-        show_message(ctx, user_msg ? user_msg : "");
-        message_shown = True;
+        msg_to_show = str_new("%s", user_msg ? user_msg : "");
     } else if (!strcmp(command, "set")) {
         char const* prop = strtok(NULL, " ");
         if (!prop) {
-            show_message(ctx, "provide argument to 'set' command");
-            message_shown = True;
+            msg_to_show = str_new("provide argument to 'set' command");
         } else if (!strcmp(prop, "line_w")) {
             char const* args = strtok(NULL, "");
             CURR_TC(ctx).sdata.line_w =
                 args ? strtol(args, NULL, 0) : TOOLS.default_line_w;
         } else if (!strcmp(prop, "col")) {
             CURR_COL(&CURR_TC(ctx)) =
-                strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF;
+                (strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF) | 0xFF000000;
         }
+    } else if (!strcmp(command, "q")) {
+        bit_status |= PCCR_EXIT;
     } else {
-        char* message = ecalloc(
-            strlen("no such command: ''") + strlen(command) + 1,
-            sizeof(char)
-        );
-        sprintf(message, "no such command: '%s'", command);
-        show_message(ctx, message);
-        free(message);
-        message_shown = True;
+        msg_to_show = str_new("no such command '%s'", command);
     }
     free(cmd_buf);
-    return message_shown;
+    bit_status |= msg_to_show ? PCCR_MSG : 0;
+    return (PCCResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
 }
 
 static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
@@ -2133,10 +2149,16 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 memcpy(command, ctx->input.data.cl.cmdarr, cmd_len);
                 command[cmd_len] = '\0';
                 set_current_input_state(&ctx->input, InputS_Interact);
-                if (!process_console_cmd(ctx, command)) {
-                    update_statusline(ctx);
+                PCCResult res = process_console_cmd(ctx, command);
+                update_screen(ctx);
+                if (res.bit_status & PCCR_MSG) {
+                    show_message(ctx, res.msg_dyn);
+                    free(res.msg_dyn);
                 }
                 free(command);
+                if (res.bit_status & PCCR_EXIT) {
+                    return False;
+                }
             } else if (key_sym == XK_BackSpace) {
                 if (arrlen(ctx->input.data.cl.cmdarr)) {
                     (void)arrpoputf8(ctx->input.data.cl.cmdarr);
