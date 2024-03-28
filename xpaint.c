@@ -241,8 +241,6 @@ static Bool history_move(struct Ctx* ctx, Bool forward);
 static Bool history_push(struct History** hist, struct Ctx* ctx);
 
 static void historyarr_clear(Display* dp, struct History** hist);
-static void canvas_clear(Display* dp, struct Canvas* cv);
-static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 
 static void canvas_fill(struct DrawCtx* dc, u32 color);
 static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 line_w);
@@ -250,7 +248,10 @@ static void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w);
 static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
-static void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height);
+static Bool canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb);
+static void canvas_free(Display* dp, struct Canvas* cv);
+static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
+static void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void update_screen(struct Ctx* ctx);
@@ -438,12 +439,13 @@ XImage* read_png_file(
     i32 width = NIL;
     i32 height = NIL;
     i32 comp = NIL;
+    // NOLINTNEXTLINE FIXME clang-tidy: image_data can be garbage
     stbi_uc* image_data = stbi_load(file_name, &width, &height, &comp, 4);
     if (image_data == NULL) {
         return NULL;
     }
     // process image data
-    for (i32 i = 0; i < 4 * width * height; i += 4) {
+    for (i32 i = 0; i < 4 * (width * height - 1); i += 4) {
         if (!image_data[i] && transp_argb) {
             // fill transparent pixels with transp_argb value
             image_data[i + 0] = (transp_argb & 0x000000FF) >> (0 * 8);
@@ -548,11 +550,37 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
             } else {
                 msg_to_show = str_new("no font provided");
             }
+        } else if (!strcmp(prop, "finp")) {
+            ctx->finp.path = strtok(NULL, "");  // user can load NULL
+            msg_to_show = str_new("finp set to '%s'", ctx->finp.path);
+        } else if (!strcmp(prop, "fout")) {
+            ctx->fout.path = strtok(NULL, "");
+            msg_to_show = str_new("fout set to '%s'", ctx->fout.path);
         } else {
             msg_to_show = str_new("no such property '%s'", prop);
         }
     } else if (!strcmp(command, "q")) {
         bit_status |= PCCR_EXIT;
+    } else if (!strcmp(command, "save")) {
+        char const* file_path = strtok(NULL, "");  // path with spaces
+        if (!file_path && ctx->fout.path) {
+            file_path = ctx->fout.path;
+        }
+        msg_to_show = str_new(
+            save_png_file(&ctx->dc, file_path) ? "image saved to '%s'"
+                                               : "failed save image to '%s'",
+            file_path
+        );
+    } else if (!strcmp(command, "load")) {
+        char const* file_path = strtok(NULL, "");  // path with spaces
+        if (!file_path && ctx->finp.path) {
+            file_path = ctx->finp.path;
+        }
+        msg_to_show = str_new(
+            canvas_load(&ctx->dc, file_path, 0) ? "image loaded from '%s'"
+                                                : "failed load image from '%s'",
+            file_path
+        );
     } else {
         msg_to_show = str_new("no such command '%s'", command);
     }
@@ -893,7 +921,7 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     struct History const curr = arrpop(*hist_pop);
     history_push(hist_save, ctx);
 
-    canvas_clear(ctx->dc.dp, &ctx->dc.cv);
+    canvas_free(ctx->dc.dp, &ctx->dc.cv);
 
     // apply history
     ctx->dc.cv = curr.cv;
@@ -919,23 +947,9 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
 void historyarr_clear(Display* dp, struct History** histarr) {
     for (u32 i = 0; i < arrlenu(*histarr); ++i) {
         struct History* h = &(*histarr)[i];
-        canvas_clear(dp, &h->cv);
+        canvas_free(dp, &h->cv);
     }
     arrfree(*histarr);
-}
-
-void canvas_clear(Display* dp, struct Canvas* cv) {
-    XDestroyImage(cv->im);
-}
-
-void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
-    double old_zoom = (double)dc->cv.zoom;
-    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, 1, CANVAS.max_zoom);
-    // keep cursor at same position
-    dc->cv.scroll.x += (i32)((dc->cv.scroll.x - cursor.x)
-                             * ((double)dc->cv.zoom / old_zoom - 1));
-    dc->cv.scroll.y += (i32)((dc->cv.scroll.y - cursor.y)
-                             * ((double)dc->cv.zoom / old_zoom - 1));
 }
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
@@ -1130,6 +1144,36 @@ void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
             ximage_put_checked(dc->cv.im, x, y, color);
         }
     }
+}
+
+static Bool
+canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb) {
+    XImage* im = read_png_file(dc, file_name, 0);
+    if (!im) {
+        return False;
+    }
+    canvas_free(dc->dp, &dc->cv);
+    dc->cv.im = im;
+    dc->cv.width = dc->cv.im->width;
+    dc->cv.height = dc->cv.im->height;
+    return True;
+}
+
+void canvas_free(Display* dp, struct Canvas* cv) {
+    XDestroyImage(cv->im);
+    cv->im = NULL;
+    cv->width = 0;
+    cv->height = 0;
+}
+
+void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
+    double old_zoom = (double)dc->cv.zoom;
+    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, 1, CANVAS.max_zoom);
+    // keep cursor at same position
+    dc->cv.scroll.x += (i32)((dc->cv.scroll.x - cursor.x)
+                             * ((double)dc->cv.zoom / old_zoom - 1));
+    dc->cv.scroll.y += (i32)((dc->cv.scroll.y - cursor.y)
+                             * ((double)dc->cv.zoom / old_zoom - 1));
 }
 
 void draw_selection_circle(
@@ -1642,7 +1686,7 @@ void show_message(struct Ctx* ctx, char const* msg) {
     );
 }
 
-void resize_canvas(struct DrawCtx* dc, i32 new_width, i32 new_height) {
+void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height) {
     if (new_width <= 0 || new_height <= 0) {
         trace("resize_canvas: invalid canvas size");
         return;
@@ -1871,12 +1915,9 @@ void setup(Display* dp, struct Ctx* ctx) {
         );
         // read canvas data from file or create empty
         if (ctx->finp.path) {
-            ctx->dc.cv.im = read_png_file(&ctx->dc, ctx->finp.path, 0);
-            if (!ctx->dc.cv.im) {
+            if (!canvas_load(&ctx->dc, ctx->finp.path, 0)) {
                 die("xpaint: failed to read input file");
             }
-            ctx->dc.cv.width = ctx->dc.cv.im->width;
-            ctx->dc.cv.height = ctx->dc.cv.im->height;
         } else {
             ctx->dc.cv.width = CANVAS.default_width;
             ctx->dc.cv.height = CANVAS.default_height;
@@ -2108,7 +2149,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             if (key_sym >= XK_Left && key_sym <= XK_Down
                 && e.state & ControlMask) {
                 u32 const value = e.state & ShiftMask ? 25 : 5;
-                resize_canvas(
+                canvas_resize(
                     &ctx->dc,
                     (i32)(ctx->dc.cv.width
                           + (key_sym == XK_Left        ? -value
@@ -2459,7 +2500,7 @@ void cleanup(struct Ctx* ctx) {
             free(ctx->dc.schemes);
         }
         free_fnt(ctx->dc.dp, &ctx->dc.fnt);
-        XDestroyImage(ctx->dc.cv.im);
+        canvas_free(ctx->dc.dp, &ctx->dc.cv);
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
         XFreeGC(ctx->dc.dp, ctx->dc.gc);
         XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
