@@ -194,6 +194,9 @@ static void arrpoputf8(char const* strarr);
 // needs to be 'free'd after use
 char* str_new(char const* fmt, ...);
 
+Bool set_font(struct DrawCtx* dc, char const* font_name);
+void free_fnt(Display* dp, struct Fnt* fnt);
+
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
@@ -377,6 +380,25 @@ char* str_new(char const* fmt, ...) {
     return result;
 }
 
+Bool set_font(struct DrawCtx* dc, char const* font_name) {
+    // XXX valgrind detects leak here (FIXME check it again)
+    XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
+    if (!xfont) {
+        // FIXME never go there
+        return False;
+    }
+    free_fnt(dc->dp, &dc->fnt);
+    dc->fnt.xfont = xfont;
+    dc->fnt.h = xfont->ascent + xfont->descent;
+    return True;
+}
+
+void free_fnt(Display* dp, struct Fnt* fnt) {
+    if (fnt->xfont) {
+        XftFontClose(dp, fnt->xfont);
+    }
+}
+
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
     return point_from_cv_to_scr_xy(dc, p.x, p.y);
 }
@@ -517,6 +539,17 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
         } else if (!strcmp(prop, "col")) {
             CURR_COL(&CURR_TC(ctx)) =
                 (strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF) | 0xFF000000;
+        } else if (!strcmp(prop, "font")) {
+            char const* font = strtok(NULL, " ");
+            if (font) {
+                if (!set_font(&ctx->dc, font)) {
+                    msg_to_show = str_new("invalid font name: '%s'", font);
+                }
+            } else {
+                msg_to_show = str_new("no font provided");
+            }
+        } else {
+            msg_to_show = str_new("no such property '%s'", prop);
         }
     } else if (!strcmp(command, "q")) {
         bit_status |= PCCR_EXIT;
@@ -1458,44 +1491,38 @@ void update_statusline(struct Ctx* ctx) {
         );
         free(console_str);
     } else {
-        // clang-format off
-            static Bool widths_initialized = False;
-            static u32 const gap = 5;
-            static u32 const small_gap = gap / 2;
-            // widths of captions
-            static u32 input_state_w = NIL;
-            static u32 col_name_w = NIL;
-            static u32 tcs_w = NIL;
-            static u32 col_count_w = NIL;
-            static u32 tool_name_w = NIL;
-            if (!widths_initialized) {
-                // XXX uses 'F' as average character
-                /* col_count_w */ {
-                    col_count_w =
-                        get_string_width(dc, "/", 1) +
-                        get_int_width(dc, "%d", MAX_COLORS) * 2 +
-                        gap;
-                }
-                /* tcs_w */ {
-                    for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                        tcs_w += get_int_width(dc, "%d", tc_name) + small_gap;
-                    }
-                    tcs_w += gap;
-                }
-                col_name_w = get_string_width(dc, "#FFFFFF", 7) + gap;
-                // FIXME how many symbols?
-                input_state_w = get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
-                tool_name_w = get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
-                widths_initialized = True;
+        static u32 const gap = 5;
+        static u32 const small_gap = gap / 2;
+        // widths of captions
+        // XXX uses 'F' as average character
+        u32 const col_count_w = get_string_width(dc, "/", 1)
+            + get_int_width(dc, "%d", MAX_COLORS) * 2 + gap;
+        u32 tcs_w = 0;
+        /* tcs_w */ {
+            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                tcs_w += get_int_width(dc, "%d", tc_name) + small_gap;
             }
-            // left **bottom** corners of captions
-            Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE.padding_bottom)};
-            Pair const input_state_c = { (i32)(tcs_c.x + tcs_w), tcs_c.y };
-            Pair const tool_name_c = { (i32)(input_state_c.x + input_state_w), input_state_c.y };
-            Pair const line_w_c = { (i32)(tool_name_c.x + tool_name_w), tool_name_c.y };
-            Pair const col_count_c = { (i32)(dc->width - col_count_w), line_w_c.y };
-            Pair const col_c = { (i32)(col_count_c.x - col_name_w), col_count_c.y };
-        // clang-format on
+            tcs_w += gap;
+        }
+        u32 const col_name_w = get_string_width(dc, "#FFFFFF", 7) + gap;
+        // FIXME how many symbols?
+        u32 const input_state_w =
+            get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
+        u32 const tool_name_w =
+            get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
+        // left **bottom** corners of captions
+        Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE.padding_bottom)};
+        Pair const input_state_c = {(i32)(tcs_c.x + tcs_w), tcs_c.y};
+        Pair const tool_name_c = {
+            (i32)(input_state_c.x + input_state_w),
+            input_state_c.y
+        };
+        Pair const line_w_c = {
+            (i32)(tool_name_c.x + tool_name_w),
+            tool_name_c.y
+        };
+        Pair const col_count_c = {(i32)(dc->width - col_count_w), line_w_c.y};
+        Pair const col_c = {(i32)(col_count_c.x - col_name_w), col_count_c.y};
         // colored rectangle
         static u32 const col_rect_w = 30;
         static u32 const col_value_size = 1 + 6;
@@ -1793,11 +1820,8 @@ void setup(Display* dp, struct Ctx* ctx) {
         XSetWMProtocols(dp, ctx->dc.window, &wm_delete_window, 1);
     }
 
-    /* font */ {
-        // XXX valgrind detects leak here
-        XftFont* xfont = XftFontOpenName(dp, screen, FONT_NAME);
-        ctx->dc.fnt.xfont = xfont;
-        ctx->dc.fnt.h = xfont->ascent + xfont->descent;
+    if (!set_font(&ctx->dc, FONT_NAME)) {
+        die("failed to load default font: %s", FONT_NAME);
     }
 
     /* schemes */ {
@@ -2434,7 +2458,7 @@ void cleanup(struct Ctx* ctx) {
             }
             free(ctx->dc.schemes);
         }
-        XftFontClose(ctx->dc.dp, ctx->dc.fnt.xfont);
+        free_fnt(ctx->dc.dp, &ctx->dc.fnt);
         XDestroyImage(ctx->dc.cv.im);
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
         XFreeGC(ctx->dc.dp, ctx->dc.gc);
