@@ -31,6 +31,13 @@
 #include "config.h"
 #include "types.h"
 
+/*
+ * free -dyn vars with 'free' function
+ * free -arr vars with 'arrfree' function
+ * free -imdyn vars with 'stbi_image_free' function
+ * free -xdyn vars with 'XFree' function
+ */
+
 #define XLeftMouseBtn    Button1
 #define XMiddleMouseBtn  Button2
 #define XRightMouseBtn   Button3
@@ -48,8 +55,8 @@
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc)     ((p_tc)->sdata.col_argbarr[(p_tc)->sdata.curr_col])
 // XXX workaround
-#define COL_FG(p_dc, p_sc) ((p_dc)->schemes[(p_sc)].fg.pixel | 0xFF000000)
-#define COL_BG(p_dc, p_sc) ((p_dc)->schemes[(p_sc)].bg.pixel | 0xFF000000)
+#define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
+#define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 // clang-format off
 #define HAS_SELECTION(p_tc) \
     ((p_tc)->type == Tool_Selection \
@@ -105,7 +112,7 @@ struct Ctx {
         struct Scheme {
             XftColor fg;
             XftColor bg;
-        }* schemes;  // must be len of SchmLast
+        }* schemes_dyn;  // must be len of SchmLast
         Colormap colmap;
     } dc;
     struct Input {
@@ -127,9 +134,6 @@ struct Ctx {
             struct InputConsoleData {
                 char* cmdarr;
             } cl;
-            struct InputMessageData {
-                char* str;
-            } msg;
         } data;
     } input;
     struct ToolCtx {
@@ -137,7 +141,7 @@ struct Ctx {
         void (*on_release)(struct DrawCtx*, struct ToolCtx*, struct Input*, XButtonReleasedEvent const*);
         void (*on_drag)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
         void (*on_move)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
-        char* ssz_tool_name;  // static zero terminated string pointer
+        char* tool_name_dyn;
         enum ToolType {
             Tool_Selection,
             Tool_Pencil,
@@ -192,12 +196,13 @@ static void* ecalloc(u32 n, u32 size);
 static u32 digit_count(u32 number);
 static void arrpoputf8(char const* strarr);
 // needs to be 'free'd after use
-char* str_new(char const* fmt, ...);
+static char* str_new(char const* fmt, ...);
+static void str_free(char** str_dyn);
 
-Bool set_font(struct DrawCtx* dc, char const* font_name);
-void free_fnt(Display* dp, struct Fnt* fnt);
-void file_ctx_set(struct FileCtx* file_ctx, char const* file_path);
-void file_ctx_free(struct FileCtx* file_ctx);
+static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
+static void fnt_free(Display* dp, struct Fnt* fnt);
+static void file_ctx_set(struct FileCtx* file_ctx, char const* file_path);
+static void file_ctx_free(struct FileCtx* file_ctx);
 
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
@@ -223,12 +228,16 @@ static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
 static i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y);
 
-static void set_current_tool_selection(struct ToolCtx* tc);
-static void set_current_tool_pencil(struct ToolCtx* tc);
-static void set_current_tool_fill(struct ToolCtx* tc);
-static void set_current_tool_picker(struct ToolCtx* tc);
-static void set_current_input_state(struct Input* input, enum InputState is);
+// separate functions, because they are callbacks
+static void tool_ctx_set_selection(struct ToolCtx* tc);
+static void tool_ctx_set_pencil(struct ToolCtx* tc);
+static void tool_ctx_set_fill(struct ToolCtx* tc);
+static void tool_ctx_set_picker(struct ToolCtx* tc);
+static void tool_ctx_free(struct ToolCtx* tc);
 
+static void input_state_set(struct Input* input, enum InputState is);
+
+// separate functions, because they are callbacks
 static void tool_selection_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
 static void tool_selection_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
 static void tool_selection_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
@@ -386,22 +395,30 @@ char* str_new(char const* fmt, ...) {
     return result;
 }
 
-Bool set_font(struct DrawCtx* dc, char const* font_name) {
+void str_free(char** str_dyn) {
+    if (*str_dyn) {
+        free(*str_dyn);
+        *str_dyn = NULL;
+    }
+}
+
+Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
     // XXX valgrind detects leak here (FIXME check it again)
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
         // FIXME never go there
         return False;
     }
-    free_fnt(dc->dp, &dc->fnt);
+    fnt_free(dc->dp, &dc->fnt);
     dc->fnt.xfont = xfont;
     dc->fnt.h = xfont->ascent + xfont->descent;
     return True;
 }
 
-void free_fnt(Display* dp, struct Fnt* fnt) {
+void fnt_free(Display* dp, struct Fnt* fnt) {
     if (fnt->xfont) {
         XftFontClose(dp, fnt->xfont);
+        fnt->xfont = NULL;
     }
 }
 
@@ -411,10 +428,12 @@ void file_ctx_set(struct FileCtx* file_ctx, char const* file_path) {
 }
 
 void file_ctx_free(struct FileCtx* file_ctx) {
-    if (file_ctx->path_dyn) {
-        free(file_ctx->path_dyn);
-        file_ctx->path_dyn = NULL;
-    }
+    str_free(&file_ctx->path_dyn);
+}
+
+void tool_ctx_free(struct ToolCtx* tc) {
+    arrfree(tc->sdata.col_argbarr);
+    str_free(&tc->tool_name_dyn);
 }
 
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
@@ -494,16 +513,16 @@ XImage* read_png_file(
 }
 
 Bool save_png_file(struct DrawCtx* dc, char const* file_path) {
-    unsigned char* data_rgba = ximage_to_rgb(dc->cv.im, True);
+    unsigned char* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
     Bool const result = stbi_write_png(
         file_path,
         (i32)dc->cv.width,
         (i32)dc->cv.height,
         PNG_SAVE_COMPRESSION,
-        data_rgba,
+        rgba_dyn,
         0
     );
-    free(data_rgba);
+    free(rgba_dyn);
     return result;
 }
 
@@ -541,9 +560,9 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
         return (PCCResult
         ) {.bit_status = PCCR_MSG, .msg_dyn = str_new("no commands")};
     }
-    char* cmd_buf = str_new("%s", cmd);
+    char* cmd_bufdyn = str_new("%s", cmd);
     // naive split by spaces (0x20) works on utf8
-    char const* command = strtok(cmd_buf, " ");
+    char const* command = strtok(cmd_bufdyn, " ");
     if (!strcmp(command, "echo")) {
         char const* user_msg = strtok(NULL, "");
         msg_to_show = str_new("%s", user_msg ? user_msg : "");
@@ -561,7 +580,7 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
         } else if (!strcmp(prop, "font")) {
             char const* font = strtok(NULL, " ");
             if (font) {
-                if (!set_font(&ctx->dc, font)) {
+                if (!fnt_set(&ctx->dc, font)) {
                     msg_to_show = str_new("invalid font name: '%s'", font);
                 }
             } else {
@@ -601,7 +620,7 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
     } else {
         msg_to_show = str_new("no such command '%s'", command);
     }
-    free(cmd_buf);
+    str_free(&cmd_bufdyn);
     bit_status |= msg_to_show ? PCCR_MSG : 0;
     return (PCCResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
 }
@@ -611,12 +630,13 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
         .type = type,
         .sdata = tc->sdata,
     };
+    tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
     switch (type) {
         case Tool_Selection:
             new_tc.on_press = &tool_selection_on_press;
             new_tc.on_release = &tool_selection_on_release;
             new_tc.on_drag = &tool_selection_on_drag;
-            new_tc.ssz_tool_name = "selection";
+            new_tc.tool_name_dyn = str_new("selection");
             new_tc.data.sel = (struct SelectionData) {
                 .by = NIL,
                 .bx = NIL,
@@ -631,40 +651,41 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             new_tc.on_release = &tool_pencil_on_release;
             new_tc.on_drag = &tool_pencil_on_drag;
             new_tc.on_move = &tool_pencil_on_move;
-            new_tc.ssz_tool_name = "pencil";
+            new_tc.tool_name_dyn = str_new("pencil");
             new_tc.data.pencil = (struct PencilData) {
                 .line_r = 5,
             };
             break;
         case Tool_Fill:
             new_tc.on_release = &tool_fill_on_release;
-            new_tc.ssz_tool_name = "fill";
+            new_tc.tool_name_dyn = str_new("fill");
             break;
         case Tool_Picker:
             new_tc.on_release = &tool_picker_on_release;
-            new_tc.ssz_tool_name = "color picker";
+            new_tc.tool_name_dyn = str_new("color picker");
             break;
     }
+    tool_ctx_free(tc);
     *tc = new_tc;
 }
 
-void set_current_tool_selection(struct ToolCtx* tc) {
+void tool_ctx_set_selection(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Selection);
 }
 
-void set_current_tool_pencil(struct ToolCtx* tc) {
+void tool_ctx_set_pencil(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Pencil);
 }
 
-void set_current_tool_fill(struct ToolCtx* tc) {
+void tool_ctx_set_fill(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Fill);
 }
 
-void set_current_tool_picker(struct ToolCtx* tc) {
+void tool_ctx_set_picker(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Picker);
 }
 
-void set_current_input_state(struct Input* input, enum InputState const is) {
+void input_state_set(struct Input* input, enum InputState const is) {
     switch (input->state) {
         case InputS_Console:
             arrfree(input->data.cl.cmdarr);
@@ -869,12 +890,12 @@ static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
         return;
     }
 
-    Pair* queue = NULL;
+    Pair* queue_arr = NULL;
     Pair first = {x, y};
-    arrpush(queue, first);
+    arrpush(queue_arr, first);
 
-    while (arrlen(queue)) {
-        Pair curr = arrpop(queue);
+    while (arrlen(queue_arr)) {
+        Pair curr = arrpop(queue_arr);
 
         for (i32 dir = 0; dir < 4; ++dir) {
             Pair d_curr = {curr.x + d_rows[dir], curr.y + d_cols[dir]};
@@ -886,12 +907,12 @@ static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
 
             if (XGetPixel(im, d_curr.x, d_curr.y) == area_col) {
                 XPutPixel(im, d_curr.x, d_curr.y, targ_col);
-                arrpush(queue, d_curr);
+                arrpush(queue_arr, d_curr);
             }
         }
     }
 
-    arrfree(queue);
+    arrfree(queue_arr);
 }
 
 void tool_fill_on_release(
@@ -971,10 +992,10 @@ void historyarr_clear(Display* dp, struct History** histarr) {
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
     static struct Item tools[] = {
-        {.on_select = &set_current_tool_selection, .hicon = I_Select},
-        {.on_select = &set_current_tool_pencil, .hicon = I_Pencil},
-        {.on_select = &set_current_tool_fill, .hicon = I_Fill},
-        {.on_select = &set_current_tool_picker, .hicon = I_Picker},
+        {.on_select = &tool_ctx_set_selection, .hicon = I_Select},
+        {.on_select = &tool_ctx_set_pencil, .hicon = I_Pencil},
+        {.on_select = &tool_ctx_set_fill, .hicon = I_Fill},
+        {.on_select = &tool_ctx_set_picker, .hicon = I_Picker},
     };
 
     sc->is_active = True;
@@ -1126,12 +1147,12 @@ void canvas_copy_region(
     i32 const w = dc->cv.im->width;
     i32 const h = dc->cv.im->height;
 
-    u32* region = (u32*)ecalloc(w * h, sizeof(u32));
+    u32* region_dyn = (u32*)ecalloc(w * h, sizeof(u32));
     for (i32 get_or_set = 1; get_or_set >= 0; --get_or_set) {
         for (i32 y = 0; y < dims.y; ++y) {
             for (i32 x = 0; x < dims.x; ++x) {
                 if (get_or_set) {
-                    region[y * w + x] =
+                    region_dyn[y * w + x] =
                         XGetPixel(dc->cv.im, from.x + x, from.y + y);
                     if (clear_source) {
                         ximage_put_checked(
@@ -1146,13 +1167,13 @@ void canvas_copy_region(
                         dc->cv.im,
                         to.x + x,
                         to.y + y,
-                        region[y * w + x]
+                        region_dyn[y * w + x]
                     );
                 }
             }
         }
     }
-    free(region);
+    free(region_dyn);
 }
 
 void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
@@ -1344,7 +1365,7 @@ static void draw_string(
         XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, dc->colmap);
     XftDrawStringUtf8(
         d,
-        invert ? &dc->schemes[sc].bg : &dc->schemes[sc].fg,
+        invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
         dc->fnt.xfont,
         c.x,
         c.y,
@@ -1541,18 +1562,18 @@ void update_statusline(struct Ctx* ctx) {
     if (ctx->input.state == InputS_Console) {
         char const* command = ctx->input.data.cl.cmdarr;
         usize const command_len = arrlen(command);
-        char* console_str = ecalloc(2 + command_len, sizeof(char));
-        console_str[0] = ':';
-        console_str[command_len + 1] = '\0';
-        memcpy(console_str + 1, command, command_len);
+        char* cl_str_dyn = ecalloc(2 + command_len, sizeof(char));
+        cl_str_dyn[0] = ':';
+        cl_str_dyn[command_len + 1] = '\0';
+        memcpy(cl_str_dyn + 1, command, command_len);
         draw_string(
             &ctx->dc,
-            console_str,
+            cl_str_dyn,
             (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
             SchmNorm,
             False
         );
-        free(console_str);
+        str_free(&cl_str_dyn);
     } else {
         static u32 const gap = 5;
         static u32 const small_gap = gap / 2;
@@ -1619,7 +1640,7 @@ void update_statusline(struct Ctx* ctx) {
         }
         draw_string(
             dc,
-            tc->ssz_tool_name ? tc->ssz_tool_name : "N/A",
+            tc->tool_name_dyn ? tc->tool_name_dyn : "N/A",
             tool_name_c,
             SchmNorm,
             False
@@ -1883,12 +1904,12 @@ void setup(Display* dp, struct Ctx* ctx) {
         XSetWMProtocols(dp, ctx->dc.window, &wm_delete_window, 1);
     }
 
-    if (!set_font(&ctx->dc, FONT_NAME)) {
+    if (!fnt_set(&ctx->dc, FONT_NAME)) {
         die("failed to load default font: %s", FONT_NAME);
     }
 
     /* schemes */ {
-        ctx->dc.schemes = ecalloc(SchmLast, sizeof(ctx->dc.schemes[0]));
+        ctx->dc.schemes_dyn = ecalloc(SchmLast, sizeof(ctx->dc.schemes_dyn[0]));
         for (i32 i = 0; i < SchmLast; ++i) {
             for (i32 j = 0; j < 2; ++j) {
                 if (!XftColorAllocValue(
@@ -1896,7 +1917,8 @@ void setup(Display* dp, struct Ctx* ctx) {
                         ctx->dc.vinfo.visual,
                         ctx->dc.colmap,
                         &SCHEMES[i][j],
-                        j ? &ctx->dc.schemes[i].bg : &ctx->dc.schemes[i].fg
+                        j ? &ctx->dc.schemes_dyn[i].bg
+                          : &ctx->dc.schemes_dyn[i].fg
                     )) {
                     die("can't alloc color");
                 };
@@ -1964,7 +1986,7 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
-        set_current_tool_pencil(&ctx->tcarr[i]);
+        tool_ctx_set_pencil(&ctx->tcarr[i]);
     }
     history_push(&ctx->hist_prevarr, ctx);
 
@@ -2155,7 +2177,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
             }
             HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_c) {
-                set_current_input_state(&ctx->input, InputS_Color);
+                input_state_set(&ctx->input, InputS_Color);
                 update_statusline(ctx);
             }
             if (key_sym >= XK_1 && key_sym <= XK_9) {
@@ -2190,7 +2212,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             }
             HANDLE_KEY_CASE(XK_semicolon) {  // FIXME XK_colon
-                set_current_input_state(&ctx->input, InputS_Console);
+                input_state_set(&ctx->input, InputS_Console);
                 update_statusline(ctx);
             }
         } break;
@@ -2229,17 +2251,17 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         case InputS_Console: {
             if (key_sym == XK_Return) {  // apply command
                 usize cmd_len = arrlen(ctx->input.data.cl.cmdarr);
-                char* command = ecalloc(cmd_len + 1, sizeof(char));
-                memcpy(command, ctx->input.data.cl.cmdarr, cmd_len);
-                command[cmd_len] = '\0';
-                set_current_input_state(&ctx->input, InputS_Interact);
-                PCCResult res = process_console_cmd(ctx, command);
+                char* cmd_dyn = ecalloc(cmd_len + 1, sizeof(char));
+                memcpy(cmd_dyn, ctx->input.data.cl.cmdarr, cmd_len);
+                cmd_dyn[cmd_len] = '\0';
+                input_state_set(&ctx->input, InputS_Interact);
+                PCCResult res = process_console_cmd(ctx, cmd_dyn);
                 update_screen(ctx);
                 if (res.bit_status & PCCR_MSG) {
                     show_message(ctx, res.msg_dyn);
-                    free(res.msg_dyn);
+                    str_free(&res.msg_dyn);
                 }
-                free(command);
+                str_free(&cmd_dyn);
                 if (res.bit_status & PCCR_EXIT) {
                     return False;
                 }
@@ -2288,7 +2310,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
     // independent
     HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
-        set_current_input_state(&ctx->input, InputS_Interact);
+        input_state_set(&ctx->input, InputS_Interact);
         update_statusline(ctx);
     }
     HANDLE_KEY_END()
@@ -2366,17 +2388,17 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
             );
         } else if (request.target == atoms[A_ImagePng]) {
             trace("requested image/png");
-            unsigned char* rgb_data = ximage_to_rgb(ctx->sel_buf.im, False);
+            unsigned char* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
             i32 png_data_size = NIL;
-            stbi_uc* png_data = stbi_write_png_to_mem(
-                rgb_data,
+            stbi_uc* png_imdyn = stbi_write_png_to_mem(
+                rgb_dyn,
                 0,
                 ctx->sel_buf.im->width,
                 ctx->sel_buf.im->height,
                 3,
                 &png_data_size
             );
-            if (png_data == NULL) {
+            if (png_imdyn == NULL) {
                 die("stbi: %s", stbi_failure_reason());
             }
 
@@ -2387,12 +2409,12 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
                 request.target,
                 8,
                 PropModeReplace,
-                png_data,
+                png_imdyn,
                 png_data_size
             );
 
-            free(rgb_data);
-            stbi_image_free(png_data);
+            free(rgb_dyn);
+            stbi_image_free(png_imdyn);
         }
         XSelectionEvent sendEvent = {
             .type = SelectionNotify,
@@ -2423,7 +2445,7 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         Atom actual_type = 0;
         i32 actual_format = 0;
         u64 bytes_after = 0;
-        Atom* data = NULL;
+        Atom* data_xdyn = NULL;
         u64 count = 0;
         XGetWindowProperty(
             ctx->dc.dp,
@@ -2437,12 +2459,12 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             &actual_format,
             &count,
             &bytes_after,
-            (unsigned char**)&data
+            (unsigned char**)&data_xdyn
         );
 
         if (selection.target == atoms[A_Targets]) {
             for (u32 i = 0; i < count; ++i) {
-                Atom li = data[i];
+                Atom li = data_xdyn[i];
                 // leak
                 trace("Requested target: %s\n", XGetAtomName(ctx->dc.dp, li));
                 if (li == atoms[A_Utf8string]) {
@@ -2464,8 +2486,8 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             // the data is in {data, count}
         }
 
-        if (data) {
-            XFree(data);
+        if (data_xdyn) {
+            XFree(data_xdyn);
         }
     }
     return True;
@@ -2498,7 +2520,7 @@ void cleanup(struct Ctx* ctx) {
     }
     /* ToolCtx */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
-            arrfree(ctx->tcarr[i].sdata.col_argbarr);
+            tool_ctx_free(&ctx->tcarr[i]);
         }
         arrfree(ctx->tcarr);
     }
@@ -2515,13 +2537,14 @@ void cleanup(struct Ctx* ctx) {
                         ctx->dc.dp,
                         ctx->dc.vinfo.visual,
                         ctx->dc.colmap,
-                        j ? &ctx->dc.schemes[i].bg : &ctx->dc.schemes[i].fg
+                        j ? &ctx->dc.schemes_dyn[i].bg
+                          : &ctx->dc.schemes_dyn[i].fg
                     );
                 }
             }
-            free(ctx->dc.schemes);
+            free(ctx->dc.schemes_dyn);
         }
-        free_fnt(ctx->dc.dp, &ctx->dc.fnt);
+        fnt_free(ctx->dc.dp, &ctx->dc.fnt);
         canvas_free(ctx->dc.dp, &ctx->dc.cv);
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
         XFreeGC(ctx->dc.dp, ctx->dc.gc);
