@@ -181,7 +181,7 @@ struct Ctx {
         XImage* im;
     } sel_buf;
     struct FileCtx {
-        char const* path;
+        char* path_dyn;
     } finp, fout;
 };
 
@@ -196,6 +196,8 @@ char* str_new(char const* fmt, ...);
 
 Bool set_font(struct DrawCtx* dc, char const* font_name);
 void free_fnt(Display* dp, struct Fnt* fnt);
+void file_ctx_set(struct FileCtx* file_ctx, char const* file_path);
+void file_ctx_free(struct FileCtx* file_ctx);
 
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
@@ -294,14 +296,17 @@ i32 main(i32 argc, char** argv) {
             if (i + 1 == argc) {
                 die("xpaint: supply argument for -i or --file");
             }
-            ctx.finp.path = argv[++i];
+            file_ctx_set(&ctx.finp, argv[++i]);
         } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
             if (i + 1 == argc) {
                 die("xpaint: supply argument for -o or --output");
             }
-            ctx.fout.path = argv[++i];
+            file_ctx_set(&ctx.fout, argv[++i]);
+        } else if (argv[i][0] != '-') {
+            file_ctx_set(&ctx.finp, argv[i]);
+            file_ctx_set(&ctx.fout, argv[i]);
         } else {
-            die("usage: xpaint [-v] [-i INPUT_FILE] [-o OUTPUT_FILE]");
+            die("usage: xpaint [-v] [-i INPUT_FILE] [-o OUTPUT_FILE] [FILE]");
         }
     }
 
@@ -397,6 +402,18 @@ Bool set_font(struct DrawCtx* dc, char const* font_name) {
 void free_fnt(Display* dp, struct Fnt* fnt) {
     if (fnt->xfont) {
         XftFontClose(dp, fnt->xfont);
+    }
+}
+
+void file_ctx_set(struct FileCtx* file_ctx, char const* file_path) {
+    file_ctx_free(file_ctx);
+    file_ctx->path_dyn = str_new("%s", file_path);
+}
+
+void file_ctx_free(struct FileCtx* file_ctx) {
+    if (file_ctx->path_dyn) {
+        free(file_ctx->path_dyn);
+        file_ctx->path_dyn = NULL;
     }
 }
 
@@ -551,11 +568,11 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
                 msg_to_show = str_new("no font provided");
             }
         } else if (!strcmp(prop, "finp")) {
-            ctx->finp.path = strtok(NULL, "");  // user can load NULL
-            msg_to_show = str_new("finp set to '%s'", ctx->finp.path);
+            file_ctx_set(&ctx->finp, strtok(NULL, ""));  // user can load NULL
+            msg_to_show = str_new("finp set to '%s'", ctx->finp.path_dyn);
         } else if (!strcmp(prop, "fout")) {
-            ctx->fout.path = strtok(NULL, "");
-            msg_to_show = str_new("fout set to '%s'", ctx->fout.path);
+            file_ctx_set(&ctx->fout, strtok(NULL, ""));  // user can load NULL
+            msg_to_show = str_new("fout set to '%s'", ctx->fout.path_dyn);
         } else {
             msg_to_show = str_new("no such property '%s'", prop);
         }
@@ -563,8 +580,8 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
         bit_status |= PCCR_EXIT;
     } else if (!strcmp(command, "save")) {
         char const* file_path = strtok(NULL, "");  // path with spaces
-        if (!file_path && ctx->fout.path) {
-            file_path = ctx->fout.path;
+        if (!file_path && ctx->fout.path_dyn) {
+            file_path = ctx->fout.path_dyn;
         }
         msg_to_show = str_new(
             save_png_file(&ctx->dc, file_path) ? "image saved to '%s'"
@@ -573,8 +590,8 @@ PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
         );
     } else if (!strcmp(command, "load")) {
         char const* file_path = strtok(NULL, "");  // path with spaces
-        if (!file_path && ctx->finp.path) {
-            file_path = ctx->finp.path;
+        if (!file_path && ctx->finp.path_dyn) {
+            file_path = ctx->finp.path_dyn;
         }
         msg_to_show = str_new(
             canvas_load(&ctx->dc, file_path, 0) ? "image loaded from '%s'"
@@ -1160,8 +1177,10 @@ canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb) {
 }
 
 void canvas_free(Display* dp, struct Canvas* cv) {
-    XDestroyImage(cv->im);
-    cv->im = NULL;
+    if (cv->im) {
+        XDestroyImage(cv->im);
+        cv->im = NULL;
+    }
     cv->width = 0;
     cv->height = 0;
 }
@@ -1914,8 +1933,8 @@ void setup(Display* dp, struct Ctx* ctx) {
             &canvas_gc_vals
         );
         // read canvas data from file or create empty
-        if (ctx->finp.path) {
-            if (!canvas_load(&ctx->dc, ctx->finp.path, 0)) {
+        if (ctx->finp.path_dyn) {
+            if (!canvas_load(&ctx->dc, ctx->finp.path_dyn, 0)) {
                 die("xpaint: failed to read input file");
             }
         } else {
@@ -2262,7 +2281,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             update_statusline(ctx);
         }
         HANDLE_KEY_CASE_MASK(ControlMask, XK_s) {  // save to current file
-            if (save_png_file(&ctx->dc, ctx->fout.path)) {
+            if (save_png_file(&ctx->dc, ctx->fout.path_dyn)) {
                 trace("xpaint: file saved");
             }
         }
@@ -2456,7 +2475,6 @@ Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
     // close window on request
     return False;
 }
-
 void cleanup(struct Ctx* ctx) {
     /* global */ {
         for (u32 i = 0; i < I_Last; ++i) {
@@ -2464,6 +2482,10 @@ void cleanup(struct Ctx* ctx) {
                 XDestroyImage(images[i]);
             }
         }
+    }
+    /* file paths */ {
+        file_ctx_free(&ctx->fout);
+        file_ctx_free(&ctx->finp);
     }
     /* SelectionBuffer */ {
         if (ctx->sel_buf.im != NULL) {
