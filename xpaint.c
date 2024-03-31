@@ -284,6 +284,8 @@ static Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event);
 static Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event);
 static Bool client_message_hdlr(struct Ctx* ctx, XEvent* event);
 static void cleanup(struct Ctx* ctx);
+
+static void main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos);
 // clang-format on
 
 static Bool is_verbose_output = False;
@@ -299,23 +301,40 @@ i32 main(i32 argc, char** argv) {
     struct Ctx ctx = ctx_init(display);
 
     for (i32 i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
-            is_verbose_output = True;
-        } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--file")) {
-            if (i + 1 == argc) {
-                die("xpaint: supply argument for -i or --file");
-            }
-            file_ctx_set(&ctx.finp, argv[++i]);
-        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
-            if (i + 1 == argc) {
-                die("xpaint: supply argument for -o or --output");
-            }
-            file_ctx_set(&ctx.fout, argv[++i]);
-        } else if (argv[i][0] != '-') {
+        if (argv[i][0] != '-') {  // main argument
             file_ctx_set(&ctx.finp, argv[i]);
             file_ctx_set(&ctx.fout, argv[i]);
+        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
+            is_verbose_output = True;
+        } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--input")) {
+            main_arg_bound_check("-i or --input", argc, argv, i);
+            file_ctx_set(&ctx.finp, argv[++i]);
+        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
+            main_arg_bound_check("-o or --output", argc, argv, i);
+            file_ctx_set(&ctx.fout, argv[++i]);
+        } else if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--width")) {
+            main_arg_bound_check("-w or --width", argc, argv, i);
+            ctx.dc.cv.width = strtol(argv[++i], NULL, 0);
+            if (ctx.dc.cv.width <= 0) {
+                die("xpaint: canvas width must be positive number");
+            }
+            ctx.dc.width = ctx.dc.cv.width;
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--height")) {
+            main_arg_bound_check("-h or --height", argc, argv, i);
+            ctx.dc.cv.height = strtol(argv[++i], NULL, 0);
+            if (ctx.dc.cv.height <= 0) {
+                die("xpaint: canvas height must be positive number");
+            }
+            ctx.dc.height = ctx.dc.cv.height;
         } else {
-            die("usage: xpaint [-v] [-i INPUT_FILE] [-o OUTPUT_FILE] [FILE]");
+            die("Usage: xpaint [OPTIONS] [FILE]\n"
+                "\n"
+                "Options:\n"
+                "  -v, --verbose                Use verbose output\n"
+                "  -w, --width <canvas width>   Set canvas width\n"
+                "  -h, --height <canvas height> Set canvas height\n"
+                "  -i, --input <file path>      Set load file\n"
+                "  -o, --output <file path>     Set save file");
         }
     }
 
@@ -1795,17 +1814,30 @@ void run(struct Ctx* ctx) {
 
 struct Ctx ctx_init(Display* dp) {
     return (struct Ctx) {
-        .dc.dp = dp,
-        .dc.width = CANVAS.default_width,
-        .dc.height = CANVAS.default_height,
-        .dc.cv.zoom = 1,
-        .dc.cv.scroll = {0, 0},
+        .dc =
+            (struct DrawCtx) {
+                .dp = dp,
+                .width = CANVAS.default_width,
+                .height = CANVAS.default_height,
+                .cv =
+                    (struct Canvas) {
+                        .width = NIL,
+                        .height = NIL,
+                        .im = NULL,
+                        .zoom = 1,
+                        .scroll = {0, 0},
+                    },
+            },
+        .input =
+            (struct Input) {
+                .state = InputS_Interact,
+                .last_processed_pointer = {NIL, NIL},
+            },
+        .sel_buf.im = NULL,
+        .tcarr = NULL,
+        .curr_tc = 0,
         .hist_nextarr = NULL,
         .hist_prevarr = NULL,
-        .sel_buf.im = NULL,
-        .input.state = InputS_Interact,
-        .input.last_processed_pointer = {NIL, NIL},
-        .curr_tc = 0,
     };
 }
 
@@ -1960,8 +1992,11 @@ void setup(Display* dp, struct Ctx* ctx) {
                 die("xpaint: failed to read input file");
             }
         } else {
-            ctx->dc.cv.width = CANVAS.default_width;
-            ctx->dc.cv.height = CANVAS.default_height;
+            ctx->dc.cv.width = ctx->dc.cv.width != NIL ? ctx->dc.cv.width
+                                                       : CANVAS.default_width;
+            ctx->dc.cv.height = ctx->dc.cv.height != NIL
+                ? ctx->dc.cv.height
+                : CANVAS.default_height;
             Pixmap data = XCreatePixmap(
                 dp,
                 ctx->dc.window,
@@ -2497,6 +2532,7 @@ Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
     // close window on request
     return False;
 }
+
 void cleanup(struct Ctx* ctx) {
     /* global */ {
         for (u32 i = 0; i < I_Last; ++i) {
@@ -2551,5 +2587,12 @@ void cleanup(struct Ctx* ctx) {
         XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
         XFreeColormap(ctx->dc.dp, ctx->dc.colmap);
         XDestroyWindow(ctx->dc.dp, ctx->dc.window);
+    }
+}
+
+static void
+main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos) {
+    if (pos + 1 == argc || argv[pos + 1][0] == '-') {
+        die("xpaint: supply argument for %s", cmd_name);
     }
 }
