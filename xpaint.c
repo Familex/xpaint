@@ -220,7 +220,6 @@ typedef struct {
         PCCR_EXIT = 0x2, // wants to exit application
     } bit_status;
     char* msg_dyn; // NULL if not PCCR_MSG
-                   // FIXME use dyn suffix for all dynamic objects
 } PCCResult;
 static PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd);
 
@@ -400,7 +399,6 @@ void arrpoputf8(char const* strarr) {
     }
 }
 
-// FIXME use everythere
 char* str_new(char const* fmt, ...) {
     va_list ap1;
     va_list ap2;
@@ -422,7 +420,6 @@ void str_free(char** str_dyn) {
 }
 
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
-    // XXX valgrind detects leak here (FIXME check it again)
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
         // FIXME never go there
@@ -494,7 +491,6 @@ XImage* read_png_file(
     i32 width = NIL;
     i32 height = NIL;
     i32 comp = NIL;
-    // NOLINTNEXTLINE FIXME clang-tidy: image_data can be garbage
     stbi_uc* image_data = stbi_load(file_name, &width, &height, &comp, 4);
     if (image_data == NULL) {
         return NULL;
@@ -2215,15 +2211,14 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 input_state_set(&ctx->input, InputS_Color);
                 update_statusline(ctx);
             }
-            if (key_sym >= XK_1 && key_sym <= XK_9) {
+            if (BETWEEN(key_sym, XK_1, XK_9)) {
                 u32 val = key_sym - XK_1;
                 if (val < TCS_NUM) {
                     ctx->curr_tc = val;
                     update_statusline(ctx);
                 }
             }
-            if (key_sym >= XK_Left && key_sym <= XK_Down
-                && e.state & ControlMask) {
+            if (BETWEEN(key_sym, XK_Left, XK_Down) && e.state & ControlMask) {
                 u32 const value = e.state & ShiftMask ? 25 : 5;
                 canvas_resize(
                     &ctx->dc,
@@ -2246,7 +2241,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
                 update_screen(ctx);
             }
-            HANDLE_KEY_CASE(XK_semicolon) {  // FIXME XK_colon
+            // XK_colon not work for some reason
+            HANDLE_KEY_CASE_MASK(ShiftMask, XK_semicolon) {
                 input_state_set(&ctx->input, InputS_Console);
                 update_statusline(ctx);
             }
@@ -2270,16 +2266,21 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_statusline(ctx);
             }
             // change selected color digit with pressed key
-            if ((key_sym >= XK_0 && key_sym <= XK_9)
-                || (key_sym >= XK_a && key_sym <= XK_f
-                )) {  // FIXME handle by text_buf
-                // selected digit counts from left to right except alpha (aarrggbb <=> --012345)
-                u32 val = key_sym - (key_sym <= XK_9 ? XK_0 : XK_a - 10);
-                u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
-                CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
-                CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
-                to_next_input_digit(&ctx->input, True);
-                update_statusline(ctx);
+            if (strlen(lookup_buf) == 1) {
+                u32 val = lookup_buf[0]
+                    - (BETWEEN(lookup_buf[0], '0', '9')       ? '0'
+                           : BETWEEN(lookup_buf[0], 'a', 'f') ? ('a' - 10)
+                           : BETWEEN(lookup_buf[0], 'A', 'F') ? ('A' - 10)
+                                                              : 0);
+                if (val != lookup_buf[0]) {  // if assigned
+                    // selected digit counts from left to
+                    // right except alpha (aarrggbb <=> --012345)
+                    u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
+                    CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
+                    CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
+                    to_next_input_digit(&ctx->input, True);
+                    update_statusline(ctx);
+                }
             }
         } break;
 
