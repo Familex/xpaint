@@ -86,6 +86,53 @@ enum Icon {
     I_Last,
 };
 
+struct ClCommand {
+    enum ClCTag {
+        ClC_Echo,
+        ClC_Set,
+        ClC_Exit,
+        ClC_Save,
+        ClC_Load,
+    } tag;
+    union ClCData {
+        struct ClCDSet {
+            enum ClCDSTag {
+                ClCDS_LineW,
+                ClCDS_Col,
+                ClCDS_Font,
+                ClCDS_FInp,
+                ClCDS_FOut,
+            } tag;
+            union ClCDSData {
+                struct ClCDSDLineW {
+                    u32 value;
+                } line_w;
+                struct ClCDSDCol {
+                    u32 argb;
+                } col;
+                struct ClCDSDFont {
+                    char* name_dyn;
+                } font;
+                struct ClCDSDFInp {
+                    char* path_dyn;
+                } finp;
+                struct ClCDSDFOut {
+                    char* path_dyn;
+                } fout;
+            } data;
+        } set;
+        struct ClCDEcho {
+            char* msg_dyn;
+        } echo;
+        struct ClCDSave {
+            char* path_dyn;
+        } save;
+        struct ClCDLoad {
+            char* path_dyn;
+        } load;
+    } data;
+};
+
 struct Ctx {
     struct DrawCtx {
         Display* dp;
@@ -214,14 +261,35 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_png_file(struct DrawCtx* dc, char const* file_path);
 static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
+
 typedef struct {
     enum {
-        PCCR_MSG = 0x1, // wants to show message
-        PCCR_EXIT = 0x2, // wants to exit application
+        ClCPrc_Msg = 0x1, // wants to show message
+        ClCPrc_Exit = 0x2, // wants to exit application
     } bit_status;
     char* msg_dyn; // NULL if not PCCR_MSG
-} PCCResult;
-static PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd);
+} ClCPrcResult;
+static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
+typedef struct {
+    enum {
+        ClCPrs_Ok,
+        ClCPrs_ENoArg,
+        ClCPrs_ENoSubArg,
+        ClCPrs_EInvSubArg, // invalid
+    } tag;
+    union {
+        struct ClCommand ok;
+        struct {
+            char* arg_dyn;
+        } nosubarg;
+        struct {
+            char* arg_dyn;
+            char* inv_val_dyn;
+        } invsubarg;
+    } d;
+} ClCPrsResult;
+static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
+static void cl_cmd_free(struct ClCommand* cl_cmd);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -566,78 +634,174 @@ unsigned char* ximage_to_rgb(XImage const* image, Bool rgba) {
     return data;
 }
 
-PCCResult process_console_cmd(struct Ctx* ctx, char const* cmd) {
-    assert(cmd);
-    char* msg_to_show = NULL;  // counts as PCCR_MSG at func end
+ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
+    assert(cl_cmd);
+    char* msg_to_show = NULL;  // counts as PCCR_Msg at func end
     usize bit_status = 0;
-    usize const cmd_len = strlen(cmd);
-    if (!cmd_len) {
-        return (PCCResult
-        ) {.bit_status = PCCR_MSG, .msg_dyn = str_new("no commands")};
+    switch (cl_cmd->tag) {
+        case ClC_Set: {
+            switch (cl_cmd->data.set.tag) {
+                case ClCDS_LineW: {
+                    CURR_TC(ctx).sdata.line_w =
+                        cl_cmd->data.set.data.line_w.value;
+                } break;
+                case ClCDS_Col: {
+                    CURR_COL(&CURR_TC(ctx)) = cl_cmd->data.set.data.col.argb;
+                } break;
+                case ClCDS_Font: {
+                    char const* font = cl_cmd->data.set.data.font.name_dyn;
+                    if (!fnt_set(&ctx->dc, font)) {
+                        msg_to_show = str_new("invalid font name: '%s'", font);
+                    }
+                } break;
+                case ClCDS_FInp: {
+                    char const* path = cl_cmd->data.set.data.finp.path_dyn;
+                    file_ctx_set(&ctx->finp, path);
+                    msg_to_show = str_new("finp set to '%s'", path);
+                } break;
+                case ClCDS_FOut: {
+                    char const* path = cl_cmd->data.set.data.fout.path_dyn;
+                    file_ctx_set(&ctx->fout, path);
+                    msg_to_show = str_new("fout set to '%s'", path);
+                } break;
+            }
+        } break;
+        case ClC_Echo: {
+            msg_to_show = str_new("%s", cl_cmd->data.echo.msg_dyn);
+        } break;
+        case ClC_Exit: {
+            bit_status |= ClCPrc_Exit;
+        } break;
+        case ClC_Save: {
+            char const* path = cl_cmd->data.save.path_dyn
+                ? cl_cmd->data.save.path_dyn
+                : ctx->finp.path_dyn;
+            msg_to_show = str_new(
+                save_png_file(&ctx->dc, path) ? "image saved to '%s'"
+                                              : "failed save image to '%s'",
+                path
+            );
+        } break;
+        case ClC_Load: {
+            char const* path = cl_cmd->data.load.path_dyn
+                ? cl_cmd->data.load.path_dyn
+                : ctx->fout.path_dyn;
+            msg_to_show = str_new(
+                canvas_load(&ctx->dc, path, 0) ? "image loaded from '%s'"
+                                               : "failed load image from '%s'",
+                path
+            );
+        } break;
     }
-    char* cmd_bufdyn = str_new("%s", cmd);
+    bit_status |= msg_to_show ? ClCPrc_Msg : 0;
+    return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
+}
+
+ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
+    assert(cl);
+    ClCPrsResult res = {.tag = ClCPrs_Ok};
+    char* cl_bufdyn = str_new("%s", cl);
     // naive split by spaces (0x20) works on utf8
-    char const* command = strtok(cmd_bufdyn, " ");
-    if (!strcmp(command, "echo")) {
+    char const* cmd = strtok(cl_bufdyn, " ");
+    if (!strcmp(cmd, "echo")) {
+        res.d.ok.tag = ClC_Echo;
         char const* user_msg = strtok(NULL, "");
-        msg_to_show = str_new("%s", user_msg ? user_msg : "");
-    } else if (!strcmp(command, "set")) {
+        res.d.ok.data.echo.msg_dyn = str_new("%s", user_msg ? user_msg : "");
+    } else if (!strcmp(cmd, "set")) {
+        res.d.ok.tag = ClC_Set;
+        res.d.ok.data.set = (struct ClCDSet) {0};
         char const* prop = strtok(NULL, " ");
         if (!prop) {
-            msg_to_show = str_new("provide argument to 'set' command");
+            // can't return there, because we must free resourses
+            res.tag = ClCPrs_ENoSubArg;
+            res.d.nosubarg.arg_dyn = str_new("set");
         } else if (!strcmp(prop, "line_w")) {
+            res.d.ok.data.set.tag = ClCDS_LineW;
             char const* args = strtok(NULL, "");
-            CURR_TC(ctx).sdata.line_w =
+            res.d.ok.data.set.data.line_w.value =
                 args ? strtol(args, NULL, 0) : TOOLS.default_line_w;
         } else if (!strcmp(prop, "col")) {
-            CURR_COL(&CURR_TC(ctx)) =
+            res.d.ok.data.set.tag = ClCDS_Col;
+            res.d.ok.data.set.data.col.argb =
                 (strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF) | 0xFF000000;
         } else if (!strcmp(prop, "font")) {
+            res.d.ok.data.set.tag = ClCDS_Font;
             char const* font = strtok(NULL, " ");
             if (font) {
-                if (!fnt_set(&ctx->dc, font)) {
-                    msg_to_show = str_new("invalid font name: '%s'", font);
-                }
+                res.d.ok.data.set.data.font.name_dyn = str_new("%s", font);
             } else {
-                msg_to_show = str_new("no font provided");
+                res.tag = ClCPrs_ENoSubArg;
+                res.d.nosubarg.arg_dyn = str_new("font");
             }
         } else if (!strcmp(prop, "finp")) {
-            file_ctx_set(&ctx->finp, strtok(NULL, ""));  // user can load NULL
-            msg_to_show = str_new("finp set to '%s'", ctx->finp.path_dyn);
+            res.d.ok.data.set.tag = ClCDS_FInp;
+            char const* path = strtok(NULL, "");  // user can load NULL
+            if (path) {
+                res.d.ok.data.set.data.finp.path_dyn = str_new("%s", path);
+            }
         } else if (!strcmp(prop, "fout")) {
-            file_ctx_set(&ctx->fout, strtok(NULL, ""));  // user can load NULL
-            msg_to_show = str_new("fout set to '%s'", ctx->fout.path_dyn);
+            res.d.ok.data.set.tag = ClCDS_FOut;
+            char const* path = strtok(NULL, "");  // user can load NULL
+            if (path) {
+                res.d.ok.data.set.data.fout.path_dyn = str_new("%s", path);
+            }
         } else {
-            msg_to_show = str_new("no such property '%s'", prop);
+            res.tag = ClCPrs_EInvSubArg;
+            res.d.invsubarg.arg_dyn = str_new("set");
+            res.d.invsubarg.inv_val_dyn = str_new(prop);
         }
-    } else if (!strcmp(command, "q")) {
-        bit_status |= PCCR_EXIT;
-    } else if (!strcmp(command, "save")) {
-        char const* file_path = strtok(NULL, "");  // path with spaces
-        if (!file_path && ctx->fout.path_dyn) {
-            file_path = ctx->fout.path_dyn;
+    } else if (!strcmp(cmd, "q")) {
+        res.d.ok.tag = ClC_Exit;
+    } else if (!strcmp(cmd, "save")) {
+        res.d.ok.tag = ClC_Save;
+        char const* path = strtok(NULL, "");  // path with spaces
+        if (path) {
+            res.d.ok.data.save.path_dyn = str_new("%s", path);
         }
-        msg_to_show = str_new(
-            save_png_file(&ctx->dc, file_path) ? "image saved to '%s'"
-                                               : "failed save image to '%s'",
-            file_path
-        );
-    } else if (!strcmp(command, "load")) {
-        char const* file_path = strtok(NULL, "");  // path with spaces
-        if (!file_path && ctx->finp.path_dyn) {
-            file_path = ctx->finp.path_dyn;
+    } else if (!strcmp(cmd, "load")) {
+        res.d.ok.tag = ClC_Load;
+        char const* path = strtok(NULL, "");  // path with spaces
+        if (path) {
+            res.d.ok.data.load.path_dyn = str_new("%s", path);
         }
-        msg_to_show = str_new(
-            canvas_load(&ctx->dc, file_path, 0) ? "image loaded from '%s'"
-                                                : "failed load image from '%s'",
-            file_path
-        );
     } else {
-        msg_to_show = str_new("no such command '%s'", command);
+        res.tag = ClCPrs_ENoArg;
     }
-    str_free(&cmd_bufdyn);
-    bit_status |= msg_to_show ? PCCR_MSG : 0;
-    return (PCCResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
+    str_free(&cl_bufdyn);
+
+    return res;
+}
+
+void cl_cmd_free(struct ClCommand* cl_cmd) {
+    switch (cl_cmd->tag) {
+        case ClC_Set:
+            switch (cl_cmd->data.set.tag) {
+                case ClCDS_Font:
+                    free(cl_cmd->data.set.data.font.name_dyn);
+                    break;
+                case ClCDS_FInp:
+                    free(cl_cmd->data.set.data.finp.path_dyn);
+                    break;
+                case ClCDS_FOut:
+                    free(cl_cmd->data.set.data.fout.path_dyn);
+                    break;
+                case ClCDS_LineW:
+                case ClCDS_Col:
+                    break;  // no default branch to enable warnings
+            }
+            break;
+        case ClC_Save:
+            free(cl_cmd->data.save.path_dyn);
+            break;
+        case ClC_Load:
+            free(cl_cmd->data.load.path_dyn);
+            break;
+        case ClC_Echo:
+            free(cl_cmd->data.echo.msg_dyn);
+            break;
+        case ClC_Exit:
+            break;  // no default branch to enable warnings
+    }
 }
 
 static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
@@ -2291,15 +2455,45 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 memcpy(cmd_dyn, ctx->input.data.cl.cmdarr, cmd_len);
                 cmd_dyn[cmd_len] = '\0';
                 input_state_set(&ctx->input, InputS_Interact);
-                PCCResult res = process_console_cmd(ctx, cmd_dyn);
-                update_screen(ctx);
-                if (res.bit_status & PCCR_MSG) {
-                    show_message(ctx, res.msg_dyn);
-                    str_free(&res.msg_dyn);
-                }
+                ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
                 str_free(&cmd_dyn);
-                if (res.bit_status & PCCR_EXIT) {
-                    return False;
+                switch (res.tag) {
+                    case ClCPrs_Ok: {
+                        struct ClCommand* cmd = &res.d.ok;
+                        ClCPrcResult res = cl_cmd_process(ctx, cmd);
+                        update_screen(ctx);
+                        if (res.bit_status & ClCPrc_Msg) {
+                            show_message(ctx, res.msg_dyn);
+                            str_free(&res.msg_dyn);
+                        }
+                        cl_cmd_free(cmd);
+                        if (res.bit_status & ClCPrc_Exit) {
+                            return False;
+                        }
+                    } break;
+                    case ClCPrs_ENoArg: {
+                        show_message(ctx, "no command");
+                    } break;
+                    case ClCPrs_ENoSubArg: {
+                        char* msg_dyn = str_new(
+                            "provide value to '%s' cmd",
+                            res.d.nosubarg.arg_dyn
+                        );
+                        show_message(ctx, msg_dyn);
+                        free(msg_dyn);
+                        free(res.d.nosubarg.arg_dyn);
+                    } break;
+                    case ClCPrs_EInvSubArg: {
+                        char* msg_dyn = str_new(
+                            "invalid arg '%s' provided to '%s' cmd",
+                            res.d.invsubarg.inv_val_dyn,
+                            res.d.invsubarg.arg_dyn
+                        );
+                        show_message(ctx, msg_dyn);
+                        free(msg_dyn);
+                        free(res.d.invsubarg.arg_dyn);
+                        free(res.d.invsubarg.inv_val_dyn);
+                    } break;
                 }
             } else if (key_sym == XK_BackSpace) {
                 if (arrlen(ctx->input.data.cl.cmdarr)) {
