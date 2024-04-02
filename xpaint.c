@@ -36,6 +36,7 @@
  * free -arr vars with 'arrfree' function
  * free -imdyn vars with 'stbi_image_free' function
  * free -xdyn vars with 'XFree' function
+ * structs with t and d fields are tagged unions
  */
 
 #define XLeftMouseBtn    Button1
@@ -59,15 +60,15 @@
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 // clang-format off
 #define HAS_SELECTION(p_tc) \
-    ((p_tc)->type == Tool_Selection \
-    && (p_tc)->data.sel.ex != NIL && (p_tc)->data.sel.ey != NIL \
-    && (p_tc)->data.sel.bx != NIL && (p_tc)->data.sel.by != NIL \
-    && (p_tc)->data.sel.ex != (p_tc)->data.sel.bx \
-    && (p_tc)->data.sel.ey != (p_tc)->data.sel.by)
+    ((p_tc)->t == Tool_Selection \
+    && (p_tc)->d.sel.ex != NIL && (p_tc)->d.sel.ey != NIL \
+    && (p_tc)->d.sel.bx != NIL && (p_tc)->d.sel.by != NIL \
+    && (p_tc)->d.sel.ex != (p_tc)->d.sel.bx \
+    && (p_tc)->d.sel.ey != (p_tc)->d.sel.by)
 #define SELECTION_DRAGGING(p_tc) \
-    ((p_tc)->type == Tool_Selection \
-    && (p_tc)->data.sel.drag_from.x != NIL \
-    && (p_tc)->data.sel.drag_from.y != NIL)
+    ((p_tc)->t == Tool_Selection \
+    && (p_tc)->d.sel.drag_from.x != NIL \
+    && (p_tc)->d.sel.drag_from.y != NIL)
 // clang-format on
 
 enum {
@@ -93,7 +94,7 @@ struct ClCommand {
         ClC_Exit,
         ClC_Save,
         ClC_Load,
-    } tag;
+    } t;
     union ClCData {
         struct ClCDSet {
             enum ClCDSTag {
@@ -102,7 +103,7 @@ struct ClCommand {
                 ClCDS_Font,
                 ClCDS_FInp,
                 ClCDS_FOut,
-            } tag;
+            } t;
             union ClCDSData {
                 struct ClCDSDLineW {
                     u32 value;
@@ -119,7 +120,7 @@ struct ClCommand {
                 struct ClCDSDFOut {
                     char* path_dyn;
                 } fout;
-            } data;
+            } d;
         } set;
         struct ClCDEcho {
             char* msg_dyn;
@@ -130,7 +131,7 @@ struct ClCommand {
         struct ClCDLoad {
             char* path_dyn;
         } load;
-    } data;
+    } d;
 };
 
 struct Ctx {
@@ -189,12 +190,12 @@ struct Ctx {
         void (*on_drag)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
         void (*on_move)(struct DrawCtx*, struct ToolCtx*, struct Input*, XMotionEvent const*);
         char* tool_name_dyn;
-        enum ToolType {
+        enum ToolTag {
             Tool_Selection,
             Tool_Pencil,
             Tool_Fill,
             Tool_Picker,
-        } type;
+        } t;
         struct ToolSharedData {
             u32* col_argbarr;
             u32 curr_col;
@@ -212,7 +213,7 @@ struct Ctx {
             struct PencilData {
                 u32 line_r;
             } pencil;
-        } data;
+        } d;
     }* tcarr;
     u32 curr_tc;
     struct History {
@@ -276,7 +277,7 @@ typedef struct {
         ClCPrs_ENoArg,
         ClCPrs_ENoSubArg,
         ClCPrs_EInvSubArg, // invalid
-    } tag;
+    } t;
     union {
         struct ClCommand ok;
         struct {
@@ -638,44 +639,42 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
     assert(cl_cmd);
     char* msg_to_show = NULL;  // counts as PCCR_Msg at func end
     usize bit_status = 0;
-    switch (cl_cmd->tag) {
+    switch (cl_cmd->t) {
         case ClC_Set: {
-            switch (cl_cmd->data.set.tag) {
+            switch (cl_cmd->d.set.t) {
                 case ClCDS_LineW: {
-                    CURR_TC(ctx).sdata.line_w =
-                        cl_cmd->data.set.data.line_w.value;
+                    CURR_TC(ctx).sdata.line_w = cl_cmd->d.set.d.line_w.value;
                 } break;
                 case ClCDS_Col: {
-                    CURR_COL(&CURR_TC(ctx)) = cl_cmd->data.set.data.col.argb;
+                    CURR_COL(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.argb;
                 } break;
                 case ClCDS_Font: {
-                    char const* font = cl_cmd->data.set.data.font.name_dyn;
+                    char const* font = cl_cmd->d.set.d.font.name_dyn;
                     if (!fnt_set(&ctx->dc, font)) {
                         msg_to_show = str_new("invalid font name: '%s'", font);
                     }
                 } break;
                 case ClCDS_FInp: {
-                    char const* path = cl_cmd->data.set.data.finp.path_dyn;
+                    char const* path = cl_cmd->d.set.d.finp.path_dyn;
                     file_ctx_set(&ctx->finp, path);
                     msg_to_show = str_new("finp set to '%s'", path);
                 } break;
                 case ClCDS_FOut: {
-                    char const* path = cl_cmd->data.set.data.fout.path_dyn;
+                    char const* path = cl_cmd->d.set.d.fout.path_dyn;
                     file_ctx_set(&ctx->fout, path);
                     msg_to_show = str_new("fout set to '%s'", path);
                 } break;
             }
         } break;
         case ClC_Echo: {
-            msg_to_show = str_new("%s", cl_cmd->data.echo.msg_dyn);
+            msg_to_show = str_new("%s", cl_cmd->d.echo.msg_dyn);
         } break;
         case ClC_Exit: {
             bit_status |= ClCPrc_Exit;
         } break;
         case ClC_Save: {
-            char const* path = cl_cmd->data.save.path_dyn
-                ? cl_cmd->data.save.path_dyn
-                : ctx->finp.path_dyn;
+            char const* path = cl_cmd->d.save.path_dyn ? cl_cmd->d.save.path_dyn
+                                                       : ctx->finp.path_dyn;
             msg_to_show = str_new(
                 save_png_file(&ctx->dc, path) ? "image saved to '%s'"
                                               : "failed save image to '%s'",
@@ -683,9 +682,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             );
         } break;
         case ClC_Load: {
-            char const* path = cl_cmd->data.load.path_dyn
-                ? cl_cmd->data.load.path_dyn
-                : ctx->fout.path_dyn;
+            char const* path = cl_cmd->d.load.path_dyn ? cl_cmd->d.load.path_dyn
+                                                       : ctx->fout.path_dyn;
             msg_to_show = str_new(
                 canvas_load(&ctx->dc, path, 0) ? "image loaded from '%s'"
                                                : "failed load image from '%s'",
@@ -699,73 +697,73 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
 
 ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
     assert(cl);
-    ClCPrsResult res = {.tag = ClCPrs_Ok};
+    ClCPrsResult res = {.t = ClCPrs_Ok};
     char* cl_bufdyn = str_new("%s", cl);
     // naive split by spaces (0x20) works on utf8
     char const* cmd = strtok(cl_bufdyn, " ");
     if (!strcmp(cmd, "echo")) {
-        res.d.ok.tag = ClC_Echo;
+        res.d.ok.t = ClC_Echo;
         char const* user_msg = strtok(NULL, "");
-        res.d.ok.data.echo.msg_dyn = str_new("%s", user_msg ? user_msg : "");
+        res.d.ok.d.echo.msg_dyn = str_new("%s", user_msg ? user_msg : "");
     } else if (!strcmp(cmd, "set")) {
-        res.d.ok.tag = ClC_Set;
-        res.d.ok.data.set = (struct ClCDSet) {0};
+        res.d.ok.t = ClC_Set;
+        res.d.ok.d.set = (struct ClCDSet) {0};
         char const* prop = strtok(NULL, " ");
         if (!prop) {
             // can't return there, because we must free resourses
-            res.tag = ClCPrs_ENoSubArg;
+            res.t = ClCPrs_ENoSubArg;
             res.d.nosubarg.arg_dyn = str_new("set");
         } else if (!strcmp(prop, "line_w")) {
-            res.d.ok.data.set.tag = ClCDS_LineW;
+            res.d.ok.d.set.t = ClCDS_LineW;
             char const* args = strtok(NULL, "");
-            res.d.ok.data.set.data.line_w.value =
+            res.d.ok.d.set.d.line_w.value =
                 args ? strtol(args, NULL, 0) : TOOLS.default_line_w;
         } else if (!strcmp(prop, "col")) {
-            res.d.ok.data.set.tag = ClCDS_Col;
-            res.d.ok.data.set.data.col.argb =
+            res.d.ok.d.set.t = ClCDS_Col;
+            res.d.ok.d.set.d.col.argb =
                 (strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF) | 0xFF000000;
         } else if (!strcmp(prop, "font")) {
-            res.d.ok.data.set.tag = ClCDS_Font;
+            res.d.ok.d.set.t = ClCDS_Font;
             char const* font = strtok(NULL, " ");
             if (font) {
-                res.d.ok.data.set.data.font.name_dyn = str_new("%s", font);
+                res.d.ok.d.set.d.font.name_dyn = str_new("%s", font);
             } else {
-                res.tag = ClCPrs_ENoSubArg;
+                res.t = ClCPrs_ENoSubArg;
                 res.d.nosubarg.arg_dyn = str_new("font");
             }
         } else if (!strcmp(prop, "finp")) {
-            res.d.ok.data.set.tag = ClCDS_FInp;
+            res.d.ok.d.set.t = ClCDS_FInp;
             char const* path = strtok(NULL, "");  // user can load NULL
             if (path) {
-                res.d.ok.data.set.data.finp.path_dyn = str_new("%s", path);
+                res.d.ok.d.set.d.finp.path_dyn = str_new("%s", path);
             }
         } else if (!strcmp(prop, "fout")) {
-            res.d.ok.data.set.tag = ClCDS_FOut;
+            res.d.ok.d.set.t = ClCDS_FOut;
             char const* path = strtok(NULL, "");  // user can load NULL
             if (path) {
-                res.d.ok.data.set.data.fout.path_dyn = str_new("%s", path);
+                res.d.ok.d.set.d.fout.path_dyn = str_new("%s", path);
             }
         } else {
-            res.tag = ClCPrs_EInvSubArg;
+            res.t = ClCPrs_EInvSubArg;
             res.d.invsubarg.arg_dyn = str_new("set");
             res.d.invsubarg.inv_val_dyn = str_new(prop);
         }
     } else if (!strcmp(cmd, "q")) {
-        res.d.ok.tag = ClC_Exit;
+        res.d.ok.t = ClC_Exit;
     } else if (!strcmp(cmd, "save")) {
-        res.d.ok.tag = ClC_Save;
+        res.d.ok.t = ClC_Save;
         char const* path = strtok(NULL, "");  // path with spaces
         if (path) {
-            res.d.ok.data.save.path_dyn = str_new("%s", path);
+            res.d.ok.d.save.path_dyn = str_new("%s", path);
         }
     } else if (!strcmp(cmd, "load")) {
-        res.d.ok.tag = ClC_Load;
+        res.d.ok.t = ClC_Load;
         char const* path = strtok(NULL, "");  // path with spaces
         if (path) {
-            res.d.ok.data.load.path_dyn = str_new("%s", path);
+            res.d.ok.d.load.path_dyn = str_new("%s", path);
         }
     } else {
-        res.tag = ClCPrs_ENoArg;
+        res.t = ClCPrs_ENoArg;
     }
     str_free(&cl_bufdyn);
 
@@ -773,17 +771,17 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
 }
 
 void cl_cmd_free(struct ClCommand* cl_cmd) {
-    switch (cl_cmd->tag) {
+    switch (cl_cmd->t) {
         case ClC_Set:
-            switch (cl_cmd->data.set.tag) {
+            switch (cl_cmd->d.set.t) {
                 case ClCDS_Font:
-                    free(cl_cmd->data.set.data.font.name_dyn);
+                    free(cl_cmd->d.set.d.font.name_dyn);
                     break;
                 case ClCDS_FInp:
-                    free(cl_cmd->data.set.data.finp.path_dyn);
+                    free(cl_cmd->d.set.d.finp.path_dyn);
                     break;
                 case ClCDS_FOut:
-                    free(cl_cmd->data.set.data.fout.path_dyn);
+                    free(cl_cmd->d.set.d.fout.path_dyn);
                     break;
                 case ClCDS_LineW:
                 case ClCDS_Col:
@@ -791,22 +789,22 @@ void cl_cmd_free(struct ClCommand* cl_cmd) {
             }
             break;
         case ClC_Save:
-            free(cl_cmd->data.save.path_dyn);
+            free(cl_cmd->d.save.path_dyn);
             break;
         case ClC_Load:
-            free(cl_cmd->data.load.path_dyn);
+            free(cl_cmd->d.load.path_dyn);
             break;
         case ClC_Echo:
-            free(cl_cmd->data.echo.msg_dyn);
+            free(cl_cmd->d.echo.msg_dyn);
             break;
         case ClC_Exit:
             break;  // no default branch to enable warnings
     }
 }
 
-static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
+static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
     struct ToolCtx new_tc = {
-        .type = type,
+        .t = type,
         .sdata = tc->sdata,
     };
     tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
@@ -816,7 +814,7 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             new_tc.on_release = &tool_selection_on_release;
             new_tc.on_drag = &tool_selection_on_drag;
             new_tc.tool_name_dyn = str_new("selection");
-            new_tc.data.sel = (struct SelectionData) {
+            new_tc.d.sel = (struct SelectionData) {
                 .by = NIL,
                 .bx = NIL,
                 .ey = NIL,
@@ -831,7 +829,7 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolType type) {
             new_tc.on_drag = &tool_pencil_on_drag;
             new_tc.on_move = &tool_pencil_on_move;
             new_tc.tool_name_dyn = str_new("pencil");
-            new_tc.data.pencil = (struct PencilData) {
+            new_tc.d.pencil = (struct PencilData) {
                 .line_r = 5,
             };
             break;
@@ -893,9 +891,9 @@ void tool_selection_on_press(
     struct Input* inp,
     XButtonPressedEvent const* event
 ) {
-    assert(tc->type == Tool_Selection);
+    assert(tc->t == Tool_Selection);
     if (event->button == XLeftMouseBtn) {
-        struct SelectionData* sd = &tc->data.sel;
+        struct SelectionData* sd = &tc->d.sel;
         Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
         if (HAS_SELECTION(tc)
             && point_in_rect(
@@ -920,11 +918,11 @@ void tool_selection_on_release(
     struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
-    assert(tc->type == Tool_Selection);
+    assert(tc->t == Tool_Selection);
     if (event->button != XLeftMouseBtn) {
         return;
     }
-    struct SelectionData* sd = &tc->data.sel;
+    struct SelectionData* sd = &tc->d.sel;
 
     if (SELECTION_DRAGGING(tc)) {
         // finish drag selection
@@ -964,17 +962,17 @@ void tool_selection_on_drag(
     struct Input* inp,
     XMotionEvent const* event
 ) {
-    assert(tc->type == Tool_Selection);
+    assert(tc->t == Tool_Selection);
     if (inp->holding_button != XLeftMouseBtn) {
         return;
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (SELECTION_DRAGGING(tc)) {
-        tc->data.sel.drag_to = pointer;
+        tc->d.sel.drag_to = pointer;
     } else if (inp->is_holding) {
-        tc->data.sel.ex = CLAMP(pointer.x, 0, dc->cv.width);
-        tc->data.sel.ey = CLAMP(pointer.y, 0, dc->cv.height);
+        tc->d.sel.ex = CLAMP(pointer.x, 0, dc->cv.width);
+        tc->d.sel.ey = CLAMP(pointer.y, 0, dc->cv.height);
     }
 }
 
@@ -984,7 +982,7 @@ void tool_pencil_on_press(
     struct Input* inp,
     XButtonPressedEvent const* event
 ) {
-    assert(tc->type == Tool_Pencil);
+    assert(tc->t == Tool_Pencil);
 
     if (event->button != XLeftMouseBtn) {
         return;
@@ -1003,7 +1001,7 @@ void tool_pencil_on_release(
     struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
-    assert(tc->type == Tool_Pencil);
+    assert(tc->t == Tool_Pencil);
 
     if (event->button != XLeftMouseBtn || inp->is_dragging) {
         return;
@@ -1030,7 +1028,7 @@ void tool_pencil_on_drag(
     struct Input* inp,
     XMotionEvent const* event
 ) {
-    assert(tc->type == Tool_Pencil);
+    assert(tc->t == Tool_Pencil);
     assert(inp->is_holding);
 
     if (inp->holding_button != XLeftMouseBtn) {
@@ -1052,7 +1050,7 @@ void tool_pencil_on_move(
     XMotionEvent const* event
 ) {
     assert(tc);
-    assert(tc->type == Tool_Pencil);
+    assert(tc->t == Tool_Pencil);
 }
 
 static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
@@ -1695,7 +1693,7 @@ void update_screen(struct Ctx* ctx) {
     }
     /* current selection */ {
         if (HAS_SELECTION(&CURR_TC(ctx))) {
-            struct SelectionData sd = CURR_TC(ctx).data.sel;
+            struct SelectionData sd = CURR_TC(ctx).d.sel;
             Pair p = {MIN(sd.bx, sd.ex), MIN(sd.by, sd.ey)};
             Pair dim = {MAX(sd.bx, sd.ex) - p.x, MAX(sd.by, sd.ey) - p.y};
             draw_rect(
@@ -2322,16 +2320,12 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                         ctx->dc.window,
                         CurrentTime
                     );
-                    i32 x =
-                        MIN(CURR_TC(ctx).data.sel.bx, CURR_TC(ctx).data.sel.ex);
-                    i32 y =
-                        MIN(CURR_TC(ctx).data.sel.by, CURR_TC(ctx).data.sel.ey);
+                    i32 x = MIN(CURR_TC(ctx).d.sel.bx, CURR_TC(ctx).d.sel.ex);
+                    i32 y = MIN(CURR_TC(ctx).d.sel.by, CURR_TC(ctx).d.sel.ey);
                     u32 width =
-                        MAX(CURR_TC(ctx).data.sel.ex, CURR_TC(ctx).data.sel.bx)
-                        - x;
+                        MAX(CURR_TC(ctx).d.sel.ex, CURR_TC(ctx).d.sel.bx) - x;
                     u32 height =
-                        MAX(CURR_TC(ctx).data.sel.ey, CURR_TC(ctx).data.sel.by)
-                        - y;
+                        MAX(CURR_TC(ctx).d.sel.ey, CURR_TC(ctx).d.sel.by) - y;
                     if (ctx->sel_buf.im != NULL) {
                         XDestroyImage(ctx->sel_buf.im);
                     }
@@ -2457,7 +2451,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 input_state_set(&ctx->input, InputS_Interact);
                 ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
                 str_free(&cmd_dyn);
-                switch (res.tag) {
+                switch (res.t) {
                     case ClCPrs_Ok: {
                         struct ClCommand* cmd = &res.d.ok;
                         ClCPrcResult res = cl_cmd_process(ctx, cmd);
