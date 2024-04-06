@@ -49,6 +49,7 @@
 #define CLAMP(X, L, H)   (((X) < (L)) ? (L) : ((X) > (H)) ? (H) : (X))
 #define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
 #define BETWEEN(X, A, B) ((A) <= (X) && (X) <= (B))
+#define COALESCE(A, B)   ((A) ? (A) : (B))
 #define PI               (3.141)
 // default value for signed integers
 #define NIL              (-1)
@@ -89,20 +90,22 @@ enum Icon {
 
 struct ClCommand {
     enum ClCTag {
-        ClC_Echo,
+        ClC_Echo = 0,
         ClC_Set,
         ClC_Exit,
         ClC_Save,
         ClC_Load,
+        ClC_Last,
     } t;
     union ClCData {
         struct ClCDSet {
             enum ClCDSTag {
-                ClCDS_LineW,
+                ClCDS_LineW = 0,
                 ClCDS_Col,
                 ClCDS_Font,
                 ClCDS_FInp,
                 ClCDS_FOut,
+                ClCDS_Last,
             } t;
             union ClCDSData {
                 struct ClCDSDLineW {
@@ -170,19 +173,22 @@ struct Ctx {
         u64 last_proc_drag_ev_us;
         Bool is_holding;
         Bool is_dragging;
-        enum InputState {
-            InputS_Interact,
-            InputS_Color,
-            InputS_Console,
-        } state;
+        enum InputTag {
+            InputT_Interact,
+            InputT_Color,
+            InputT_Console,
+        } t;
         union InputData {
             struct InputColorData {
                 u32 current_digit;
             } col;
             struct InputConsoleData {
                 char* cmdarr;
+                char** compls_arr;
+                Bool compls_valid;
+                usize compls_curr;
             } cl;
-        } data;
+        } d;
     } input;
     struct ToolCtx {
         void (*on_press)(struct DrawCtx*, struct ToolCtx*, struct Input*, XButtonPressedEvent const*);
@@ -246,6 +252,7 @@ static void arrpoputf8(char const* strarr);
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
 static void str_free(char** str_dyn);
+static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
@@ -290,7 +297,15 @@ typedef struct {
     } d;
 } ClCPrsResult;
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
+static char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl);
 static void cl_cmd_free(struct ClCommand* cl_cmd);
+static char const* cl_cmd_from_enum(enum ClCTag t);
+static char const* cl_set_prop_from_enum(enum ClCDSTag t);
+static void cl_compls_update(struct InputConsoleData* cl);
+static void cl_free(struct InputConsoleData* cl);
+static void cl_compls_free(struct InputConsoleData* cl);
+static void cl_push(struct InputConsoleData* cl, char c);
+static void cl_pop(struct InputConsoleData* cl);
 
 static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
 static void free_sel_circ(struct SelectionCircle* sel_circ);
@@ -303,7 +318,7 @@ static void tool_ctx_set_fill(struct ToolCtx* tc);
 static void tool_ctx_set_picker(struct ToolCtx* tc);
 static void tool_ctx_free(struct ToolCtx* tc);
 
-static void input_state_set(struct Input* input, enum InputState is);
+static void input_state_set(struct Input* input, enum InputTag is);
 
 // separate functions, because they are callbacks
 static void tool_selection_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
@@ -488,6 +503,15 @@ void str_free(char** str_dyn) {
     }
 }
 
+usize first_dismatch(char const* restrict s1, char const* restrict s2) {
+    if (!s1 || !s2) {
+        return 0;
+    }
+    usize offset = 0;
+    for (; s1[offset] && s1[offset] == s2[offset]; ++offset) {};
+    return offset;
+}
+
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
@@ -664,6 +688,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     file_ctx_set(&ctx->fout, path);
                     msg_to_show = str_new("fout set to '%s'", path);
                 } break;
+                case ClCDS_Last:
+                    assert(!"invalid tag");
             }
         } break;
         case ClC_Echo: {
@@ -690,6 +716,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 path
             );
         } break;
+        case ClC_Last:
+            assert(!"invalid enum value");
     }
     bit_status |= msg_to_show ? ClCPrc_Msg : 0;
     return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
@@ -704,40 +732,41 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
     if (!strcmp(cmd, "echo")) {
         res.d.ok.t = ClC_Echo;
         char const* user_msg = strtok(NULL, "");
-        res.d.ok.d.echo.msg_dyn = str_new("%s", user_msg ? user_msg : "");
-    } else if (!strcmp(cmd, "set")) {
+        res.d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""));
+    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
         res.d.ok.t = ClC_Set;
         res.d.ok.d.set = (struct ClCDSet) {0};
         char const* prop = strtok(NULL, " ");
         if (!prop) {
             // can't return there, because we must free resourses
             res.t = ClCPrs_ENoSubArg;
-            res.d.nosubarg.arg_dyn = str_new("set");
-        } else if (!strcmp(prop, "line_w")) {
+            res.d.nosubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set));
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
             res.d.ok.d.set.t = ClCDS_LineW;
             char const* args = strtok(NULL, "");
             res.d.ok.d.set.d.line_w.value =
                 args ? strtol(args, NULL, 0) : TOOLS.default_line_w;
-        } else if (!strcmp(prop, "col")) {
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
             res.d.ok.d.set.t = ClCDS_Col;
             res.d.ok.d.set.d.col.argb =
                 (strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF) | 0xFF000000;
-        } else if (!strcmp(prop, "font")) {
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
             res.d.ok.d.set.t = ClCDS_Font;
             char const* font = strtok(NULL, " ");
             if (font) {
                 res.d.ok.d.set.d.font.name_dyn = str_new("%s", font);
             } else {
                 res.t = ClCPrs_ENoSubArg;
-                res.d.nosubarg.arg_dyn = str_new("font");
+                res.d.nosubarg.arg_dyn =
+                    str_new(cl_set_prop_from_enum(ClCDS_Font));
             }
-        } else if (!strcmp(prop, "finp")) {
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FInp))) {
             res.d.ok.d.set.t = ClCDS_FInp;
             char const* path = strtok(NULL, "");  // user can load NULL
             if (path) {
                 res.d.ok.d.set.d.finp.path_dyn = str_new("%s", path);
             }
-        } else if (!strcmp(prop, "fout")) {
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FOut))) {
             res.d.ok.d.set.t = ClCDS_FOut;
             char const* path = strtok(NULL, "");  // user can load NULL
             if (path) {
@@ -745,18 +774,18 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
             }
         } else {
             res.t = ClCPrs_EInvSubArg;
-            res.d.invsubarg.arg_dyn = str_new("set");
+            res.d.invsubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set));
             res.d.invsubarg.inv_val_dyn = str_new(prop);
         }
-    } else if (!strcmp(cmd, "q")) {
+    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
         res.d.ok.t = ClC_Exit;
-    } else if (!strcmp(cmd, "save")) {
+    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
         res.d.ok.t = ClC_Save;
         char const* path = strtok(NULL, "");  // path with spaces
         if (path) {
             res.d.ok.d.save.path_dyn = str_new("%s", path);
         }
-    } else if (!strcmp(cmd, "load")) {
+    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
         res.d.ok.t = ClC_Load;
         char const* path = strtok(NULL, "");  // path with spaces
         if (path) {
@@ -768,6 +797,14 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
     str_free(&cl_bufdyn);
 
     return res;
+}
+
+char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl) {
+    usize const cmd_len = arrlen(d_cl->cmdarr);
+    char* cmd_dyn = ecalloc(cmd_len + 1, sizeof(char));
+    memcpy(cmd_dyn, d_cl->cmdarr, cmd_len);
+    cmd_dyn[cmd_len] = '\0';
+    return cmd_dyn;
 }
 
 void cl_cmd_free(struct ClCommand* cl_cmd) {
@@ -785,6 +822,7 @@ void cl_cmd_free(struct ClCommand* cl_cmd) {
                     break;
                 case ClCDS_LineW:
                 case ClCDS_Col:
+                case ClCDS_Last:
                     break;  // no default branch to enable warnings
             }
             break;
@@ -799,7 +837,121 @@ void cl_cmd_free(struct ClCommand* cl_cmd) {
             break;
         case ClC_Exit:
             break;  // no default branch to enable warnings
+        case ClC_Last:
+            assert(!"invalid enum value");
     }
+}
+
+char const* cl_cmd_from_enum(enum ClCTag t) {
+    // clang-format off
+    switch (t) {
+        case ClC_Echo: return "echo";
+        case ClC_Exit: return "q";
+        case ClC_Load: return "load";
+        case ClC_Save: return "save";
+        case ClC_Set: return "set";
+        case ClC_Last: return "last";
+    }
+    // clang-format on
+    assert(!"unreachable");
+}
+
+static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
+    // clang-format off
+    switch (t) {
+        case ClCDS_Col: return "col";
+        case ClCDS_FInp: return "finp";
+        case ClCDS_FOut: return "fout";
+        case ClCDS_Font: return "font";
+        case ClCDS_LineW: return "line_w";
+        case ClCDS_Last: return "last";
+    }
+    // clang-format on
+    assert(!"unreachable");
+}
+
+static void cl_compls_update_helper(
+    char*** result,
+    char const* token,
+    char const* (*enum_to_str)(usize),
+    usize enum_last
+) {
+    for (u32 e = 0; e < enum_last; ++e) {
+        char const* enum_str = enum_to_str(e);
+        usize offset = first_dismatch(enum_str, token);
+        if (offset == strlen(token)) {
+            arrpush(*result, str_new("%s", enum_str + offset));
+        }
+    }
+}
+
+void cl_compls_update(struct InputConsoleData* cl) {
+    char* cl_buf_dyn = cl_cmd_get_str_dyn(cl);
+    char** result = NULL;
+
+    // XXX separator hardcoded
+    char const* tok1 = strtok(cl_buf_dyn, " ");
+    char const* tok2 = strtok(NULL, " ");  // can be NULL
+    tok1 = COALESCE(tok1, "");  // don't do strtok in macro
+    tok2 = COALESCE(tok2, "");
+
+    typedef char const* (*cast)(usize);
+    // subcommands with own completions
+    if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
+        cl_compls_update_helper(
+            &result,
+            tok2,
+            (cast)&cl_set_prop_from_enum,
+            ClCDS_Last
+        );
+    } else {  // first token comletion
+        cl_compls_update_helper(
+            &result,
+            tok1,
+            (cast)&cl_cmd_from_enum,
+            ClC_Last
+        );
+    }
+
+    free(cl_buf_dyn);
+
+    cl_compls_free(cl);
+    cl->compls_arr = result;
+    cl->compls_valid = True;
+    cl->compls_curr = 0;  // prevent out-of-range errors
+}
+
+void cl_free(struct InputConsoleData* cl) {
+    arrfree(cl->cmdarr);
+    cl_compls_free(cl);
+}
+
+void cl_compls_free(struct InputConsoleData* cl) {
+    if (cl->compls_arr) {
+        for (u32 i = 0; i < arrlen(cl->compls_arr); ++i) {
+            str_free(&cl->compls_arr[i]);
+        }
+        arrfree(cl->compls_arr);
+        cl->compls_arr = NULL;
+    }
+}
+
+void cl_push(struct InputConsoleData* cl, char c) {
+    arrpush(cl->cmdarr, c);
+    cl->compls_valid = False;
+    cl_compls_free(cl);
+}
+
+void cl_pop(struct InputConsoleData* cl) {
+    if (!cl->cmdarr) {
+        return;
+    }
+    usize const size = arrlen(cl->cmdarr);
+    if (size) {
+        arrpoputf8(cl->cmdarr);
+    }
+    cl->compls_valid = False;
+    cl_compls_free(cl);
 }
 
 static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
@@ -862,25 +1014,26 @@ void tool_ctx_set_picker(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Picker);
 }
 
-void input_state_set(struct Input* input, enum InputState const is) {
-    switch (input->state) {
-        case InputS_Console:
-            arrfree(input->data.cl.cmdarr);
+void input_state_set(struct Input* input, enum InputTag const is) {
+    switch (input->t) {
+        case InputT_Console:
+            cl_free(&input->d.cl);
             break;
         default:
             break;
     }
 
-    input->state = is;
+    input->t = is;
 
     switch (is) {
-        case InputS_Color:
-            input->data.col = (struct InputColorData) {.current_digit = 0};
+        case InputT_Color:
+            input->d.col = (struct InputColorData) {.current_digit = 0};
             break;
-        case InputS_Console:
-            input->data.cl = (struct InputConsoleData) {.cmdarr = NULL};
+        case InputT_Console:
+            input->d.cl = (struct InputConsoleData
+            ) {.cmdarr = NULL, .compls_valid = False};
             break;
-        case InputS_Interact:
+        case InputT_Interact:
             break;
     }
 }
@@ -1736,20 +1889,26 @@ void update_statusline(struct Ctx* ctx) {
         (Pair) {(i32)dc->width, (i32)statusline_h},
         COL_BG(&ctx->dc, SchmNorm)
     );
-    if (ctx->input.state == InputS_Console) {
-        char const* command = ctx->input.data.cl.cmdarr;
+    if (ctx->input.t == InputT_Console) {
+        char const* command = ctx->input.d.cl.cmdarr;
         usize const command_len = arrlen(command);
         char* cl_str_dyn = ecalloc(2 + command_len, sizeof(char));
         cl_str_dyn[0] = ':';
         cl_str_dyn[command_len + 1] = '\0';
         memcpy(cl_str_dyn + 1, command, command_len);
-        draw_string(
-            &ctx->dc,
-            cl_str_dyn,
-            (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
-            SchmNorm,
-            False
-        );
+        i32 const user_cmd_w =
+            (i32)get_string_width(&ctx->dc, cl_str_dyn, command_len + 1);
+        i32 const cmd_y = (i32)(ctx->dc.height - STATUSLINE.padding_bottom);
+        draw_string(&ctx->dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
+        if (ctx->input.d.cl.compls_arr) {
+            draw_string(
+                &ctx->dc,
+                ctx->input.d.cl.compls_arr[ctx->input.d.cl.compls_curr],
+                (Pair) {user_cmd_w, cmd_y},
+                SchmFocus,
+                False
+            );
+        }
         str_free(&cl_str_dyn);
     } else {
         static u32 const gap = 5;
@@ -1806,10 +1965,10 @@ void update_statusline(struct Ctx* ctx) {
         /* input state */ {
             draw_string(
                 dc,
-                ctx->input.state == InputS_Interact      ? "intearct"
-                    : ctx->input.state == InputS_Color   ? "color"
-                    : ctx->input.state == InputS_Console ? "console"
-                                                         : "unknown",
+                ctx->input.t == InputT_Interact      ? "intearct"
+                    : ctx->input.t == InputT_Color   ? "color"
+                    : ctx->input.t == InputT_Console ? "console"
+                                                     : "unknown",
                 input_state_c,
                 SchmNorm,
                 False
@@ -1838,9 +1997,9 @@ void update_statusline(struct Ctx* ctx) {
                 );
                 draw_string(dc, col_count, col_count_c, SchmNorm, False);
             }
-            if (ctx->input.state == InputS_Color) {
+            if (ctx->input.t == InputT_Color) {
                 static u32 const hash_w = 1;
-                u32 const curr_dig = ctx->input.data.col.current_digit;
+                u32 const curr_dig = ctx->input.d.col.current_digit;
                 char const col_digit_value[] =
                     {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
                 draw_string(
@@ -1988,7 +2147,7 @@ struct Ctx ctx_init(Display* dp) {
             },
         .input =
             (struct Input) {
-                .state = InputS_Interact,
+                .t = InputT_Interact,
                 .last_processed_pointer = {NIL, NIL},
             },
         .sel_buf.im = NULL,
@@ -2270,14 +2429,14 @@ Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
 #define HANDLE_KEY_CASE(p_key) if (handle_key_inp_key_sym == (p_key))
 
 static void to_next_input_digit(struct Input* input, Bool is_increment) {
-    assert(input->state == InputS_Color);
+    assert(input->t == InputT_Color);
 
-    if (input->data.col.current_digit == 0 && !is_increment) {
-        input->data.col.current_digit = 5;
-    } else if (input->data.col.current_digit == 5 && is_increment) {
-        input->data.col.current_digit = 0;
+    if (input->d.col.current_digit == 0 && !is_increment) {
+        input->d.col.current_digit = 5;
+    } else if (input->d.col.current_digit == 5 && is_increment) {
+        input->d.col.current_digit = 0;
     } else {
-        input->data.col.current_digit += is_increment ? 1 : -1;
+        input->d.col.current_digit += is_increment ? 1 : -1;
     }
 }
 
@@ -2304,8 +2463,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     HANDLE_KEY_BEGIN(e)
-    switch (ctx->input.state) {
-        case InputS_Interact: {
+    switch (ctx->input.t) {
+        case InputT_Interact: {
             HANDLE_KEY_CASE_MASK(ControlMask, XK_z) {
                 if (!history_move(ctx, !(e.state & ShiftMask))) {
                     trace("xpaint: can't undo/revert history");
@@ -2366,7 +2525,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
             }
             HANDLE_KEY_CASE_MASK_NOT(ControlMask, XK_c) {
-                input_state_set(&ctx->input, InputS_Color);
+                input_state_set(&ctx->input, InputT_Color);
                 update_statusline(ctx);
             }
             if (BETWEEN(key_sym, XK_1, XK_9)) {
@@ -2401,12 +2560,12 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             // XK_colon not work for some reason
             HANDLE_KEY_CASE_MASK(ShiftMask, XK_semicolon) {
-                input_state_set(&ctx->input, InputS_Console);
+                input_state_set(&ctx->input, InputT_Console);
                 update_statusline(ctx);
             }
         } break;
 
-        case InputS_Color: {
+        case InputT_Color: {
             HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
                 u32 const len = arrlen(CURR_TC(ctx).sdata.col_argbarr);
                 if (len != MAX_COLORS) {
@@ -2433,7 +2592,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 if (val != lookup_buf[0]) {  // if assigned
                     // selected digit counts from left to
                     // right except alpha (aarrggbb <=> --012345)
-                    u32 shift = (5 - ctx->input.data.col.current_digit) * 4;
+                    u32 shift = (5 - ctx->input.d.col.current_digit) * 4;
                     CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
                     CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
                     to_next_input_digit(&ctx->input, True);
@@ -2442,67 +2601,80 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } break;
 
-        case InputS_Console: {
-            if (key_sym == XK_Return) {  // apply command
-                usize cmd_len = arrlen(ctx->input.data.cl.cmdarr);
-                char* cmd_dyn = ecalloc(cmd_len + 1, sizeof(char));
-                memcpy(cmd_dyn, ctx->input.data.cl.cmdarr, cmd_len);
-                cmd_dyn[cmd_len] = '\0';
-                input_state_set(&ctx->input, InputS_Interact);
-                ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
-                str_free(&cmd_dyn);
-                switch (res.t) {
-                    case ClCPrs_Ok: {
-                        struct ClCommand* cmd = &res.d.ok;
-                        ClCPrcResult res = cl_cmd_process(ctx, cmd);
-                        update_screen(ctx);
-                        if (res.bit_status & ClCPrc_Msg) {
-                            show_message(ctx, res.msg_dyn);
-                            str_free(&res.msg_dyn);
-                        }
-                        cl_cmd_free(cmd);
-                        if (res.bit_status & ClCPrc_Exit) {
-                            return False;
-                        }
-                    } break;
-                    case ClCPrs_ENoArg: {
-                        show_message(ctx, "no command");
-                    } break;
-                    case ClCPrs_ENoSubArg: {
-                        char* msg_dyn = str_new(
-                            "provide value to '%s' cmd",
-                            res.d.nosubarg.arg_dyn
-                        );
-                        show_message(ctx, msg_dyn);
-                        free(msg_dyn);
-                        free(res.d.nosubarg.arg_dyn);
-                    } break;
-                    case ClCPrs_EInvSubArg: {
-                        char* msg_dyn = str_new(
-                            "invalid arg '%s' provided to '%s' cmd",
-                            res.d.invsubarg.inv_val_dyn,
-                            res.d.invsubarg.arg_dyn
-                        );
-                        show_message(ctx, msg_dyn);
-                        free(msg_dyn);
-                        free(res.d.invsubarg.arg_dyn);
-                        free(res.d.invsubarg.inv_val_dyn);
-                    } break;
+        case InputT_Console: {
+            struct InputConsoleData* cl = &ctx->input.d.cl;
+            if (key_sym == XK_Return) {
+                if (cl->compls_arr) {  // apply completion
+                    char* compl = cl->compls_arr[cl->compls_curr];
+                    while (*compl ) {
+                        arrpush(cl->cmdarr, *compl );
+                        ++compl ;
+                    }
+                    cl_compls_free(cl);
+                    update_statusline(ctx);
+                } else {  // apply command
+                    char* cmd_dyn = cl_cmd_get_str_dyn(cl);
+                    input_state_set(&ctx->input, InputT_Interact);
+                    ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
+                    str_free(&cmd_dyn);
+                    switch (res.t) {
+                        case ClCPrs_Ok: {
+                            struct ClCommand* cmd = &res.d.ok;
+                            ClCPrcResult res = cl_cmd_process(ctx, cmd);
+                            update_screen(ctx);
+                            if (res.bit_status & ClCPrc_Msg) {
+                                show_message(ctx, res.msg_dyn);
+                                str_free(&res.msg_dyn);
+                            }
+                            cl_cmd_free(cmd);
+                            if (res.bit_status & ClCPrc_Exit) {
+                                return False;
+                            }
+                        } break;
+                        case ClCPrs_ENoArg: {
+                            show_message(ctx, "no command");
+                        } break;
+                        case ClCPrs_ENoSubArg: {
+                            char* msg_dyn = str_new(
+                                "provide value to '%s' cmd",
+                                res.d.nosubarg.arg_dyn
+                            );
+                            show_message(ctx, msg_dyn);
+                            str_free(&msg_dyn);
+                            str_free(&res.d.nosubarg.arg_dyn);
+                        } break;
+                        case ClCPrs_EInvSubArg: {
+                            char* msg_dyn = str_new(
+                                "invalid arg '%s' provided to '%s' cmd",
+                                res.d.invsubarg.inv_val_dyn,
+                                res.d.invsubarg.arg_dyn
+                            );
+                            show_message(ctx, msg_dyn);
+                            str_free(&msg_dyn);
+                            str_free(&res.d.invsubarg.arg_dyn);
+                            str_free(&res.d.invsubarg.inv_val_dyn);
+                        } break;
+                    }
                 }
+            } else if (key_sym == XK_Tab) {
+                if (!cl->compls_valid) {
+                    cl_compls_update(cl);
+                } else {
+                    usize max = arrlen(cl->compls_arr);
+                    if (max) {
+                        cl->compls_curr = (cl->compls_curr + 1) % max;
+                    }
+                }
+                update_statusline(ctx);
             } else if (key_sym == XK_BackSpace) {
-                if (arrlen(ctx->input.data.cl.cmdarr)) {
-                    (void)arrpoputf8(ctx->input.data.cl.cmdarr);
-                }
+                cl_pop(cl);
                 update_statusline(ctx);
             } else if (key_sym != XK_Escape) {
                 if ((lookup_status == XLookupBoth
                      || lookup_status == XLookupChars)
                     && !(iscntrl((u32)*lookup_buf))) {
                     for (i32 i = 0; i < text_len; ++i) {
-                        arrpush(
-                            ctx->input.data.cl.cmdarr,
-                            lookup_buf[i] & 0xFF
-                        );
+                        cl_push(cl, (char)(lookup_buf[i] & 0xFF));
                     }
                     update_statusline(ctx);
                 }
@@ -2513,7 +2685,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             assert(False && "unknown input state");
     }
     // any state except console input
-    if (ctx->input.state != InputS_Console) {
+    if (ctx->input.t != InputT_Console) {
         HANDLE_KEY_CASE(XK_q) {
             return False;
         }
@@ -2534,7 +2706,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
     // independent
     HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
-        input_state_set(&ctx->input, InputS_Interact);
+        input_state_set(&ctx->input, InputT_Interact);
         update_statusline(ctx);
     }
     HANDLE_KEY_END()
@@ -2750,8 +2922,8 @@ void cleanup(struct Ctx* ctx) {
         arrfree(ctx->tcarr);
     }
     /* Input */ {
-        if (ctx->input.state == InputS_Console) {
-            arrfree(ctx->input.data.cl.cmdarr);
+        if (ctx->input.t == InputT_Console) {
+            cl_free(&ctx->input.d.cl);
         }
     }
     /* DrawCtx */ {
