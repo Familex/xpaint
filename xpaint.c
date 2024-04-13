@@ -2429,7 +2429,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         if (e->state & ControlMask) {
             canvas_change_zoom(&ctx->dc, ctx->input.prev_c, sign);
         } else if (e->state & ShiftMask) {
-            ctx->dc.cv.scroll.x += sign * 10;
+            ctx->dc.cv.scroll.x -= sign * 10;
         } else {
             ctx->dc.cv.scroll.y += sign * 10;
         }
