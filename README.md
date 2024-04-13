@@ -2,6 +2,10 @@
 
 Simple paint application written for X.
 
+## Documentation
+
+For detailed program description and usage see [man 1 xpaint](./xpaint.1).
+
 ## Requirements
 
 - X11 headers (libX11-devel on fedora, libx11-dev on alpine)
@@ -21,4 +25,8 @@ Change [config.h](./config.h) file to configure application.
 
 ## Install
 
-todo
+Edit [config.mk](./config.mk) to match your local setup
+(app is installed into the `/usr/local` namespace by default).
+
+Afterwards execute `make clean install` to build and install app
+(if necessary as root):

@@ -1,0 +1,160 @@
+.TH XPAINT 1 xpaint VERSION
+
+.SH NAME
+xpaint \- simple X paint
+
+.SH SYNOPSIS
+.B xpaint
+.RB [\fIOPTIONS\fP]
+.RB [\fIFILE\fP]
+
+.SH DESCRIPTION
+
+xpaint is used to interactively modify image files.
+
+.SH POSITIONAL ARGUMENTS
+.TP 12
+\fIFILE\fP
+Path to local file which be modified.
+.B Save
+and
+.B load
+commands will refer to it.
+
+.SH OPTIONS
+.TP
+.B \-\-help
+Print help message.
+.TP
+.B \-V, \-\-version
+Print version.
+.TP
+.B \-v, \-\-verbose
+Use verbose output.
+.TP
+.B \-w \fIWIDTH\fP, \-\-width \fIWIDTH\fP
+Set canvas width.
+.TP
+.B \-h \fIHEIGHT\fP, \-\-height \fIHEIGHT\fP
+Set canvas height.
+.TP
+.B \-i \fIFILE\fP, \-\-input \fIFILE\fP
+Set load file.
+.TP
+.B \-o \fIFILE\fP, \-\-output \fIFILE\fP
+Set save file.
+
+.SH USAGE
+
+.SS MODES
+.TP
+.B INTERACT
+Edit canvas.
+.TP
+.B COLOR
+Change current color.
+.TP
+.B CONSOLE
+Execute commands.
+
+.SS CONSOLE
+.TP
+.B echo [\fIMESSAGE\fP]
+Display message in statusline.
+.TP
+.B set [\fIPROPERTY\fP] [\fIVALUE\fP]
+Set value to property. Avaliable properties: line_w, col, font, finp, fout.
+.TP
+.B q
+Exit program.
+.TP
+.B save [\fIFILE\fP]
+Save canvas contents to file as png.
+.TP
+.B load [\fIFILE\fP]
+Load png file to canvas.
+
+.SS TOOLS
+.TP
+.B PENCIL
+Draw points and lines on left mouse. Hold shift to use last drawn point as line start.
+.TP
+.B SELECTION
+Select rectangular regions on canvas.
+Move selected contents around the canvas by dragging with left mouse.
+Clone selected contents to canvas by dragging with shift.
+Copy selected contents to X selection via C-c.
+.TP
+.B FILL
+Fill closed regions on canvas with current color.
+.TP
+.B PICKER
+Copy selected color from canvas.
+
+.SS KEYBOARD COMMANDS
+.TP
+.B Escape
+Go to interact mode.
+.TP
+.B q
+Exit program.
+.TP
+.B Control s
+Save canvas to output path.
+Output path can be passed via \-\-output argument,
+FILE positional argument, or via console.
+.TP
+.B Control z
+Undo history.
+.TP
+.B Control c
+Own selection with contents of selection tool. Selection MIME is image/png.
+.TP
+.B c
+Go to color mode.
+.TP
+.B NUMBER
+Change current tool context.
+.TP
+.B [Shift] Control Left, Right, Up, Down
+Resize canvas. Use shift modifier to increase step.
+.TP
+.B Control Plus, Minus
+Zoom canvas in and out.
+.TP
+.B Semicolon
+Go to console mode.
+
+.TP
+.B Control Up
+In color mode. Increase color list length for current tool context.
+.TP
+.B Right, Left
+In color mode. Move cursor to next (previous) digit in modified color.
+.TP
+.B HEX DIGIT
+In color mode. Change selected digit to typed.
+
+.TP
+.B LETTER
+In console mode. Append letter to command.
+.TP
+.B Tab
+In console mode. Display completions and cycle them.
+.TP
+.B Backspace
+In console mode. Clear letter from command.
+
+.SS MOUSE COMMANDS
+.TP
+.B Middle mouse button
+Move canvas around on drag.
+.TP
+.B Right mouse button
+Show tool selection circle. Hover tool icon and release button to select.
+.TP
+.B Left mouse button
+Use current tool.
+
+.SH HOMEPAGE
+https://github.com/Familex/xpaint

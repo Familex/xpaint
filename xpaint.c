@@ -393,6 +393,8 @@ i32 main(i32 argc, char** argv) {
         if (argv[i][0] != '-') {  // main argument
             file_ctx_set(&ctx.finp, argv[i]);
             file_ctx_set(&ctx.fout, argv[i]);
+        } else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
+            die("xpaint " VERSION);
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
             is_verbose_output = True;
         } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--input")) {
@@ -419,6 +421,8 @@ i32 main(i32 argc, char** argv) {
             die("Usage: xpaint [OPTIONS] [FILE]\n"
                 "\n"
                 "Options:\n"
+                "      --help                   Print help message\n"
+                "  -V, --version                Print version\n"
                 "  -v, --verbose                Use verbose output\n"
                 "  -w, --width <canvas width>   Set canvas width\n"
                 "  -h, --height <canvas height> Set canvas height\n"
