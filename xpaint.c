@@ -251,6 +251,7 @@ static u32 digit_count(u32 number);
 static void arrpoputf8(char const* strarr);
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
+static char* str_new_va(char const* fmt, va_list args);
 static void str_free(char** str_dyn);
 static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 
@@ -282,11 +283,15 @@ typedef struct {
     enum {
         ClCPrs_Ok,
         ClCPrs_ENoArg,
+        ClCPrs_EInvArg, // invalid
         ClCPrs_ENoSubArg,
-        ClCPrs_EInvSubArg, // invalid
+        ClCPrs_EInvSubArg,
     } t;
     union {
         struct ClCommand ok;
+        struct {
+            char* arg_dyn;
+        } invarg;
         struct {
             char* arg_dyn;
         } nosubarg;
@@ -297,8 +302,8 @@ typedef struct {
     } d;
 } ClCPrsResult;
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
+static void cl_cmd_parse_res_free(ClCPrsResult* res);
 static char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl);
-static void cl_cmd_free(struct ClCommand* cl_cmd);
 static char const* cl_cmd_from_enum(enum ClCTag t);
 static char const* cl_set_prop_from_enum(enum ClCDSTag t);
 static void cl_compls_update(struct InputConsoleData* cl);
@@ -351,6 +356,7 @@ static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle con
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
+static void show_message_va(struct Ctx* ctx, char const* fmt, ...);
 
 static struct Ctx ctx_init(Display* dp);
 static void setup(Display* dp, struct Ctx* ctx);
@@ -485,13 +491,18 @@ void arrpoputf8(char const* strarr) {
 
 char* str_new(char const* fmt, ...) {
     va_list ap1;
-    va_list ap2;
     va_start(ap1, fmt);
-    va_copy(ap2, ap1);
-    usize len = vsnprintf(NULL, 0, fmt, ap1);
+    char* result = str_new_va(fmt, ap1);
+    va_end(ap1);
+    return result;
+}
+
+char* str_new_va(char const* fmt, va_list args) {
+    va_list ap2;
+    va_copy(ap2, args);
+    usize len = vsnprintf(NULL, 0, fmt, args);
     char* result = ecalloc(len + 1, sizeof(char));
     vsnprintf(result, len + 1, fmt, ap2);
-    va_end(ap1);
     va_end(ap2);
     return result;
 }
@@ -729,7 +740,9 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
     char* cl_bufdyn = str_new("%s", cl);
     // naive split by spaces (0x20) works on utf8
     char const* cmd = strtok(cl_bufdyn, " ");
-    if (!strcmp(cmd, "echo")) {
+    if (!cmd) {
+        res.t = ClCPrs_ENoArg;
+    } else if (!strcmp(cmd, "echo")) {
         res.d.ok.t = ClC_Echo;
         char const* user_msg = strtok(NULL, "");
         res.d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""));
@@ -792,11 +805,64 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
             res.d.ok.d.load.path_dyn = str_new("%s", path);
         }
     } else {
-        res.t = ClCPrs_ENoArg;
+        res.t = ClCPrs_EInvArg;
+        res.d.invarg.arg_dyn = str_new("%s", cmd);
     }
     str_free(&cl_bufdyn);
 
     return res;
+}
+
+void cl_cmd_parse_res_free(ClCPrsResult* res) {
+    switch (res->t) {
+        case ClCPrs_Ok: {
+            struct ClCommand* cl_cmd = &res->d.ok;
+            switch (cl_cmd->t) {
+                case ClC_Set:
+                    switch (cl_cmd->d.set.t) {
+                        case ClCDS_Font:
+                            free(cl_cmd->d.set.d.font.name_dyn);
+                            break;
+                        case ClCDS_FInp:
+                            free(cl_cmd->d.set.d.finp.path_dyn);
+                            break;
+                        case ClCDS_FOut:
+                            free(cl_cmd->d.set.d.fout.path_dyn);
+                            break;
+                        case ClCDS_LineW:
+                        case ClCDS_Col:
+                        case ClCDS_Last:
+                            break;  // no default branch to enable warnings
+                    }
+                    break;
+                case ClC_Save:
+                    free(cl_cmd->d.save.path_dyn);
+                    break;
+                case ClC_Load:
+                    free(cl_cmd->d.load.path_dyn);
+                    break;
+                case ClC_Echo:
+                    free(cl_cmd->d.echo.msg_dyn);
+                    break;
+                case ClC_Exit:
+                    break;  // no default branch to enable warnings
+                case ClC_Last:
+                    assert(!"invalid enum value");
+            }
+        } break;
+        case ClCPrs_EInvArg: {
+            str_free(&res->d.invarg.arg_dyn);
+        } break;
+        case ClCPrs_EInvSubArg: {
+            str_free(&res->d.invsubarg.arg_dyn);
+            str_free(&res->d.invsubarg.inv_val_dyn);
+        } break;
+        case ClCPrs_ENoSubArg: {
+            str_free(&res->d.nosubarg.arg_dyn);
+        } break;
+        case ClCPrs_ENoArg:
+            break;
+    }
 }
 
 char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl) {
@@ -805,41 +871,6 @@ char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl) {
     memcpy(cmd_dyn, d_cl->cmdarr, cmd_len);
     cmd_dyn[cmd_len] = '\0';
     return cmd_dyn;
-}
-
-void cl_cmd_free(struct ClCommand* cl_cmd) {
-    switch (cl_cmd->t) {
-        case ClC_Set:
-            switch (cl_cmd->d.set.t) {
-                case ClCDS_Font:
-                    free(cl_cmd->d.set.d.font.name_dyn);
-                    break;
-                case ClCDS_FInp:
-                    free(cl_cmd->d.set.d.finp.path_dyn);
-                    break;
-                case ClCDS_FOut:
-                    free(cl_cmd->d.set.d.fout.path_dyn);
-                    break;
-                case ClCDS_LineW:
-                case ClCDS_Col:
-                case ClCDS_Last:
-                    break;  // no default branch to enable warnings
-            }
-            break;
-        case ClC_Save:
-            free(cl_cmd->d.save.path_dyn);
-            break;
-        case ClC_Load:
-            free(cl_cmd->d.load.path_dyn);
-            break;
-        case ClC_Echo:
-            free(cl_cmd->d.echo.msg_dyn);
-            break;
-        case ClC_Exit:
-            break;  // no default branch to enable warnings
-        case ClC_Last:
-            assert(!"invalid enum value");
-    }
 }
 
 char const* cl_cmd_from_enum(enum ClCTag t) {
@@ -1892,6 +1923,7 @@ void update_statusline(struct Ctx* ctx) {
     if (ctx->input.t == InputT_Console) {
         char const* command = ctx->input.d.cl.cmdarr;
         usize const command_len = arrlen(command);
+        // extra 2 for prompt and terminator
         char* cl_str_dyn = ecalloc(2 + command_len, sizeof(char));
         cl_str_dyn[0] = ':';
         cl_str_dyn[command_len + 1] = '\0';
@@ -2060,6 +2092,16 @@ void show_message(struct Ctx* ctx, char const* msg) {
         },
         1
     );
+}
+
+void show_message_va(struct Ctx* ctx, char const* fmt, ...) {
+    va_list ap;
+
+    va_start(ap, fmt);
+    char* msg_dyn = str_new_va(fmt, ap);
+    show_message(ctx, msg_dyn);
+    str_free(&msg_dyn);
+    va_end(ap);
 }
 
 void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height) {
@@ -2617,6 +2659,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                     input_state_set(&ctx->input, InputT_Interact);
                     ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
                     str_free(&cmd_dyn);
+                    Bool is_exit = False;
                     switch (res.t) {
                         case ClCPrs_Ok: {
                             struct ClCommand* cmd = &res.d.ok;
@@ -2624,36 +2667,40 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                             update_screen(ctx);
                             if (res.bit_status & ClCPrc_Msg) {
                                 show_message(ctx, res.msg_dyn);
-                                str_free(&res.msg_dyn);
+                                str_free(&res.msg_dyn);  // XXX member free
                             }
-                            cl_cmd_free(cmd);
-                            if (res.bit_status & ClCPrc_Exit) {
-                                return False;
-                            }
+                            is_exit = (Bool)(res.bit_status & ClCPrc_Exit);
                         } break;
                         case ClCPrs_ENoArg: {
                             show_message(ctx, "no command");
                         } break;
+                        case ClCPrs_EInvArg: {
+                            show_message_va(
+                                ctx,
+                                "invalid arg '%s'",
+                                res.d.invarg
+                            );
+                        } break;
                         case ClCPrs_ENoSubArg: {
-                            char* msg_dyn = str_new(
+                            show_message_va(
+                                ctx,
                                 "provide value to '%s' cmd",
                                 res.d.nosubarg.arg_dyn
                             );
-                            show_message(ctx, msg_dyn);
-                            str_free(&msg_dyn);
-                            str_free(&res.d.nosubarg.arg_dyn);
                         } break;
                         case ClCPrs_EInvSubArg: {
-                            char* msg_dyn = str_new(
+                            show_message_va(
+                                ctx,
                                 "invalid arg '%s' provided to '%s' cmd",
                                 res.d.invsubarg.inv_val_dyn,
                                 res.d.invsubarg.arg_dyn
                             );
-                            show_message(ctx, msg_dyn);
-                            str_free(&msg_dyn);
-                            str_free(&res.d.invsubarg.arg_dyn);
-                            str_free(&res.d.invsubarg.inv_val_dyn);
                         } break;
+                    }
+
+                    cl_cmd_parse_res_free(&res);
+                    if (is_exit) {
+                        return False;
                     }
                 }
             } else if (key_sym == XK_Tab) {
