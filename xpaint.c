@@ -714,8 +714,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             bit_status |= ClCPrc_Exit;
         } break;
         case ClC_Save: {
-            char const* path = cl_cmd->d.save.path_dyn ? cl_cmd->d.save.path_dyn
-                                                       : ctx->finp.path_dyn;
+            char const* path =
+                COALESCE(cl_cmd->d.save.path_dyn, ctx->fout.path_dyn);
             msg_to_show = str_new(
                 save_png_file(&ctx->dc, path) ? "image saved to '%s'"
                                               : "failed save image to '%s'",
@@ -723,8 +723,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             );
         } break;
         case ClC_Load: {
-            char const* path = cl_cmd->d.load.path_dyn ? cl_cmd->d.load.path_dyn
-                                                       : ctx->fout.path_dyn;
+            char const* path =
+                COALESCE(cl_cmd->d.load.path_dyn, ctx->finp.path_dyn);
             msg_to_show = str_new(
                 canvas_load(&ctx->dc, path, 0) ? "image loaded from '%s'"
                                                : "failed load image from '%s'",
