@@ -59,18 +59,15 @@
 // XXX workaround
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
-// clang-format off
 #define HAS_SELECTION(p_tc) \
-    ((p_tc)->t == Tool_Selection \
-    && (p_tc)->d.sel.ex != NIL && (p_tc)->d.sel.ey != NIL \
-    && (p_tc)->d.sel.bx != NIL && (p_tc)->d.sel.by != NIL \
-    && (p_tc)->d.sel.ex != (p_tc)->d.sel.bx \
-    && (p_tc)->d.sel.ey != (p_tc)->d.sel.by)
+    ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.ex != NIL \
+     && (p_tc)->d.sel.ey != NIL && (p_tc)->d.sel.bx != NIL \
+     && (p_tc)->d.sel.by != NIL && (p_tc)->d.sel.ex != (p_tc)->d.sel.bx \
+     && (p_tc)->d.sel.ey != (p_tc)->d.sel.by)
 #define SELECTION_DRAGGING(p_tc) \
-    ((p_tc)->t == Tool_Selection \
-    && (p_tc)->d.sel.drag_from.x != NIL \
-    && (p_tc)->d.sel.drag_from.y != NIL)
-// clang-format on
+    ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
+     && (p_tc)->d.sel.drag_from.y != NIL)
+#define UNREACHABLE() __builtin_unreachable()
 
 enum {
     A_Clipboard,
@@ -86,6 +83,11 @@ enum Icon {
     I_Fill,
     I_Picker,
     I_Last,
+};
+
+enum ImageType {
+    IMT_Png,
+    IMT_Jpg,
 };
 
 struct ClCommand {
@@ -129,6 +131,11 @@ struct ClCommand {
             char* msg_dyn;
         } echo;
         struct ClCDSave {
+            enum ClCDSv {
+                ClCDSv_Png = 0,
+                ClCDSv_Jpg,
+                ClCDSv_Last,
+            } im_type;
             char* path_dyn;
         } save;
         struct ClCDLoad {
@@ -243,6 +250,37 @@ struct Ctx {
     } finp, fout;
 };
 
+typedef struct {
+    enum {
+        ClCPrc_Msg = 0x1,  // wants to show message
+        ClCPrc_Exit = 0x2,  // wants to exit application
+    } bit_status;
+    char* msg_dyn;  // NULL if not PCCR_MSG
+} ClCPrcResult;
+
+typedef struct {
+    enum {
+        ClCPrs_Ok,
+        ClCPrs_ENoArg,
+        ClCPrs_EInvArg,  // invalid
+        ClCPrs_ENoSubArg,
+        ClCPrs_EInvSubArg,
+    } t;
+    union {
+        struct ClCommand ok;
+        struct {
+            char* arg_dyn;
+        } invarg;
+        struct {
+            char* arg_dyn;
+        } nosubarg;
+        struct {
+            char* arg_dyn;
+            char* inv_val_dyn;
+        } invsubarg;
+    } d;
+} ClCPrsResult;
+
 // clang-format off
 static void die(char const* errstr, ...);
 static void trace(char const* fmt, ...);
@@ -268,44 +306,17 @@ static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
 static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
-static Bool save_png_file(struct DrawCtx* dc, char const* file_path);
+static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
 static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
 
-typedef struct {
-    enum {
-        ClCPrc_Msg = 0x1, // wants to show message
-        ClCPrc_Exit = 0x2, // wants to exit application
-    } bit_status;
-    char* msg_dyn; // NULL if not PCCR_MSG
-} ClCPrcResult;
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
-typedef struct {
-    enum {
-        ClCPrs_Ok,
-        ClCPrs_ENoArg,
-        ClCPrs_EInvArg, // invalid
-        ClCPrs_ENoSubArg,
-        ClCPrs_EInvSubArg,
-    } t;
-    union {
-        struct ClCommand ok;
-        struct {
-            char* arg_dyn;
-        } invarg;
-        struct {
-            char* arg_dyn;
-        } nosubarg;
-        struct {
-            char* arg_dyn;
-            char* inv_val_dyn;
-        } invsubarg;
-    } d;
-} ClCPrsResult;
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
 static void cl_cmd_parse_res_free(ClCPrsResult* res);
 static char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl);
 static char const* cl_cmd_from_enum(enum ClCTag t);
 static char const* cl_set_prop_from_enum(enum ClCDSTag t);
+static char const* cl_save_type_from_enum(enum ClCDSv t);
+static enum ImageType cl_save_type_to_image_type(enum ClCDSv t);
 static void cl_compls_update(struct InputConsoleData* cl);
 static void cl_free(struct InputConsoleData* cl);
 static void cl_compls_free(struct InputConsoleData* cl);
@@ -635,9 +646,14 @@ XImage* read_png_file(
     return result;
 }
 
-Bool save_png_file(struct DrawCtx* dc, char const* file_path) {
+Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
     unsigned char* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
-    Bool const result = stbi_write_png(
+    int (*write_im)(char const*, int, int, int, void const*, int) = NULL;
+    switch (type) {
+        case IMT_Png: write_im = &stbi_write_png; break;
+        case IMT_Jpg: write_im = &stbi_write_jpg; break;
+    }
+    Bool const result = write_im(
         file_path,
         (i32)dc->cv.width,
         (i32)dc->cv.height,
@@ -703,8 +719,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     file_ctx_set(&ctx->fout, path);
                     msg_to_show = str_new("fout set to '%s'", path);
                 } break;
-                case ClCDS_Last:
-                    assert(!"invalid tag");
+                case ClCDS_Last: assert(!"invalid tag");
             }
         } break;
         case ClC_Echo: {
@@ -717,8 +732,13 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             char const* path =
                 COALESCE(cl_cmd->d.save.path_dyn, ctx->fout.path_dyn);
             msg_to_show = str_new(
-                save_png_file(&ctx->dc, path) ? "image saved to '%s'"
-                                              : "failed save image to '%s'",
+                save_file(
+                    &ctx->dc,
+                    cl_save_type_to_image_type(cl_cmd->d.save.im_type),
+                    path
+                )
+                    ? "image saved to '%s'"
+                    : "failed save image to '%s'",
                 path
             );
         } break;
@@ -731,8 +751,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 path
             );
         } break;
-        case ClC_Last:
-            assert(!"invalid enum value");
+        case ClC_Last: assert(!"invalid enum value");
     }
     bit_status |= msg_to_show ? ClCPrc_Msg : 0;
     return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
@@ -744,6 +763,7 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
     char* cl_bufdyn = str_new("%s", cl);
     // naive split by spaces (0x20) works on utf8
     char const* cmd = strtok(cl_bufdyn, " ");
+    // FIXME separate to function to able to use 'return'
     if (!cmd) {
         res.t = ClCPrs_ENoArg;
     } else if (!strcmp(cmd, "echo")) {
@@ -798,9 +818,27 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
         res.d.ok.t = ClC_Exit;
     } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
         res.d.ok.t = ClC_Save;
-        char const* path = strtok(NULL, "");  // path with spaces
-        if (path) {
-            res.d.ok.d.save.path_dyn = str_new("%s", path);
+        char const* type_str = strtok(NULL, " ");
+        if (!type_str) {
+            res.t = ClCPrs_ENoSubArg;
+            res.d.nosubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Save));
+        } else {
+            enum ClCDSv* type = &res.d.ok.d.save.im_type;
+            for (*type = 0; *type < ClCDSv_Last; ++*type) {
+                if (!strcmp(type_str, cl_save_type_from_enum(*type))) {
+                    break;
+                }
+            }
+            if (*type == ClCDSv_Last) {
+                res.t = ClCPrs_EInvSubArg;
+                res.d.invsubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Save));
+                res.d.invsubarg.inv_val_dyn = str_new("%s", type_str);
+            } else {
+                char const* path = strtok(NULL, "");  // include spaces
+                if (path) {
+                    res.d.ok.d.save.path_dyn = str_new("%s", path);
+                }
+            }
         }
     } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
         res.d.ok.t = ClC_Load;
@@ -839,19 +877,11 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
                             break;  // no default branch to enable warnings
                     }
                     break;
-                case ClC_Save:
-                    free(cl_cmd->d.save.path_dyn);
-                    break;
-                case ClC_Load:
-                    free(cl_cmd->d.load.path_dyn);
-                    break;
-                case ClC_Echo:
-                    free(cl_cmd->d.echo.msg_dyn);
-                    break;
-                case ClC_Exit:
-                    break;  // no default branch to enable warnings
-                case ClC_Last:
-                    assert(!"invalid enum value");
+                case ClC_Save: free(cl_cmd->d.save.path_dyn); break;
+                case ClC_Load: free(cl_cmd->d.load.path_dyn); break;
+                case ClC_Echo: free(cl_cmd->d.echo.msg_dyn); break;
+                case ClC_Exit: break;  // no default branch to enable warnings
+                case ClC_Last: assert(!"invalid enum value");
             }
         } break;
         case ClCPrs_EInvArg: {
@@ -864,8 +894,7 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
         case ClCPrs_ENoSubArg: {
             str_free(&res->d.nosubarg.arg_dyn);
         } break;
-        case ClCPrs_ENoArg:
-            break;
+        case ClCPrs_ENoArg: break;
     }
 }
 
@@ -878,7 +907,6 @@ char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl) {
 }
 
 char const* cl_cmd_from_enum(enum ClCTag t) {
-    // clang-format off
     switch (t) {
         case ClC_Echo: return "echo";
         case ClC_Exit: return "q";
@@ -887,12 +915,10 @@ char const* cl_cmd_from_enum(enum ClCTag t) {
         case ClC_Set: return "set";
         case ClC_Last: return "last";
     }
-    // clang-format on
-    assert(!"unreachable");
+    UNREACHABLE();
 }
 
 static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
-    // clang-format off
     switch (t) {
         case ClCDS_Col: return "col";
         case ClCDS_FInp: return "finp";
@@ -901,8 +927,25 @@ static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
         case ClCDS_LineW: return "line_w";
         case ClCDS_Last: return "last";
     }
-    // clang-format on
-    assert(!"unreachable");
+    UNREACHABLE();
+}
+
+static char const* cl_save_type_from_enum(enum ClCDSv t) {
+    switch (t) {
+        case ClCDSv_Png: return "png";
+        case ClCDSv_Jpg: return "jpg";
+        case ClCDSv_Last: return "last";
+    }
+    UNREACHABLE();
+}
+
+enum ImageType cl_save_type_to_image_type(enum ClCDSv t) {
+    switch (t) {
+        case ClCDSv_Png: return IMT_Png;
+        case ClCDSv_Jpg: return IMT_Jpg;
+        case ClCDSv_Last: UNREACHABLE();
+    }
+    UNREACHABLE();
 }
 
 static void cl_compls_update_helper(
@@ -938,6 +981,13 @@ void cl_compls_update(struct InputConsoleData* cl) {
             tok2,
             (cast)&cl_set_prop_from_enum,
             ClCDS_Last
+        );
+    } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
+        cl_compls_update_helper(
+            &result,
+            tok2,
+            (cast)&cl_save_type_from_enum,
+            ClCDSv_Last
         );
     } else {  // first token comletion
         cl_compls_update_helper(
@@ -1051,11 +1101,8 @@ void tool_ctx_set_picker(struct ToolCtx* tc) {
 
 void input_state_set(struct Input* input, enum InputTag const is) {
     switch (input->t) {
-        case InputT_Console:
-            cl_free(&input->d.cl);
-            break;
-        default:
-            break;
+        case InputT_Console: cl_free(&input->d.cl); break;
+        default: break;
     }
 
     input->t = is;
@@ -1068,8 +1115,7 @@ void input_state_set(struct Input* input, enum InputTag const is) {
             input->d.cl = (struct InputConsoleData
             ) {.cmdarr = NULL, .compls_valid = False};
             break;
-        case InputT_Interact:
-            break;
+        case InputT_Interact: break;
     }
 }
 
@@ -2728,8 +2774,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } break;
 
-        default:
-            assert(False && "unknown input state");
+        default: assert(!"unknown input state");
     }
     // any state except console input
     if (ctx->input.t != InputT_Console) {
@@ -2746,7 +2791,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             update_statusline(ctx);
         }
         HANDLE_KEY_CASE_MASK(ControlMask, XK_s) {  // save to current file
-            if (save_png_file(&ctx->dc, ctx->fout.path_dyn)) {
+            if (save_file(&ctx->dc, IMT_Png, ctx->fout.path_dyn)) {
                 trace("xpaint: file saved");
             }
         }
