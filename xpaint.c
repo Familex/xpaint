@@ -1742,13 +1742,9 @@ static void draw_string(
 
 static void
 draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
-    static u32 const MAX_SIZE = 50;
-    assert(digit_count(i) < MAX_SIZE);
-
-    char buf[MAX_SIZE];
-    memset(buf, '\0', MAX_SIZE);  // FIXME memset_s
-    sprintf(buf, "%d", i);
-    draw_string(dc, buf, c, sc, invert);
+    char* msg = str_new("%d", i);
+    draw_string(dc, msg, c, sc, invert);
+    str_free(&msg);
 }
 
 // XXX always opaque
@@ -1791,14 +1787,14 @@ static int draw_rect(
 static u32
 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     XGlyphInfo ext;
-
     XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
     return ext.xOff;
 }
 
 static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
-    char buf[50] = {0};  // XXX magic value
-    sprintf(buf, format, i);
+    static u32 const MAX_BUF = 50;
+    char buf[MAX_BUF];
+    snprintf(buf, MAX_BUF, format, i);
     return get_string_width(dc, buf, strlen(buf));
 }
 
@@ -2019,7 +2015,7 @@ void update_statusline(struct Ctx* ctx) {
         );
         draw_int(dc, (i32)tc->sdata.line_w, line_w_c, SchmNorm, False);
         /* color */ {
-            char col_value[col_value_size + 2];  // FIXME ?
+            char col_value[col_value_size + 1];
             sprintf(col_value, "#%06X", CURR_COL(tc) & 0xFFFFFF);
             draw_string(dc, col_value, col_c, SchmNorm, False);
             /* color count */ {
@@ -2756,7 +2752,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
     // independent
-    HANDLE_KEY_CASE(XK_Escape) {  // FIXME XK_c
+    HANDLE_KEY_CASE(XK_Escape) {
         input_state_set(&ctx->input, InputT_Interact);
         update_statusline(ctx);
     }
