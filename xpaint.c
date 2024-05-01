@@ -88,6 +88,7 @@ enum Icon {
 enum ImageType {
     IMT_Png,
     IMT_Jpg,
+    IMT_Unknown,
 };
 
 struct ClCommand {
@@ -158,6 +159,7 @@ struct Ctx {
         XdbeBackBuffer back_buffer;  // double buffering
         struct Canvas {
             XImage* im;
+            enum ImageType type;
             u32 width;
             u32 height;
             u32 zoom;  // 1 == no zoom
@@ -307,6 +309,7 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
 static XImage* read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
+static enum ImageType file_type(char const* file_path);
 static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
@@ -644,11 +647,15 @@ read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb) {
 }
 
 Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
+    if (type == IMT_Unknown) {
+        return False;
+    }
     unsigned char* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
     int (*write_im)(char const*, int, int, int, void const*, int) = NULL;
     switch (type) {
         case IMT_Png: write_im = &stbi_write_png; break;
         case IMT_Jpg: write_im = &stbi_write_jpg; break;
+        case IMT_Unknown: UNREACHABLE();
     }
     Bool const result = write_im(
         file_path,
@@ -659,6 +666,35 @@ Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
         0
     );
     free(rgba_dyn);
+    return result;
+}
+
+enum ImageType file_type(char const* file_path) {
+    if (!file_path) {
+        return IMT_Unknown;
+    }
+    static u32 const HEADER_SIZE = 8;  // read extra symbols for simplicity
+    unsigned char h[HEADER_SIZE];
+    enum ImageType result = IMT_Unknown;
+
+    FILE* file = fopen(file_path, "r");
+    if (!file) {
+        return IMT_Unknown;
+    }
+    // on file read error just fail on header check
+    fread(h, sizeof(unsigned char), HEADER_SIZE, file);
+
+    // jpeg SOI marker and another marker begin
+    if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) {
+        result = IMT_Jpg;
+    } else
+        // png header
+        if (h[0] == 0x89 && h[1] == 0x50 && h[2] == 0x4E && h[3] == 0x47
+            && h[4] == 0x0D && h[5] == 0x0A && h[6] == 0x1A && h[7] == 0x0A) {
+            result = IMT_Png;
+        }
+
+    fclose(file);
     return result;
 }
 
@@ -1600,6 +1636,7 @@ canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb) {
     }
     canvas_free(dc->dp, &dc->cv);
     dc->cv.im = im;
+    dc->cv.type = file_type(file_name);
     dc->cv.width = dc->cv.im->width;
     dc->cv.height = dc->cv.im->height;
     return True;
@@ -2226,6 +2263,7 @@ struct Ctx ctx_init(Display* dp) {
                         .width = NIL,
                         .height = NIL,
                         .im = NULL,
+                        .type = IMT_Png,  // save as png by default
                         .zoom = 1,
                         .scroll = {0, 0},
                     },
@@ -2788,8 +2826,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             update_statusline(ctx);
         }
         HANDLE_KEY_CASE_MASK(ControlMask, XK_s) {  // save to current file
-            if (save_file(&ctx->dc, IMT_Png, ctx->fout.path_dyn)) {
+            if (save_file(&ctx->dc, ctx->dc.cv.type, ctx->fout.path_dyn)) {
                 trace("xpaint: file saved");
+            } else {
+                trace("xpaint: failed to save image");
             }
         }
     }
