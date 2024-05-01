@@ -366,6 +366,7 @@ static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height);
 
+static u32 get_statusline_height(struct DrawCtx* dc);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
@@ -1661,6 +1662,10 @@ void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
                              * ((double)dc->cv.zoom / old_zoom - 1));
 }
 
+u32 get_statusline_height(struct DrawCtx* dc) {
+    return dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
+}
+
 void draw_selection_circle(
     struct DrawCtx* dc,
     struct SelectionCircle const* sc,
@@ -1993,7 +1998,7 @@ void update_screen(struct Ctx* ctx) {
 void update_statusline(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
-    u32 const statusline_h = dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
+    u32 const statusline_h = get_statusline_height(dc);
     fill_rect(
         dc,
         (Pair) {0, (i32)(dc->height - statusline_h)},
@@ -2445,7 +2450,7 @@ void setup(Display* dp, struct Ctx* ctx) {
                 ctx->dc.vinfo.depth
             );
             ctx->dc.cv.im = XGetImage(
-                ctx->dc.dp,
+                dp,
                 data,
                 0,
                 0,
@@ -2454,10 +2459,14 @@ void setup(Display* dp, struct Ctx* ctx) {
                 AllPlanes,
                 ZPixmap
             );
-            XFreePixmap(ctx->dc.dp, data);
+            XFreePixmap(dp, data);
             // initial canvas color
             canvas_fill(&ctx->dc, CANVAS.background_argb);
         }
+
+        ctx->dc.width = ctx->dc.cv.width;
+        ctx->dc.height = ctx->dc.cv.height + get_statusline_height(&ctx->dc);
+        XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
