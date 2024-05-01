@@ -305,7 +305,7 @@ static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
-static XImage* read_png_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
+static XImage* read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
 static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
 
@@ -602,11 +602,8 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-XImage* read_png_file(
-    struct DrawCtx const* dc,
-    char const* file_name,
-    u32 transp_argb
-) {
+XImage*
+read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb) {
     i32 width = NIL;
     i32 height = NIL;
     i32 comp = NIL;
@@ -1597,7 +1594,7 @@ void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
 
 static Bool
 canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb) {
-    XImage* im = read_png_file(dc, file_name, 0);
+    XImage* im = read_file(dc, file_name, 0);
     if (!im) {
         return False;
     }
@@ -2365,7 +2362,7 @@ void setup(Display* dp, struct Ctx* ctx) {
 
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
-            images[i] = read_png_file(
+            images[i] = read_file(
                 &ctx->dc,
                 i == I_Select       ? "./res/tool-select.png"
                     : i == I_Pencil ? "./res/tool-pencil.png"
