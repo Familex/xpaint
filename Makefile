@@ -15,10 +15,10 @@ help: ## display this help
 	@sed -ne '/@sed/!s/:.*##//p' $(MAKEFILE_LIST) | column -tl 2
 
 xpaint: $(SRC) $(HEADER) ## build release application
-	@$(CC) -o $@ $(SRC) $(CCFLAGS) -O2
+	@$(CC) -o $@ $(SRC) $(CCFLAGS) -O3 -DNDEBUG
 
 xpaint-d: $(SRC) $(HEADER) ## build debug application
-	@$(CC) -o $@ $(SRC) $(CCFLAGS) -g -Og
+	@$(CC) -o $@ $(SRC) $(CCFLAGS) -g
 
 clean: ## remove generated files
 	@rm -f xpaint xpaint-d
