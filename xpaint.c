@@ -16,8 +16,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/fcntl.h>
+#include <sys/mman.h>
 #include <sys/time.h>
+#include <sys/unistd.h>
 
+// libs
+#define INCBIN_PREFIX
+#define INCBIN_STYLE INCBIN_STYLE_SNAKE
+#include "lib/incbin.h"
 #define STB_DS_IMPLEMENTATION
 #include "lib/stb_ds.h"
 #undef STB_DS_IMPLEMENTATION
@@ -30,6 +37,13 @@
 
 #include "config.h"
 #include "types.h"
+
+// embeded data
+INCBIN(u8, pic_tool_fill, "res/tool-fill.png");
+INCBIN(u8, pic_tool_pencil, "res/tool-pencil.png");
+INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
+INCBIN(u8, pic_tool_select, "res/tool-select.png");
+INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
  * free -dyn vars with 'free' function
@@ -313,7 +327,8 @@ static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
-static XImage* read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
+static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, u32 transp_argb);
+static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -612,12 +627,17 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-XImage*
-read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb) {
+static XImage* read_file_from_memory(
+    struct DrawCtx const* dc,
+    u8 const* data,
+    u32 len,
+    u32 transp_argb
+) {
     i32 width = NIL;
     i32 height = NIL;
     i32 comp = NIL;
-    stbi_uc* image_data = stbi_load(file_name, &width, &height, &comp, 4);
+    stbi_uc* image_data =
+        stbi_load_from_memory(data, (i32)len, &width, &height, &comp, 4);
     if (image_data == NULL) {
         return NULL;
     }
@@ -649,6 +669,22 @@ read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb) {
         32,  // FIXME what is it? (must be 32)
         width * 4
     );
+
+    return result;
+}
+
+XImage* read_file_from_path(
+    struct DrawCtx const* dc,
+    char const* file_name,
+    u32 transp_argb
+) {
+    int fd = open(file_name, O_RDONLY);
+    off_t len = lseek(fd, 0, SEEK_END);
+    void* data = mmap(0, len, PROT_READ, MAP_PRIVATE, fd, 0);
+
+    XImage* result = read_file_from_memory(dc, data, len, transp_argb);
+
+    close(fd);
 
     return result;
 }
@@ -1637,7 +1673,7 @@ void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
 
 static Bool
 canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb) {
-    XImage* im = read_file(dc, file_name, 0);
+    XImage* im = read_file_from_path(dc, file_name, 0);
     if (!im) {
         return False;
     }
@@ -2424,13 +2460,20 @@ void setup(Display* dp, struct Ctx* ctx) {
 
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
-            images[i] = read_file(
+            u8 const* data = i == I_Select ? pic_tool_select_data
+                : i == I_Pencil            ? pic_tool_pencil_data
+                : i == I_Fill              ? pic_tool_fill_data
+                : i == I_Picker            ? pic_tool_picker_data
+                                           : pic_unknown_data;
+            u32 const len = i == I_Select ? RES_SZ_TOOL_SELECT
+                : i == I_Pencil           ? RES_SZ_TOOL_PENCIL
+                : i == I_Fill             ? RES_SZ_TOOL_FILL
+                : i == I_Picker           ? RES_SZ_TOOL_PICKER
+                                          : RES_SZ_UNKNOWN;
+            images[i] = read_file_from_memory(
                 &ctx->dc,
-                i == I_Select       ? "./res/tool-select.png"
-                    : i == I_Pencil ? "./res/tool-pencil.png"
-                    : i == I_Fill   ? "./res/tool-fill.png"
-                    : i == I_Picker ? "./res/tool-picker.png"
-                                    : "null",
+                data,
+                len,
                 COL_BG(&ctx->dc, SchmNorm)
             );
         }
