@@ -1890,37 +1890,38 @@ static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
 }
 
 void update_screen(struct Ctx* ctx) {
+    struct DrawCtx* dc = &ctx->dc;
     /* draw canvas */ {
         fill_rect(
-            &ctx->dc,
+            dc,
             (Pair) {0, 0},
-            (Pair) {(i32)ctx->dc.width, (i32)ctx->dc.height},
+            (Pair) {(i32)dc->width, (i32)dc->height},
             WINDOW.background_argb
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
-            u32 pb_width = ctx->dc.cv.width * ctx->dc.cv.zoom;
-            u32 pb_height = ctx->dc.cv.height * ctx->dc.cv.zoom;
-            if (ctx->dc.cache.pm == 0 || ctx->dc.cache.pm_w != pb_width
-                || ctx->dc.cache.pm_h != pb_height) {
-                if (ctx->dc.cache.pm != 0) {
-                    XFreePixmap(ctx->dc.dp, ctx->dc.cache.pm);
+            u32 pb_width = dc->cv.width * dc->cv.zoom;
+            u32 pb_height = dc->cv.height * dc->cv.zoom;
+            if (dc->cache.pm == 0 || dc->cache.pm_w != pb_width
+                || dc->cache.pm_h != pb_height) {
+                if (dc->cache.pm != 0) {
+                    XFreePixmap(dc->dp, dc->cache.pm);
                 }
-                ctx->dc.cache.pm = XCreatePixmap(
-                    ctx->dc.dp,
-                    ctx->dc.window,
+                dc->cache.pm = XCreatePixmap(
+                    dc->dp,
+                    dc->window,
                     pb_width,
                     pb_height,
-                    ctx->dc.vinfo.depth
+                    dc->vinfo.depth
                 );
-                ctx->dc.cache.pm_w = pb_width;
-                ctx->dc.cache.pm_h = pb_height;
+                dc->cache.pm_w = pb_width;
+                dc->cache.pm_h = pb_height;
             }
             XPutImage(
-                ctx->dc.dp,
-                ctx->dc.cache.pm,
-                ctx->dc.screen_gc,
-                ctx->dc.cv.im,
+                dc->dp,
+                dc->cache.pm,
+                dc->screen_gc,
+                dc->cv.im,
                 0,
                 0,
                 0,
@@ -1930,41 +1931,45 @@ void update_screen(struct Ctx* ctx) {
             );
 
             Picture src_pict = XRenderCreatePicture(
-                ctx->dc.dp,
-                ctx->dc.cache.pm,
-                ctx->dc.xrnd_pic_format,
+                dc->dp,
+                dc->cache.pm,
+                dc->xrnd_pic_format,
                 0,
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
             Picture dst_pict = XRenderCreatePicture(
-                ctx->dc.dp,
-                ctx->dc.back_buffer,
-                ctx->dc.xrnd_pic_format,
+                dc->dp,
+                dc->back_buffer,
+                dc->xrnd_pic_format,
                 0,
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
 
-            // clang-format off
-            double const z = 1.0 / ctx->dc.cv.zoom;
-            XRenderSetPictureTransform(ctx->dc.dp, src_pict, &(XTransform){{
-                { XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0) },
-                { XDoubleToFixed(0), XDoubleToFixed(z), XDoubleToFixed(0) },
-                { XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1) },
-            }});
+            double const z = 1.0 / dc->cv.zoom;
+            XRenderSetPictureTransform(
+                dc->dp,
+                src_pict,
+                &(XTransform) {{
+                    {XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0)},
+                    {XDoubleToFixed(0), XDoubleToFixed(z), XDoubleToFixed(0)},
+                    {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)},
+                }}
+            );
 
+            // clang-format off
             XRenderComposite(
-                ctx->dc.dp, PictOpSrc,
+                dc->dp, PictOpSrc,
                 src_pict, 0,
                 dst_pict,
                 0, 0,
                 0, 0,
-                ctx->dc.cv.scroll.x, ctx->dc.cv.scroll.y,
+                dc->cv.scroll.x, dc->cv.scroll.y,
                 pb_width, pb_height
             );
             // clang-format on
 
-            XRenderFreePicture(ctx->dc.dp, src_pict);
-            XRenderFreePicture(ctx->dc.dp, dst_pict);
+            XRenderFreePicture(dc->dp, src_pict);
+            XRenderFreePicture(dc->dp, dst_pict);
         }
     }
     /* current selection */ {
@@ -1973,9 +1978,9 @@ void update_screen(struct Ctx* ctx) {
             Pair p = {MIN(sd.bx, sd.ex), MIN(sd.by, sd.ey)};
             Pair dim = {MAX(sd.bx, sd.ex) - p.x, MAX(sd.by, sd.ey) - p.y};
             draw_rect(
-                &ctx->dc,
-                point_from_cv_to_scr(&ctx->dc, p),
-                point_from_cv_to_scr_no_move(&ctx->dc, dim),
+                dc,
+                point_from_cv_to_scr(dc, p),
+                point_from_cv_to_scr_no_move(dc, dim),
                 0x00000,
                 SELECTION_TOOL.line_w,
                 SELECTION_TOOL.line_style,
@@ -1986,9 +1991,9 @@ void update_screen(struct Ctx* ctx) {
                 i32 dx = sd.drag_to.x - sd.drag_from.x;
                 i32 dy = sd.drag_to.y - sd.drag_from.y;
                 draw_rect(
-                    &ctx->dc,
-                    point_from_cv_to_scr_xy(&ctx->dc, p.x + dx, p.y + dy),
-                    point_from_cv_to_scr_no_move(&ctx->dc, dim),
+                    dc,
+                    point_from_cv_to_scr_xy(dc, p.x + dx, p.y + dy),
+                    point_from_cv_to_scr_no_move(dc, dim),
                     SELECTION_TOOL.drag_argb,
                     SELECTION_TOOL.line_w,
                     SELECTION_TOOL.line_style,
