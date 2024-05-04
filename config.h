@@ -10,7 +10,8 @@ u32 const TCS_NUM = 3;
 char const FONT_NAME[] = "monospace:size=10";
 // lag prevention. only one drag event per period will be done
 u32 const DRAG_PERIOD_US = 10000;
-i32 const PNG_SAVE_COMPRESSION = 4;
+i32 const PNG_DEFAULT_COMPRESSION = 8;
+i32 const JPG_DEFAULT_QUALITY = 80;
 
 XRenderColor const SCHEMES[SchmLast][2] = {
     // fg, bg (rgba premultiplied)

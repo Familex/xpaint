@@ -122,6 +122,8 @@ struct ClCommand {
                 ClCDS_Font,
                 ClCDS_FInp,
                 ClCDS_FOut,
+                ClCDS_PngCompression,
+                ClCDS_JpgQuality,
                 ClCDS_Last,
             } t;
             union ClCDSData {
@@ -140,6 +142,12 @@ struct ClCommand {
                 struct ClCDSDFOut {
                     char* path_dyn;
                 } fout;
+                struct ClCDSDPngCpr {
+                    i32 compression;
+                } png_cpr;
+                struct ClCDSDJpgQlt {
+                    i32 quality;
+                } jpg_qlt;
             } d;
         } set;
         struct ClCDEcho {
@@ -194,6 +202,8 @@ struct Ctx {
             u32 pm_h;
             Pixmap pm;  // pixel buffer to update screen
         } cache;
+        i32 png_compression_level;  // FIXME find better place
+        i32 jpg_quality_level;  // FIXME find better place
     } dc;
     struct Input {
         Pair prev_c;
@@ -693,21 +703,22 @@ Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
     if (type == IMT_Unknown) {
         return False;
     }
+    Bool result = False;
+
+    i32 w = (i32)dc->cv.width;
+    i32 h = (i32)dc->cv.height;
     u8* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
-    int (*write_im)(char const*, int, int, int, void const*, int) = NULL;
     switch (type) {
-        case IMT_Png: write_im = &stbi_write_png; break;
-        case IMT_Jpg: write_im = &stbi_write_jpg; break;
+        case IMT_Png: {
+            stbi_write_png_compression_level = dc->png_compression_level;
+            result = stbi_write_png(file_path, w, h, 4, rgba_dyn, 0);
+        } break;
+        case IMT_Jpg: {
+            i32 quality = dc->jpg_quality_level;
+            result = stbi_write_jpg(file_path, w, h, 4, rgba_dyn, quality);
+        } break;
         case IMT_Unknown: UNREACHABLE();
     }
-    Bool const result = write_im(
-        file_path,
-        (i32)dc->cv.width,
-        (i32)dc->cv.height,
-        PNG_SAVE_COMPRESSION,
-        rgba_dyn,
-        0
-    );
     free(rgba_dyn);
     return result;
 }
@@ -795,6 +806,13 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     file_ctx_set(&ctx->fout, path);
                     msg_to_show = str_new("fout set to '%s'", path);
                 } break;
+                case ClCDS_PngCompression: {
+                    ctx->dc.png_compression_level =
+                        cl_cmd->d.set.d.png_cpr.compression;
+                } break;
+                case ClCDS_JpgQuality: {
+                    ctx->dc.jpg_quality_level = cl_cmd->d.set.d.jpg_qlt.quality;
+                } break;
                 case ClCDS_Last: assert(!"invalid tag");
             }
         } break;
@@ -858,7 +876,7 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
             res.d.ok.d.set.t = ClCDS_LineW;
             char const* args = strtok(NULL, "");
             res.d.ok.d.set.d.line_w.value =
-                args ? strtol(args, NULL, 0) : TOOLS.default_line_w;
+                args ? MAX(0, strtol(args, NULL, 0)) : TOOLS.default_line_w;
         } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
             res.d.ok.d.set.t = ClCDS_Col;
             res.d.ok.d.set.d.col.argb =
@@ -885,6 +903,14 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
             if (path) {
                 res.d.ok.d.set.d.fout.path_dyn = str_new("%s", path);
             }
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
+            res.d.ok.d.set.t = ClCDS_PngCompression;
+            res.d.ok.d.set.d.png_cpr.compression =
+                (i32)strtol(strtok(NULL, " "), NULL, 0);
+        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
+            res.d.ok.d.set.t = ClCDS_JpgQuality;
+            res.d.ok.d.set.d.jpg_qlt.quality =
+                (i32)strtol(strtok(NULL, ""), NULL, 0);
         } else {
             res.t = ClCPrs_EInvSubArg;
             res.d.invsubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set));
@@ -949,6 +975,8 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
                             break;
                         case ClCDS_LineW:
                         case ClCDS_Col:
+                        case ClCDS_PngCompression:
+                        case ClCDS_JpgQuality:
                         case ClCDS_Last:
                             break;  // no default branch to enable warnings
                     }
@@ -1001,6 +1029,8 @@ static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
         case ClCDS_FOut: return "fout";
         case ClCDS_Font: return "font";
         case ClCDS_LineW: return "line_w";
+        case ClCDS_PngCompression: return "png_cmpr";
+        case ClCDS_JpgQuality: return "jpg_qlty";
         case ClCDS_Last: return "last";
     }
     UNREACHABLE();
@@ -2321,6 +2351,8 @@ struct Ctx ctx_init(Display* dp) {
                         .scroll = {0, 0},
                     },
                 .cache = (struct Cache) {.pm = 0},
+                .png_compression_level = PNG_DEFAULT_COMPRESSION,
+                .jpg_quality_level = JPG_DEFAULT_QUALITY,
             },
         .input =
             (struct Input) {
