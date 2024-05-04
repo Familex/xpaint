@@ -2526,8 +2526,10 @@ void setup(Display* dp, struct Ctx* ctx) {
             canvas_fill(&ctx->dc, CANVAS.background_argb);
         }
 
-        ctx->dc.width = ctx->dc.cv.width;
-        ctx->dc.height = ctx->dc.cv.height + get_statusline_height(&ctx->dc);
+        ctx->dc.width = MIN(WINDOW.max_launch_size.x, ctx->dc.cv.width);
+        ctx->dc.height =
+            MIN(WINDOW.max_launch_size.y,
+                ctx->dc.cv.height + get_statusline_height(&ctx->dc));
         XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }
 

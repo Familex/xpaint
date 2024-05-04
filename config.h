@@ -21,8 +21,10 @@ XRenderColor const SCHEMES[SchmLast][2] = {
 
 struct {
     u32 background_argb;
+    Pair max_launch_size;
 } const WINDOW = {
     .background_argb = 0xFF181818,
+    .max_launch_size = {1000, 1000},
 };
 
 struct {
