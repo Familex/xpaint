@@ -151,6 +151,7 @@ struct Ctx {
         XVisualInfo vinfo;
         XIM xim;
         XIC xic;
+        XRenderPictFormat* xrnd_pic_format;
         GC gc;
         GC screen_gc;
         Window window;
@@ -174,6 +175,11 @@ struct Ctx {
             XftColor bg;
         }* schemes_dyn;  // must be len of SchmLast
         Colormap colmap;
+        struct Cache {
+            u32 pm_w;  // to validate pm
+            u32 pm_h;
+            Pixmap pm;  // pixel buffer to update screen
+        } cache;
     } dc;
     struct Input {
         Pair prev_c;
@@ -1895,16 +1901,24 @@ void update_screen(struct Ctx* ctx) {
             //  https://stackoverflow.com/a/66896097
             u32 pb_width = ctx->dc.cv.width * ctx->dc.cv.zoom;
             u32 pb_height = ctx->dc.cv.height * ctx->dc.cv.zoom;
-            Pixmap pixel_buffer = XCreatePixmap(
-                ctx->dc.dp,
-                ctx->dc.window,
-                pb_width,
-                pb_height,
-                ctx->dc.vinfo.depth
-            );
+            if (ctx->dc.cache.pm == 0 || ctx->dc.cache.pm_w != pb_width
+                || ctx->dc.cache.pm_h != pb_height) {
+                if (ctx->dc.cache.pm != 0) {
+                    XFreePixmap(ctx->dc.dp, ctx->dc.cache.pm);
+                }
+                ctx->dc.cache.pm = XCreatePixmap(
+                    ctx->dc.dp,
+                    ctx->dc.window,
+                    pb_width,
+                    pb_height,
+                    ctx->dc.vinfo.depth
+                );
+                ctx->dc.cache.pm_w = pb_width;
+                ctx->dc.cache.pm_h = pb_height;
+            }
             XPutImage(
                 ctx->dc.dp,
-                pixel_buffer,
+                ctx->dc.cache.pm,
                 ctx->dc.screen_gc,
                 ctx->dc.cv.im,
                 0,
@@ -1915,26 +1929,19 @@ void update_screen(struct Ctx* ctx) {
                 pb_height
             );
 
-            XRenderPictFormat* pict_format =
-                XRenderFindStandardFormat(ctx->dc.dp, PictStandardARGB32);
-            assert(pict_format);
-            XRenderPictureAttributes pict_attrs = {
-                .subwindow_mode = IncludeInferiors
-            };
-
             Picture src_pict = XRenderCreatePicture(
                 ctx->dc.dp,
-                pixel_buffer,
-                pict_format,
+                ctx->dc.cache.pm,
+                ctx->dc.xrnd_pic_format,
                 0,
-                &pict_attrs
+                &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
             Picture dst_pict = XRenderCreatePicture(
                 ctx->dc.dp,
                 ctx->dc.back_buffer,
-                pict_format,
+                ctx->dc.xrnd_pic_format,
                 0,
-                &pict_attrs
+                &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
 
             // clang-format off
@@ -1955,9 +1962,9 @@ void update_screen(struct Ctx* ctx) {
                 pb_width, pb_height
             );
             // clang-format on
+
             XRenderFreePicture(ctx->dc.dp, src_pict);
             XRenderFreePicture(ctx->dc.dp, dst_pict);
-            XFreePixmap(ctx->dc.dp, pixel_buffer);
         }
     }
     /* current selection */ {
@@ -2272,6 +2279,7 @@ struct Ctx ctx_init(Display* dp) {
                         .zoom = 1,
                         .scroll = {0, 0},
                     },
+                .cache = (struct Cache) {.pm = 0},
             },
         .input =
             (struct Input) {
@@ -2308,6 +2316,12 @@ void setup(Display* dp, struct Ctx* ctx) {
         atoms[A_Targets] = XInternAtom(dp, "TARGETS", False);
         atoms[A_Utf8string] = XInternAtom(dp, "UTF8_STRING", False);
         atoms[A_ImagePng] = XInternAtom(dp, "image/png", False);
+    }
+
+    /* xrender */ {
+        ctx->dc.xrnd_pic_format =
+            XRenderFindStandardFormat(ctx->dc.dp, PictStandardARGB32);
+        assert(ctx->dc.xrnd_pic_format);
     }
 
     i32 screen = DefaultScreen(dp);
@@ -3065,6 +3079,11 @@ void cleanup(struct Ctx* ctx) {
         }
     }
     /* DrawCtx */ {
+        /* Cache */ {
+            if (ctx->dc.cache.pm != 0) {
+                XFreePixmap(ctx->dc.dp, ctx->dc.cache.pm);
+            }
+        }
         /* Scheme */ {  // depends on VisualInfo and Colormap
             for (i32 i = 0; i < SchmLast; ++i) {
                 for (i32 j = 0; j < 2; ++j) {
