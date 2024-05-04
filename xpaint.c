@@ -316,7 +316,7 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 static XImage* read_file(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
 static enum ImageType file_type(char const* file_path);
-static unsigned char* ximage_to_rgb(XImage const* image, Bool rgba);
+static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
@@ -657,7 +657,7 @@ Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
     if (type == IMT_Unknown) {
         return False;
     }
-    unsigned char* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
+    u8* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
     int (*write_im)(char const*, int, int, int, void const*, int) = NULL;
     switch (type) {
         case IMT_Png: write_im = &stbi_write_png; break;
@@ -681,7 +681,7 @@ enum ImageType file_type(char const* file_path) {
         return IMT_Unknown;
     }
     static u32 const HEADER_SIZE = 8;  // read extra symbols for simplicity
-    unsigned char h[HEADER_SIZE];
+    u8 h[HEADER_SIZE];
     enum ImageType result = IMT_Unknown;
 
     FILE* file = fopen(file_path, "r");
@@ -689,7 +689,7 @@ enum ImageType file_type(char const* file_path) {
         return IMT_Unknown;
     }
     // on file read error just fail on header check
-    fread(h, sizeof(unsigned char), HEADER_SIZE, file);
+    fread(h, sizeof(u8), HEADER_SIZE, file);
 
     // jpeg SOI marker and another marker begin
     if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) {
@@ -705,12 +705,12 @@ enum ImageType file_type(char const* file_path) {
     return result;
 }
 
-unsigned char* ximage_to_rgb(XImage const* image, Bool rgba) {
+u8* ximage_to_rgb(XImage const* image, Bool rgba) {
     u32 w = image->width;
     u32 h = image->height;
     usize pixel_size = rgba ? 4 : 3;
     usize data_size = (size_t)w * h * pixel_size;
-    unsigned char* data = (unsigned char*)ecalloc(1, data_size);
+    u8* data = (u8*)ecalloc(1, data_size);
     if (data == NULL) {
         return NULL;
     }
@@ -2363,7 +2363,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         dp,
         ctx->dc.window,
         &(XTextProperty
-        ) {.value = (char unsigned*)title,
+        ) {.value = (unsigned char*)title,
            .nitems = strlen(title),
            .format = 8,
            .encoding = atoms[A_Utf8string]}
@@ -2936,12 +2936,12 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
                 XA_ATOM,
                 32,
                 PropModeReplace,
-                (unsigned char*)avaliable_targets,
+                (unsigned char const*)avaliable_targets,
                 LENGTH(avaliable_targets)
             );
         } else if (request.target == atoms[A_ImagePng]) {
             trace("requested image/png");
-            unsigned char* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
+            u8* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
             i32 png_data_size = NIL;
             stbi_uc* png_imdyn = stbi_write_png_to_mem(
                 rgb_dyn,
