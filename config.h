@@ -79,5 +79,5 @@ struct {
     .background_argb = 0xFFAA0000,
     .default_width = 500,
     .default_height = 800,
-    .max_zoom = 10,
+    .max_zoom = 50,  // at high values visual glitches appear
 };

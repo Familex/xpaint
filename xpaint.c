@@ -1966,35 +1966,32 @@ void update_screen(struct Ctx* ctx) {
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
-            u32 pb_width = dc->cv.width * dc->cv.zoom;
-            u32 pb_height = dc->cv.height * dc->cv.zoom;
-            if (dc->cache.pm == 0 || dc->cache.pm_w != pb_width
-                || dc->cache.pm_h != pb_height) {
+            if (dc->cache.pm == 0 || dc->cache.pm_w != dc->cv.width
+                || dc->cache.pm_h != dc->cv.height) {
                 if (dc->cache.pm != 0) {
                     XFreePixmap(dc->dp, dc->cache.pm);
                 }
                 dc->cache.pm = XCreatePixmap(
                     dc->dp,
                     dc->window,
-                    pb_width,
-                    pb_height,
+                    dc->cv.width,
+                    dc->cv.height,
                     dc->vinfo.depth
                 );
-                dc->cache.pm_w = pb_width;
-                dc->cache.pm_h = pb_height;
+                dc->cache.pm_w = dc->cv.width;
+                dc->cache.pm_h = dc->cv.height;
             }
+            // clang-format off
             XPutImage(
                 dc->dp,
                 dc->cache.pm,
                 dc->screen_gc,
                 dc->cv.im,
-                0,
-                0,
-                0,
-                0,
-                pb_width,
-                pb_height
+                0, 0,
+                0, 0,
+                dc->cv.width, dc->cv.height
             );
+            // clang-format on
 
             Picture src_pict = XRenderCreatePicture(
                 dc->dp,
@@ -2030,7 +2027,7 @@ void update_screen(struct Ctx* ctx) {
                 0, 0,
                 0, 0,
                 dc->cv.scroll.x, dc->cv.scroll.y,
-                pb_width, pb_height
+                dc->cv.width * dc->cv.zoom, dc->cv.height * dc->cv.zoom
             );
             // clang-format on
 
