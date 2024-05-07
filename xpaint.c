@@ -652,19 +652,22 @@ static XImage* read_file_from_memory(
         return NULL;
     }
     // process image data
-    for (i32 i = 0; i < 4 * (width * height - 1); i += 4) {
-        if (!image_data[i] && transp_argb) {
+    for (i32 i = 0; i < 4 * (width * height); i += 4) {
+        if (transp_argb && TRANSP_THRESHOLD > image_data[i + 3]) {
+            // transparent branch
             // fill transparent pixels with transp_argb value
             image_data[i + 0] = (transp_argb & 0x000000FF) >> (0 * 8);
             image_data[i + 1] = (transp_argb & 0x0000FF00) >> (1 * 8);
             image_data[i + 2] = (transp_argb & 0x00FF0000) >> (2 * 8);
             image_data[i + 3] = (transp_argb & 0xFF000000) >> (3 * 8);
         } else {
+            // opaque branch
             // rgb -> bgr
             u32 const red = image_data[i + 2];
             u32 const blue = image_data[i + 0];
             image_data[i + 2] = blue;
             image_data[i + 0] = red;
+            image_data[i + 3] = 0xFF;  // fully opaque
         }
     }
     XImage* result = XCreateImage(
