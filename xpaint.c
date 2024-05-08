@@ -854,110 +854,141 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
     return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
 }
 
-ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
-    assert(cl);
-    ClCPrsResult res = {.t = ClCPrs_Ok};
-    char* cl_bufdyn = str_new("%s", cl);
+static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     // naive split by spaces (0x20) works on utf8
-    char const* cmd = strtok(cl_bufdyn, " ");
-    // FIXME separate to function to able to use 'return'
+    char const* cmd = strtok(cl, " ");
     if (!cmd) {
-        res.t = ClCPrs_ENoArg;
-    } else if (!strcmp(cmd, "echo")) {
-        res.d.ok.t = ClC_Echo;
+        return (ClCPrsResult) {.t = ClCPrs_ENoArg};
+    }
+    if (!strcmp(cmd, "echo")) {
         char const* user_msg = strtok(NULL, "");
-        res.d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""));
-    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
-        res.d.ok.t = ClC_Set;
-        res.d.ok.d.set = (struct ClCDSet) {0};
+        return (ClCPrsResult
+        ) {.t = ClCPrs_Ok,
+           .d.ok.t = ClC_Echo,
+           .d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""))};
+    }
+    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
         char const* prop = strtok(NULL, " ");
         if (!prop) {
-            // can't return there, because we must free resourses
-            res.t = ClCPrs_ENoSubArg;
-            res.d.nosubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set));
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
-            res.d.ok.d.set.t = ClCDS_LineW;
-            char const* args = strtok(NULL, "");
-            res.d.ok.d.set.d.line_w.value =
-                args ? MAX(0, strtol(args, NULL, 0)) : TOOLS.default_line_w;
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
-            res.d.ok.d.set.t = ClCDS_Col;
-            res.d.ok.d.set.d.col.argb =
-                (strtol(strtok(NULL, ""), NULL, 16) & 0xFFFFFF) | 0xFF000000;
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
-            res.d.ok.d.set.t = ClCDS_Font;
-            char const* font = strtok(NULL, " ");
-            if (font) {
-                res.d.ok.d.set.d.font.name_dyn = str_new("%s", font);
-            } else {
-                res.t = ClCPrs_ENoSubArg;
-                res.d.nosubarg.arg_dyn =
-                    str_new(cl_set_prop_from_enum(ClCDS_Font));
-            }
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FInp))) {
-            res.d.ok.d.set.t = ClCDS_FInp;
-            char const* path = strtok(NULL, "");  // user can load NULL
-            if (path) {
-                res.d.ok.d.set.d.finp.path_dyn = str_new("%s", path);
-            }
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FOut))) {
-            res.d.ok.d.set.t = ClCDS_FOut;
-            char const* path = strtok(NULL, "");  // user can load NULL
-            if (path) {
-                res.d.ok.d.set.d.fout.path_dyn = str_new("%s", path);
-            }
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
-            res.d.ok.d.set.t = ClCDS_PngCompression;
-            res.d.ok.d.set.d.png_cpr.compression =
-                (i32)strtol(strtok(NULL, " "), NULL, 0);
-        } else if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
-            res.d.ok.d.set.t = ClCDS_JpgQuality;
-            res.d.ok.d.set.d.jpg_qlt.quality =
-                (i32)strtol(strtok(NULL, ""), NULL, 0);
-        } else {
-            res.t = ClCPrs_EInvSubArg;
-            res.d.invsubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set));
-            res.d.invsubarg.inv_val_dyn = str_new(prop);
+            return (ClCPrsResult
+            ) {.t = ClCPrs_ENoSubArg,
+               .d.nosubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set))};
         }
-    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
-        res.d.ok.t = ClC_Exit;
-    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
-        res.d.ok.t = ClC_Save;
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
+            char const* args = strtok(NULL, "");
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_LineW,
+               .d.ok.d.set.d.line_w.value =
+                   args ? MAX(0, strtol(args, NULL, 0)) : TOOLS.default_line_w};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
+            char const* arg = strtok(NULL, " ");
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_Col,
+               .d.ok.d.set.d.col.argb =
+                   arg ? (strtol(arg, NULL, 16) & 0xFFFFFF) | 0xFF000000 : 0};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
+            char const* font = strtok(NULL, " ");
+            if (!font) {
+                return (ClCPrsResult
+                ) {.t = ClCPrs_ENoSubArg,
+                   .d.nosubarg.arg_dyn =
+                       str_new("%s", cl_set_prop_from_enum(ClCDS_Font))};
+            }
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_Font,
+               .d.ok.d.set.d.font.name_dyn = str_new("%s", font)};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FInp))) {
+            char const* path = strtok(NULL, "");  // user can load NULL
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_FInp,
+               .d.ok.d.set.d.finp.path_dyn = path ? str_new("%s", path) : NULL};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FOut))) {
+            char const* path = strtok(NULL, "");  // user can load NULL
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_FOut,
+               .d.ok.d.set.d.fout.path_dyn = path ? str_new("%s", path) : NULL};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_PngCompression,
+               .d.ok.d.set.d.png_cpr.compression =
+                   (i32)strtol(strtok(NULL, " "), NULL, 0)};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_JpgQuality,
+               .d.ok.d.set.d.jpg_qlt.quality =
+                   (i32)strtol(strtok(NULL, ""), NULL, 0)};
+        }
+        return (ClCPrsResult
+        ) {.t = ClCPrs_EInvSubArg,
+           .d.invsubarg.arg_dyn = str_new("%s", cl_cmd_from_enum(ClC_Set)),
+           .d.invsubarg.inv_val_dyn = str_new("%s", prop)};
+    }
+    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
+        return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
+    }
+    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
         char const* type_str = strtok(NULL, " ");
         if (!type_str) {
-            res.t = ClCPrs_ENoSubArg;
-            res.d.nosubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Save));
-        } else {
-            enum ClCDSv* type = &res.d.ok.d.save.im_type;
-            for (*type = 0; *type < ClCDSv_Last; ++*type) {
-                if (!strcmp(type_str, cl_save_type_from_enum(*type))) {
-                    break;
-                }
-            }
-            if (*type == ClCDSv_Last) {
-                res.t = ClCPrs_EInvSubArg;
-                res.d.invsubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Save));
-                res.d.invsubarg.inv_val_dyn = str_new("%s", type_str);
-            } else {
-                char const* path = strtok(NULL, "");  // include spaces
-                if (path) {
-                    res.d.ok.d.save.path_dyn = str_new("%s", path);
-                }
+            return (ClCPrsResult
+            ) {.t = ClCPrs_ENoSubArg,
+               .d.nosubarg.arg_dyn = str_new("%s", cl_cmd_from_enum(ClC_Save))};
+        }
+        enum ClCDSv type = 0;
+        for (; type < ClCDSv_Last; ++type) {
+            if (!strcmp(type_str, cl_save_type_from_enum(type))) {
+                break;
             }
         }
-    } else if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
-        res.d.ok.t = ClC_Load;
-        char const* path = strtok(NULL, "");  // path with spaces
-        if (path) {
-            res.d.ok.d.load.path_dyn = str_new("%s", path);
+        if (type == ClCDSv_Last) {
+            return (ClCPrsResult
+            ) {.t = ClCPrs_EInvSubArg,
+               .d.invsubarg.arg_dyn = str_new("%s", cl_cmd_from_enum(ClC_Save)),
+               .d.invsubarg.inv_val_dyn = str_new("%s", type_str)};
         }
-    } else {
-        res.t = ClCPrs_EInvArg;
-        res.d.invarg.arg_dyn = str_new("%s", cmd);
+        char const* path = strtok(NULL, "");  // include spaces
+        return (ClCPrsResult
+        ) {.t = ClCPrs_Ok,
+           .d.ok.t = ClC_Save,
+           .d.ok.d.save.im_type = type,
+           .d.ok.d.save.path_dyn = path ? str_new("%s", path) : NULL};
     }
-    str_free(&cl_bufdyn);
+    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
+        char const* path = strtok(NULL, "");  // path with spaces
+        return (ClCPrsResult
+        ) {.t = ClCPrs_Ok,
+           .d.ok.t = ClC_Load,
+           .d.ok.d.load.path_dyn = str_new("%s", path)};
+    }
+    return (ClCPrsResult
+    ) {.t = ClCPrs_EInvArg, .d.invarg.arg_dyn = str_new("%s", cmd)};
+}
 
-    return res;
+ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
+    assert(cl);
+    char* cl_bufdyn = str_new("%s", cl);
+    ClCPrsResult result = cl_cmd_parse_helper(ctx, cl_bufdyn);
+    str_free(&cl_bufdyn);
+    return result;
 }
 
 void cl_cmd_parse_res_free(ClCPrsResult* res) {
