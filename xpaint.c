@@ -337,8 +337,8 @@ static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
-static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, u32 transp_argb);
-static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, u32 transp_argb);
+static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, u32 bg_argb);
+static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, u32 bg_argb);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -637,11 +637,19 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
+static u32 argb_to_abgr(u32 argb) {
+    u32 const a = argb & 0xFF000000;
+    u8 const red = (argb & 0x00FF0000) >> (2 * 8);
+    u32 const g = argb & 0x0000FF00;
+    u8 const blue = argb & 0x000000FF;
+    return a | blue << (2 * 8) | g | red;
+}
+
 static XImage* read_file_from_memory(
     struct DrawCtx const* dc,
     u8 const* data,
     u32 len,
-    u32 transp_argb
+    u32 bg_argb
 ) {
     i32 width = NIL;
     i32 height = NIL;
@@ -652,23 +660,17 @@ static XImage* read_file_from_memory(
         return NULL;
     }
     // process image data
-    for (i32 i = 0; i < 4 * (width * height); i += 4) {
-        if (transp_argb && TRANSP_THRESHOLD > image_data[i + 3]) {
-            // transparent branch
-            // fill transparent pixels with transp_argb value
-            image_data[i + 0] = (transp_argb & 0x000000FF) >> (0 * 8);
-            image_data[i + 1] = (transp_argb & 0x0000FF00) >> (1 * 8);
-            image_data[i + 2] = (transp_argb & 0x00FF0000) >> (2 * 8);
-            image_data[i + 3] = (transp_argb & 0xFF000000) >> (3 * 8);
-        } else {
-            // opaque branch
-            // rgb -> bgr
-            u32 const red = image_data[i + 2];
-            u32 const blue = image_data[i + 0];
-            image_data[i + 2] = blue;
-            image_data[i + 0] = red;
-            image_data[i + 3] = 0xFF;  // fully opaque
+    u32* image = (u32*)image_data;
+    for (i32 i = 0; i < (width * height); ++i) {
+        if (bg_argb) {
+            // FIXME blend colors
+            if (TRANSP_THRESHOLD > (image[i] & 0xFF000000)) {
+                image[i] = bg_argb;
+            }
+            image[i] |= 0xFF000000;  // fully opaque
         }
+        // https://stackoverflow.com/a/17030897
+        image[i] = argb_to_abgr(image[i]);
     }
     XImage* result = XCreateImage(
         dc->dp,
@@ -689,13 +691,13 @@ static XImage* read_file_from_memory(
 XImage* read_file_from_path(
     struct DrawCtx const* dc,
     char const* file_name,
-    u32 transp_argb
+    u32 bg_argb
 ) {
     int fd = open(file_name, O_RDONLY);
     off_t len = lseek(fd, 0, SEEK_END);
     void* data = mmap(0, len, PROT_READ, MAP_PRIVATE, fd, 0);
 
-    XImage* result = read_file_from_memory(dc, data, len, transp_argb);
+    XImage* result = read_file_from_memory(dc, data, len, bg_argb);
 
     close(fd);
 
