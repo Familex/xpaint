@@ -69,7 +69,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define NIL              (-1)
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
-#define CURR_COL(p_tc)     ((p_tc)->sdata.col_argbarr[(p_tc)->sdata.curr_col])
+#define CURR_COL(p_tc)     ((p_tc)->sdata.colarr[(p_tc)->sdata.curr_col])
 // XXX workaround
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
@@ -82,6 +82,8 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
     ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
      && (p_tc)->d.sel.drag_from.y != NIL)
 #define UNREACHABLE() __builtin_unreachable()
+
+typedef u32 argb;
 
 enum {
     A_Clipboard,
@@ -131,7 +133,7 @@ struct ClCommand {
                     u32 value;
                 } line_w;
                 struct ClCDSDCol {
-                    u32 argb;
+                    argb v;
                 } col;
                 struct ClCDSDFont {
                     char* name_dyn;
@@ -242,7 +244,7 @@ struct Ctx {
             Tool_Picker,
         } t;
         struct ToolSharedData {
-            u32* col_argbarr;
+            argb* colarr;
             u32 curr_col;
             u32 line_w;
         } sdata;
@@ -337,8 +339,8 @@ static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
-static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, u32 bg_argb);
-static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, u32 bg_argb);
+static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
+static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -386,14 +388,14 @@ static Bool history_push(struct History** hist, struct Ctx* ctx);
 
 static void historyarr_clear(Display* dp, struct History** hist);
 
-static void canvas_fill(struct DrawCtx* dc, u32 color);
-static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, void(*draw)(struct DrawCtx*, Pair, u32, u32), u32 color, u32 line_w);
-static void canvas_point(struct DrawCtx* dc, Pair c, u32 d, u32 col);
-static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, u32 col);
-static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
+static void canvas_fill(struct DrawCtx* dc, argb col);
+static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, void(*draw)(struct DrawCtx*, Pair, u32, argb), argb col, u32 line_w);
+static void canvas_point(struct DrawCtx* dc, Pair c, u32 d, argb col);
+static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col);
+static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, argb col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
-static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
-static Bool canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb);
+static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col);
+static Bool canvas_load(struct DrawCtx* dc, char const* file_name, argb transp);
 static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height);
@@ -603,7 +605,7 @@ void file_ctx_free(struct FileCtx* file_ctx) {
 }
 
 void tool_ctx_free(struct ToolCtx* tc) {
-    arrfree(tc->sdata.col_argbarr);
+    arrfree(tc->sdata.colarr);
     str_free(&tc->tool_name_dyn);
 }
 
@@ -638,11 +640,11 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-static u32 argb_to_abgr(u32 argb) {
-    u32 const a = argb & 0xFF000000;
-    u8 const red = (argb & 0x00FF0000) >> (2 * 8);
-    u32 const g = argb & 0x0000FF00;
-    u8 const blue = argb & 0x000000FF;
+static u32 argb_to_abgr(argb v) {
+    u32 const a = v & 0xFF000000;
+    u8 const red = (v & 0x00FF0000) >> (2 * 8);
+    u32 const g = v & 0x0000FF00;
+    u8 const blue = v & 0x000000FF;
     return a | blue << (2 * 8) | g | red;
 }
 
@@ -650,7 +652,7 @@ static XImage* read_file_from_memory(
     struct DrawCtx const* dc,
     u8 const* data,
     u32 len,
-    u32 bg_argb
+    argb bg
 ) {
     i32 width = NIL;
     i32 height = NIL;
@@ -661,12 +663,12 @@ static XImage* read_file_from_memory(
         return NULL;
     }
     // process image data
-    u32* image = (u32*)image_data;
+    argb* image = (argb*)image_data;
     for (i32 i = 0; i < (width * height); ++i) {
-        if (bg_argb) {
+        if (bg) {
             // FIXME blend colors
             if (TRANSP_THRESHOLD > (image[i] & 0xFF000000)) {
-                image[i] = bg_argb;
+                image[i] = bg;
             }
             image[i] |= 0xFF000000;  // fully opaque
         }
@@ -689,16 +691,13 @@ static XImage* read_file_from_memory(
     return result;
 }
 
-XImage* read_file_from_path(
-    struct DrawCtx const* dc,
-    char const* file_name,
-    u32 bg_argb
-) {
+XImage*
+read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg) {
     int fd = open(file_name, O_RDONLY);
     off_t len = lseek(fd, 0, SEEK_END);
     void* data = mmap(0, len, PROT_READ, MAP_PRIVATE, fd, 0);
 
-    XImage* result = read_file_from_memory(dc, data, len, bg_argb);
+    XImage* result = read_file_from_memory(dc, data, len, bg);
 
     close(fd);
 
@@ -794,7 +793,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     CURR_TC(ctx).sdata.line_w = cl_cmd->d.set.d.line_w.value;
                 } break;
                 case ClCDS_Col: {
-                    CURR_COL(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.argb;
+                    CURR_COL(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.v;
                 } break;
                 case ClCDS_Font: {
                     char const* font = cl_cmd->d.set.d.font.name_dyn;
@@ -892,7 +891,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
                .d.ok.d.set.t = ClCDS_Col,
-               .d.ok.d.set.d.col.argb =
+               .d.ok.d.set.d.col.v =
                    arg ? (strtol(arg, NULL, 16) & 0xFFFFFF) | 0xFF000000 : 0};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
@@ -1438,7 +1437,7 @@ void tool_pencil_on_move(
     assert(tc->t == Tool_Pencil);
 }
 
-static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
+static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
     assert(im);
     if (x < 0 || y < 0 || x >= im->width || y >= im->height) {
         return;
@@ -1447,7 +1446,7 @@ static void flood_fill(XImage* im, u64 targ_col, i32 x, i32 y) {
     static i32 const d_rows[] = {1, 0, 0, -1};
     static i32 const d_cols[] = {0, 1, -1, 0};
 
-    u64 const area_col = XGetPixel(im, x, y);
+    argb const area_col = XGetPixel(im, x, y);
     if (area_col == targ_col) {
         return;
     }
@@ -1590,7 +1589,7 @@ i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     return (i32)(angle / segment_deg);
 }
 
-static Bool ximage_put_checked(XImage* im, u32 x, u32 y, u32 col) {
+static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
     if (x >= im->width || y >= im->height) {
         return False;
     }
@@ -1599,12 +1598,12 @@ static Bool ximage_put_checked(XImage* im, u32 x, u32 y, u32 col) {
     return True;
 }
 
-void canvas_fill(struct DrawCtx* dc, u32 color) {
+void canvas_fill(struct DrawCtx* dc, argb col) {
     assert(dc && dc->cv.im);
 
     for (i32 i = 0; i < dc->cv.im->width; ++i) {
         for (i32 j = 0; j < dc->cv.im->height; ++j) {
-            XPutPixel(dc->cv.im, i, j, color);
+            XPutPixel(dc->cv.im, i, j, col);
         }
     }
 }
@@ -1613,8 +1612,8 @@ void canvas_line(
     struct DrawCtx* dc,
     Pair from,
     Pair to,
-    void (*draw)(struct DrawCtx*, Pair, u32, u32),
-    u32 color,
+    void (*draw)(struct DrawCtx*, Pair, u32, argb),
+    argb col,
     u32 line_w
 ) {
     assert(dc->cv.im);
@@ -1627,7 +1626,7 @@ void canvas_line(
 
     while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
            && from.y < dc->cv.im->height) {
-        draw(dc, from, line_w, color);
+        draw(dc, from, line_w, col);
         if (from.x == to.x && from.y == to.y) {
             break;
         }
@@ -1649,7 +1648,7 @@ void canvas_line(
     }
 }
 
-void canvas_point(struct DrawCtx* dc, Pair c, u32 d, u32 col) {
+void canvas_point(struct DrawCtx* dc, Pair c, u32 d, argb col) {
     if (d == 1) {
         ximage_put_checked(dc->cv.im, c.x, c.y, col);
     } else {
@@ -1657,7 +1656,7 @@ void canvas_point(struct DrawCtx* dc, Pair c, u32 d, u32 col) {
     }
 }
 
-void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, u32 col) {
+void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col) {
     u32 const r = side / 2;
     for (u32 i = 0; i < side; ++i) {
         for (u32 j = 0; j < side; ++j) {
@@ -1667,7 +1666,7 @@ void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, u32 col) {
 }
 
 static void
-canvas_circle_helper(XImage* im, i32 x, i32 y, i32 dx, i32 dy, u32 col) {
+canvas_circle_helper(XImage* im, i32 x, i32 y, i32 dx, i32 dy, argb col) {
     ximage_put_checked(im, x + dx, y + dy, col);
     ximage_put_checked(im, x - dx, y + dy, col);
     ximage_put_checked(im, x + dx, y - dy, col);
@@ -1678,7 +1677,13 @@ canvas_circle_helper(XImage* im, i32 x, i32 y, i32 dx, i32 dy, u32 col) {
     ximage_put_checked(im, x - dy, y - dx, col);
 }
 
-void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill) {
+void canvas_circle(
+    struct DrawCtx* dc,
+    Pair center,
+    u32 r,
+    argb col,
+    Bool fill
+) {
     if (fill) {
         u32 const d = r * 2;
         u32 const l = center.x - r;
@@ -1748,16 +1753,16 @@ void canvas_copy_region(
     free(region_dyn);
 }
 
-void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color) {
+void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col) {
     for (u32 x = c.x; x < (c.x + dims.x); ++x) {
         for (u32 y = c.y; y < (c.y + dims.y); ++y) {
-            ximage_put_checked(dc->cv.im, x, y, color);
+            ximage_put_checked(dc->cv.im, x, y, col);
         }
     }
 }
 
 static Bool
-canvas_load(struct DrawCtx* dc, char const* file_name, u32 transp_argb) {
+canvas_load(struct DrawCtx* dc, char const* file_name, argb transp) {
     XImage* im = read_file_from_path(dc, file_name, 0);
     if (!im) {
         return False;
@@ -1960,7 +1965,7 @@ draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
 }
 
 // XXX always opaque
-static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, u32 col) {
+static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col) {
     XSetForeground(dc->dp, dc->screen_gc, col | 0xFF000000);
     return XFillRectangle(
         dc->dp,
@@ -1977,7 +1982,7 @@ static int draw_rect(
     struct DrawCtx* dc,
     Pair p,
     Pair dim,
-    u32 col,
+    argb col,
     u32 line_w,
     i32 line_st,
     i32 cap_st,
@@ -2240,7 +2245,7 @@ void update_statusline(struct Ctx* ctx) {
                     col_count,
                     "%d/%td",
                     tc->sdata.curr_col + 1,
-                    arrlen(tc->sdata.col_argbarr)
+                    arrlen(tc->sdata.colarr)
                 );
                 draw_string(dc, col_count, col_count_c, SchmNorm, False);
             }
@@ -2426,13 +2431,13 @@ void setup(Display* dp, struct Ctx* ctx) {
     /* init arrays */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
             struct ToolCtx tc = {
-                .sdata.col_argbarr = NULL,
+                .sdata.colarr = NULL,
                 .sdata.curr_col = 0,
                 .sdata.line_w = TOOLS.default_line_w,
             };
             arrpush(ctx->tcarr, tc);
-            arrpush(ctx->tcarr[i].sdata.col_argbarr, 0xFF000000);
-            arrpush(ctx->tcarr[i].sdata.col_argbarr, 0xFFFFFFFF);
+            arrpush(ctx->tcarr[i].sdata.colarr, 0xFF000000);
+            arrpush(ctx->tcarr[i].sdata.colarr, 0xFFFFFFFF);
         }
     }
 
@@ -2847,10 +2852,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
         case InputT_Color: {
             HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
-                u32 const len = arrlen(CURR_TC(ctx).sdata.col_argbarr);
+                u32 const len = arrlen(CURR_TC(ctx).sdata.colarr);
                 if (len != MAX_COLORS) {
                     CURR_TC(ctx).sdata.curr_col = len;
-                    arrpush(CURR_TC(ctx).sdata.col_argbarr, 0xFF000000);
+                    arrpush(CURR_TC(ctx).sdata.colarr, 0xFF000000);
                     update_statusline(ctx);
                 }
             }
@@ -2975,7 +2980,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         }
         if ((key_sym == XK_Up || key_sym == XK_Down)
             && !(e.state & ControlMask)) {
-            u32 col_num = arrlen(CURR_TC(ctx).sdata.col_argbarr);
+            u32 col_num = arrlen(CURR_TC(ctx).sdata.colarr);
             assert(col_num != 0);
             CURR_TC(ctx).sdata.curr_col =
                 (CURR_TC(ctx).sdata.curr_col + (key_sym == XK_Up ? 1 : -1))
