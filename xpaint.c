@@ -648,6 +648,26 @@ static u32 argb_to_abgr(argb v) {
     return a | blue << (2 * 8) | g | red;
 }
 
+static argb blend_background(argb fg, argb bg) {
+    u32 const fga = (fg >> 24) & 0xFF;
+    u32 const fgr = (fg >> 16) & 0xFF;
+    u32 const fgg = (fg >> 8) & 0xFF;
+    u32 const fgb = fg & 0xFF;
+    u32 const bgr = (bg >> 16) & 0xFF;
+    u32 const bgg = (bg >> 8) & 0xFF;
+    u32 const bgb = bg & 0xFF;
+
+    // https://stackoverflow.com/a/12016968
+    // result = foreground * alpha + background * (1.0 - alpha)
+    u32 const alpha = fga + 1;
+    u32 const inv_alpha = 256 - fga;
+    u32 const red = (alpha * fgr + inv_alpha * bgr) >> 8;
+    u32 const green = (alpha * fgg + inv_alpha * bgg) >> 8;
+    u32 const blue = (alpha * fgb + inv_alpha * bgb) >> 8;
+
+    return 0xFF << 24 | red << 16 | green << 8 | blue;
+}
+
 static XImage* read_file_from_memory(
     struct DrawCtx const* dc,
     u8 const* data,
@@ -666,11 +686,7 @@ static XImage* read_file_from_memory(
     argb* image = (argb*)image_data;
     for (i32 i = 0; i < (width * height); ++i) {
         if (bg) {
-            // FIXME blend colors
-            if (TRANSP_THRESHOLD > (image[i] & 0xFF000000)) {
-                image[i] = bg;
-            }
-            image[i] |= 0xFF000000;  // fully opaque
+            image[i] = blend_background(image[i], bg);
         }
         // https://stackoverflow.com/a/17030897
         image[i] = argb_to_abgr(image[i]);

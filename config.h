@@ -12,7 +12,6 @@ char const FONT_NAME[] = "monospace:size=10";
 u32 const DRAG_PERIOD_US = 10000;
 i32 const PNG_DEFAULT_COMPRESSION = 8;
 i32 const JPG_DEFAULT_QUALITY = 80;
-u8 const TRANSP_THRESHOLD = 0x7F;
 
 XRenderColor const SCHEMES[SchmLast][2] = {
     // fg, bg (rgba premultiplied)
