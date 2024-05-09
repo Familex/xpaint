@@ -387,8 +387,9 @@ static Bool history_push(struct History** hist, struct Ctx* ctx);
 static void historyarr_clear(Display* dp, struct History** hist);
 
 static void canvas_fill(struct DrawCtx* dc, u32 color);
-static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, u32 color, u32 line_w);
-static void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w);
+static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, void(*draw)(struct DrawCtx*, Pair, u32, u32), u32 color, u32 line_w);
+static void canvas_point(struct DrawCtx* dc, Pair c, u32 d, u32 col);
+static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, u32 col);
 static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, u32 col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, u32 color);
@@ -1389,11 +1390,12 @@ void tool_pencil_on_release(
             dc,
             point_from_scr_to_cv(dc, inp->last_processed_pointer),
             pointer,
+            &canvas_fill_square,
             CURR_COL(tc),
             tc->sdata.line_w
         );
     } else {
-        canvas_point(dc, pointer, CURR_COL(tc), tc->sdata.line_w);
+        canvas_fill_square(dc, pointer, tc->sdata.line_w, CURR_COL(tc));
     }
     inp->last_processed_pointer = (Pair) {event->x, event->y};
 }
@@ -1415,7 +1417,14 @@ void tool_pencil_on_drag(
     Pair prev_pointer = (inp->last_processed_pointer.x != NIL)
         ? point_from_scr_to_cv(dc, inp->last_processed_pointer)
         : pointer;
-    canvas_line(dc, prev_pointer, pointer, CURR_COL(tc), tc->sdata.line_w);
+    canvas_line(
+        dc,
+        prev_pointer,
+        pointer,
+        &canvas_fill_square,
+        CURR_COL(tc),
+        tc->sdata.line_w
+    );
     inp->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
@@ -1604,6 +1613,7 @@ void canvas_line(
     struct DrawCtx* dc,
     Pair from,
     Pair to,
+    void (*draw)(struct DrawCtx*, Pair, u32, u32),
     u32 color,
     u32 line_w
 ) {
@@ -1617,7 +1627,7 @@ void canvas_line(
 
     while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
            && from.y < dc->cv.im->height) {
-        canvas_point(dc, from, color, line_w);
+        draw(dc, from, line_w, color);
         if (from.x == to.x && from.y == to.y) {
             break;
         }
@@ -1639,11 +1649,20 @@ void canvas_line(
     }
 }
 
-void canvas_point(struct DrawCtx* dc, Pair c, u32 col, u32 line_w) {
-    if (line_w == 1) {
+void canvas_point(struct DrawCtx* dc, Pair c, u32 d, u32 col) {
+    if (d == 1) {
         ximage_put_checked(dc->cv.im, c.x, c.y, col);
     } else {
-        canvas_circle(dc, c, line_w / 2, col, True);
+        canvas_circle(dc, c, d / 2, col, True);
+    }
+}
+
+void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, u32 col) {
+    u32 const r = side / 2;
+    for (u32 i = 0; i < side; ++i) {
+        for (u32 j = 0; j < side; ++j) {
+            ximage_put_checked(dc->cv.im, c.x - r + i, c.y - r + j, col);
+        }
     }
 }
 
