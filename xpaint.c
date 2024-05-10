@@ -407,7 +407,6 @@ static void canvas_fill(struct DrawCtx* dc, argb col);
 static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, draw_fn draw, argb col, u32 line_w);
 static void canvas_fill_circle(struct DrawCtx* dc, Pair c, u32 d, argb col);
 static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col);
-static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, argb col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col);
 static Bool canvas_load(struct DrawCtx* dc, char const* file_name, argb transp);
@@ -675,8 +674,7 @@ static u32 argb_to_abgr(argb v) {
     return a | blue << (2 * 8) | g | red;
 }
 
-static argb blend_background(argb fg, argb bg) {
-    u32 const fga = (fg >> 24) & 0xFF;
+static argb blend_background(argb fg, argb bg, u32 a) {
     u32 const fgr = (fg >> 16) & 0xFF;
     u32 const fgg = (fg >> 8) & 0xFF;
     u32 const fgb = fg & 0xFF;
@@ -686,8 +684,8 @@ static argb blend_background(argb fg, argb bg) {
 
     // https://stackoverflow.com/a/12016968
     // result = foreground * alpha + background * (1.0 - alpha)
-    u32 const alpha = fga + 1;
-    u32 const inv_alpha = 256 - fga;
+    u32 const alpha = a + 1;
+    u32 const inv_alpha = 256 - a;
     u32 const red = (alpha * fgr + inv_alpha * bgr) >> 8;
     u32 const green = (alpha * fgg + inv_alpha * bgg) >> 8;
     u32 const blue = (alpha * fgb + inv_alpha * bgb) >> 8;
@@ -713,7 +711,7 @@ static XImage* read_file_from_memory(
     argb* image = (argb*)image_data;
     for (i32 i = 0; i < (width * height); ++i) {
         if (bg) {
-            image[i] = blend_background(image[i], bg);
+            image[i] = blend_background(image[i], bg, (image[i] >> 24) & 0xFF);
         }
         // https://stackoverflow.com/a/17030897
         image[i] = argb_to_abgr(image[i]);
@@ -1690,11 +1688,33 @@ void canvas_line(
     }
 }
 
+static double circle_ease(double v) {
+    return (v == 1.0) ? v : 1 - pow(2, -10 * v);
+}
+
 void canvas_fill_circle(struct DrawCtx* dc, Pair c, u32 d, argb col) {
     if (d == 1) {
         ximage_put_checked(dc->cv.im, c.x, c.y, col);
-    } else {
-        canvas_circle(dc, c, d / 2, col, True);
+        return;
+    }
+    double const r = d / 2.0;
+    double const r_sq = r * r;
+    u32 const l = c.x - (u32)r;
+    u32 const t = c.y - (u32)r;
+    for (i32 dx = 0; dx < d; ++dx) {
+        for (i32 dy = 0; dy < d; ++dy) {
+            double const dr = (dx - r) * (dx - r) + (dy - r) * (dy - r);
+            u32 const x = l + dx;
+            u32 const y = t + dy;
+            if (!BETWEEN(x, 0, dc->cv.width - 1)
+                || !BETWEEN(y, 0, dc->cv.height - 1) || dr > r_sq) {
+                continue;
+            }
+            argb const bg = XGetPixel(dc->cv.im, x, y);
+            u32 const a = (u32)((1.0 - circle_ease(dr / r_sq)) * 0xFF);
+            argb const blended = blend_background(col, bg, a);
+            XPutPixel(dc->cv.im, x, y, blended);
+        }
     }
 }
 
@@ -1703,55 +1723,6 @@ void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col) {
     for (u32 i = 0; i < side; ++i) {
         for (u32 j = 0; j < side; ++j) {
             ximage_put_checked(dc->cv.im, c.x - r + i, c.y - r + j, col);
-        }
-    }
-}
-
-static void
-canvas_circle_helper(XImage* im, i32 x, i32 y, i32 dx, i32 dy, argb col) {
-    ximage_put_checked(im, x + dx, y + dy, col);
-    ximage_put_checked(im, x - dx, y + dy, col);
-    ximage_put_checked(im, x + dx, y - dy, col);
-    ximage_put_checked(im, x - dx, y - dy, col);
-    ximage_put_checked(im, x + dy, y + dx, col);
-    ximage_put_checked(im, x - dy, y + dx, col);
-    ximage_put_checked(im, x + dy, y - dx, col);
-    ximage_put_checked(im, x - dy, y - dx, col);
-}
-
-void canvas_circle(
-    struct DrawCtx* dc,
-    Pair center,
-    u32 r,
-    argb col,
-    Bool fill
-) {
-    if (fill) {
-        u32 const d = r * 2;
-        u32 const l = center.x - r;
-        u32 const t = center.y - r;
-        for (i32 x = 0; x < d; ++x) {
-            for (i32 y = 0; y < d; ++y) {
-                if ((x - r) * (x - r) + (y - r) * (y - r) <= r * r) {
-                    ximage_put_checked(dc->cv.im, l + x, t + y, col);
-                }
-            }
-        }
-    } else {
-        // Bresenham's alg
-        i32 x = 0;
-        i32 y = (i32)r;
-        u32 d = 3 - 2 * r;
-        canvas_circle_helper(dc->cv.im, center.x, center.y, x, y, col);
-        while (y >= x) {
-            ++x;
-            if (d > 0) {
-                --y;
-                d += 4 * (x - y) + 10;
-            } else {
-                d += 4 * x + 6;
-            }
-            canvas_circle_helper(dc->cv.im, center.x, center.y, x, y, col);
         }
     }
 }
