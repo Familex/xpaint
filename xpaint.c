@@ -2376,18 +2376,18 @@ void free_sel_circ(struct SelectionCircle* sel_circ) {
 }
 
 void run(struct Ctx* ctx) {
-    static Bool (*handlers[])(struct Ctx*, XEvent*) = {
+    static Bool (*const handlers[LASTEvent])(struct Ctx*, XEvent*) = {
+        [KeyPress] = &key_press_hdlr,
         [ButtonPress] = &button_press_hdlr,
         [ButtonRelease] = &button_release_hdlr,
-        [DestroyNotify] = &destroy_notify_hdlr,
-        [Expose] = &expose_hdlr,
-        [KeyPress] = &key_press_hdlr,
-        [MappingNotify] = &mapping_notify_hdlr,
         [MotionNotify] = &motion_notify_hdlr,
+        [Expose] = &expose_hdlr,
+        [DestroyNotify] = &destroy_notify_hdlr,
         [ConfigureNotify] = &configure_notify_hdlr,
         [SelectionRequest] = &selection_request_hdlr,
         [SelectionNotify] = &selection_notify_hdlr,
         [ClientMessage] = &client_message_hdlr,
+        [MappingNotify] = &mapping_notify_hdlr,
     };
 
     Bool running = True;
