@@ -37,7 +37,7 @@ run: xpaint-d ## run application. ARGS may be used
 	./xpaint-d -v $(ARGS)
 
 check: ## check code with clang-tidy
-	$(CLANGTIDY) -p . $(HEADER) $(SRC) -- $(INCS)
+	$(CLANGTIDY) $(SRC)
 
 dev: clean ## generate dev files
 	bear -- make xpaint-d
