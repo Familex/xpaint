@@ -43,6 +43,7 @@ INCBIN(u8, pic_tool_fill, "res/tool-fill.png");
 INCBIN(u8, pic_tool_pencil, "res/tool-pencil.png");
 INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
 INCBIN(u8, pic_tool_select, "res/tool-select.png");
+INCBIN(u8, pic_tool_brush, "res/tool-brush.png");
 INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
@@ -81,6 +82,8 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define SELECTION_DRAGGING(p_tc) \
     ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
      && (p_tc)->d.sel.drag_from.y != NIL)
+#define ASSERT_DRAWER(p_tc) \
+    (assert(tc->t == Tool_Pencil || tc->t == Tool_Brush))
 #define UNREACHABLE() __builtin_unreachable()
 
 typedef u32 argb;
@@ -98,7 +101,13 @@ enum Icon {
     I_Pencil,
     I_Fill,
     I_Picker,
+    I_Brush,
     I_Last,
+};
+
+struct IconData {
+    u8 const* data;
+    usize len;
 };
 
 enum ImageType {
@@ -169,44 +178,48 @@ struct ClCommand {
     } d;
 };
 
-struct Ctx {
-    struct DrawCtx {
-        Display* dp;
-        XVisualInfo vinfo;
-        XIM xim;
-        XIC xic;
-        XRenderPictFormat* xrnd_pic_format;
-        GC gc;
-        GC screen_gc;
-        Window window;
+struct DrawCtx {
+    Display* dp;
+    XVisualInfo vinfo;
+    XIM xim;
+    XIC xic;
+    XRenderPictFormat* xrnd_pic_format;
+    GC gc;
+    GC screen_gc;
+    Window window;
+    u32 width;
+    u32 height;
+    XdbeBackBuffer back_buffer;  // double buffering
+    struct Canvas {
+        XImage* im;
+        enum ImageType type;
         u32 width;
         u32 height;
-        XdbeBackBuffer back_buffer;  // double buffering
-        struct Canvas {
-            XImage* im;
-            enum ImageType type;
-            u32 width;
-            u32 height;
-            u32 zoom;  // 1 == no zoom
-            Pair scroll;
-        } cv;
-        struct Fnt {
-            XftFont* xfont;
-            u32 h;
-        } fnt;
-        struct Scheme {
-            XftColor fg;
-            XftColor bg;
-        }* schemes_dyn;  // must be len of SchmLast
-        Colormap colmap;
-        struct Cache {
-            u32 pm_w;  // to validate pm
-            u32 pm_h;
-            Pixmap pm;  // pixel buffer to update screen
-        } cache;
-        i32 png_compression_level;  // FIXME find better place
-        i32 jpg_quality_level;  // FIXME find better place
-    } dc;
+        u32 zoom;  // 1 == no zoom
+        Pair scroll;
+    } cv;
+    struct Fnt {
+        XftFont* xfont;
+        u32 h;
+    } fnt;
+    struct Scheme {
+        XftColor fg;
+        XftColor bg;
+    }* schemes_dyn;  // must be len of SchmLast
+    Colormap colmap;
+    struct Cache {
+        u32 pm_w;  // to validate pm
+        u32 pm_h;
+        Pixmap pm;  // pixel buffer to update screen
+    } cache;
+    i32 png_compression_level;  // FIXME find better place
+    i32 jpg_quality_level;  // FIXME find better place
+};
+
+typedef void (*draw_fn)(struct DrawCtx*, Pair, u32, argb);
+
+struct Ctx {
+    struct DrawCtx dc;
     struct Input {
         Pair prev_c;
         Pair last_processed_pointer;
@@ -242,6 +255,7 @@ struct Ctx {
             Tool_Pencil,
             Tool_Fill,
             Tool_Picker,
+            Tool_Brush,
         } t;
         struct ToolSharedData {
             argb* colarr;
@@ -257,9 +271,10 @@ struct Ctx {
                 // NIL if selection not dragging
                 Pair drag_from, drag_to;
             } sel;
-            struct PencilData {
-                u32 line_r;
-            } pencil;
+            // Tool_Pencil | Tool_Brush
+            struct DrawerData {
+                draw_fn fn;
+            } drawer;
         } d;
     }* tcarr;
     u32 curr_tc;
@@ -326,6 +341,7 @@ static char* str_new(char const* fmt, ...);
 static char* str_new_va(char const* fmt, va_list args);
 static void str_free(char** str_dyn);
 static usize first_dismatch(char const* restrict s1, char const* restrict s2);
+static struct IconData get_icon_data(enum Icon icon);
 
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
@@ -376,10 +392,9 @@ static void input_state_set(struct Input* input, enum InputTag is);
 static void tool_selection_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
 static void tool_selection_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
 static void tool_selection_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
-static void tool_pencil_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
-static void tool_pencil_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
-static void tool_pencil_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
-static void tool_pencil_on_move(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
+static void tool_drawer_on_press(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonPressedEvent const* event);
+static void tool_drawer_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
+static void tool_drawer_on_drag(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XMotionEvent const* event);
 static void tool_fill_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
 static void tool_picker_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
 
@@ -389,8 +404,8 @@ static Bool history_push(struct History** hist, struct Ctx* ctx);
 static void historyarr_clear(Display* dp, struct History** hist);
 
 static void canvas_fill(struct DrawCtx* dc, argb col);
-static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, void(*draw)(struct DrawCtx*, Pair, u32, argb), argb col, u32 line_w);
-static void canvas_point(struct DrawCtx* dc, Pair c, u32 d, argb col);
+static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, draw_fn draw, argb col, u32 line_w);
+static void canvas_fill_circle(struct DrawCtx* dc, Pair c, u32 d, argb col);
 static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col);
 static void canvas_circle(struct DrawCtx* dc, Pair center, u32 r, argb col, Bool fill);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
@@ -574,6 +589,18 @@ usize first_dismatch(char const* restrict s1, char const* restrict s2) {
     usize offset = 0;
     for (; s1[offset] && s1[offset] == s2[offset]; ++offset) {};
     return offset;
+}
+
+struct IconData get_icon_data(enum Icon icon) {
+    typedef struct IconData D;
+    switch (icon) {
+        case I_Select: return (D) {pic_tool_select_data, RES_SZ_TOOL_SELECT};
+        case I_Pencil: return (D) {pic_tool_pencil_data, RES_SZ_TOOL_PENCIL};
+        case I_Fill: return (D) {pic_tool_fill_data, RES_SZ_TOOL_FILL};
+        case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
+        case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
+        default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
+    }
 }
 
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
@@ -1218,15 +1245,19 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
                 .drag_to = {NIL, NIL},
             };
             break;
+        case Tool_Brush:
+            new_tc.on_press = &tool_drawer_on_press;
+            new_tc.on_release = &tool_drawer_on_release;
+            new_tc.on_drag = &tool_drawer_on_drag;
+            new_tc.d.drawer.fn = &canvas_fill_circle;
+            new_tc.tool_name_dyn = str_new("brush");
+            break;
         case Tool_Pencil:
-            new_tc.on_press = &tool_pencil_on_press;
-            new_tc.on_release = &tool_pencil_on_release;
-            new_tc.on_drag = &tool_pencil_on_drag;
-            new_tc.on_move = &tool_pencil_on_move;
+            new_tc.on_press = &tool_drawer_on_press;
+            new_tc.on_release = &tool_drawer_on_release;
+            new_tc.on_drag = &tool_drawer_on_drag;
+            new_tc.d.drawer.fn = &canvas_fill_square;
             new_tc.tool_name_dyn = str_new("pencil");
-            new_tc.d.pencil = (struct PencilData) {
-                .line_r = 5,
-            };
             break;
         case Tool_Fill:
             new_tc.on_release = &tool_fill_on_release;
@@ -1255,6 +1286,10 @@ void tool_ctx_set_fill(struct ToolCtx* tc) {
 
 void tool_ctx_set_picker(struct ToolCtx* tc) {
     set_current_tool(tc, Tool_Picker);
+}
+
+void tool_ctx_set_brush(struct ToolCtx* tc) {
+    set_current_tool(tc, Tool_Brush);
 }
 
 void input_state_set(struct Input* input, enum InputTag const is) {
@@ -1368,13 +1403,13 @@ void tool_selection_on_drag(
     }
 }
 
-void tool_pencil_on_press(
+void tool_drawer_on_press(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
     struct Input* inp,
     XButtonPressedEvent const* event
 ) {
-    assert(tc->t == Tool_Pencil);
+    ASSERT_DRAWER(tc);
 
     if (event->button != XLeftMouseBtn) {
         return;
@@ -1387,13 +1422,13 @@ void tool_pencil_on_press(
     }
 }
 
-void tool_pencil_on_release(
+void tool_drawer_on_release(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
     struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
-    assert(tc->t == Tool_Pencil);
+    ASSERT_DRAWER(tc);
 
     if (event->button != XLeftMouseBtn || inp->is_dragging) {
         return;
@@ -1405,23 +1440,23 @@ void tool_pencil_on_release(
             dc,
             point_from_scr_to_cv(dc, inp->last_processed_pointer),
             pointer,
-            &canvas_fill_square,
+            tc->d.drawer.fn,
             CURR_COL(tc),
             tc->sdata.line_w
         );
     } else {
-        canvas_fill_square(dc, pointer, tc->sdata.line_w, CURR_COL(tc));
+        tc->d.drawer.fn(dc, pointer, tc->sdata.line_w, CURR_COL(tc));
     }
     inp->last_processed_pointer = (Pair) {event->x, event->y};
 }
 
-void tool_pencil_on_drag(
+void tool_drawer_on_drag(
     struct DrawCtx* dc,
     struct ToolCtx* tc,
     struct Input* inp,
     XMotionEvent const* event
 ) {
-    assert(tc->t == Tool_Pencil);
+    ASSERT_DRAWER(tc);
     assert(inp->is_holding);
 
     if (inp->holding_button != XLeftMouseBtn) {
@@ -1436,21 +1471,11 @@ void tool_pencil_on_drag(
         dc,
         prev_pointer,
         pointer,
-        &canvas_fill_square,
+        tc->d.drawer.fn,
         CURR_COL(tc),
         tc->sdata.line_w
     );
     inp->last_processed_pointer = (Pair) {event->x, event->y};
-}
-
-void tool_pencil_on_move(
-    struct DrawCtx* dc,
-    struct ToolCtx* tc,
-    struct Input* inp,
-    XMotionEvent const* event
-) {
-    assert(tc);
-    assert(tc->t == Tool_Pencil);
 }
 
 static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
@@ -1573,6 +1598,7 @@ void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
         {.on_select = &tool_ctx_set_pencil, .hicon = I_Pencil},
         {.on_select = &tool_ctx_set_fill, .hicon = I_Fill},
         {.on_select = &tool_ctx_set_picker, .hicon = I_Picker},
+        {.on_select = &tool_ctx_set_brush, .hicon = I_Brush},
     };
 
     sc->is_active = True;
@@ -1628,7 +1654,7 @@ void canvas_line(
     struct DrawCtx* dc,
     Pair from,
     Pair to,
-    void (*draw)(struct DrawCtx*, Pair, u32, argb),
+    draw_fn draw,
     argb col,
     u32 line_w
 ) {
@@ -1664,7 +1690,7 @@ void canvas_line(
     }
 }
 
-void canvas_point(struct DrawCtx* dc, Pair c, u32 d, argb col) {
+void canvas_fill_circle(struct DrawCtx* dc, Pair c, u32 d, argb col) {
     if (d == 1) {
         ximage_put_checked(dc->cv.im, c.x, c.y, col);
     } else {
@@ -2565,20 +2591,11 @@ void setup(Display* dp, struct Ctx* ctx) {
 
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
-            u8 const* data = i == I_Select ? pic_tool_select_data
-                : i == I_Pencil            ? pic_tool_pencil_data
-                : i == I_Fill              ? pic_tool_fill_data
-                : i == I_Picker            ? pic_tool_picker_data
-                                           : pic_unknown_data;
-            u32 const len = i == I_Select ? RES_SZ_TOOL_SELECT
-                : i == I_Pencil           ? RES_SZ_TOOL_PENCIL
-                : i == I_Fill             ? RES_SZ_TOOL_FILL
-                : i == I_Picker           ? RES_SZ_TOOL_PICKER
-                                          : RES_SZ_UNKNOWN;
+            struct IconData icon = get_icon_data(i);
             images[i] = read_file_from_memory(
                 &ctx->dc,
-                data,
-                len,
+                icon.data,
+                icon.len,
                 COL_BG(&ctx->dc, SchmNorm)
             );
         }
