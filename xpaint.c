@@ -68,6 +68,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define PI               (3.141)
 // default value for signed integers
 #define NIL              (-1)
+#define ZOOM_SPEED       (1.2)
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 #define CURR_COL(p_tc)     ((p_tc)->sdata.colarr[(p_tc)->sdata.curr_col])
@@ -85,6 +86,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define ASSERT_DRAWER(p_tc) \
     (assert(tc->t == Tool_Pencil || tc->t == Tool_Brush))
 #define UNREACHABLE() __builtin_unreachable()
+#define ZOOM_C(dc_p)  (pow(ZOOM_SPEED, (double)(dc_p)->cv.zoom))
 
 typedef u32 argb;
 
@@ -195,7 +197,7 @@ struct DrawCtx {
         enum ImageType type;
         u32 width;
         u32 height;
-        u32 zoom;  // 1 == no zoom
+        i32 zoom;  // 0 == no zoom
         Pair scroll;
     } cv;
     struct Fnt {
@@ -641,13 +643,13 @@ Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
 
 Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
-        .x = x * (i32)dc->cv.zoom + dc->cv.scroll.x,
-        .y = y * (i32)dc->cv.zoom + dc->cv.scroll.y,
+        .x = (i32)(x * ZOOM_C(dc) + dc->cv.scroll.x),
+        .y = (i32)(y * ZOOM_C(dc) + dc->cv.scroll.y),
     };
 }
 
 Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p) {
-    return (Pair) {.x = p.x * (i32)dc->cv.zoom, .y = p.y * (i32)dc->cv.zoom};
+    return (Pair) {.x = (i32)(p.x * ZOOM_C(dc)), .y = (i32)(p.y * ZOOM_C(dc))};
 }
 
 Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p) {
@@ -656,8 +658,8 @@ Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p) {
 
 Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
-        .x = (x - dc->cv.scroll.x) / (i32)dc->cv.zoom,
-        .y = (y - dc->cv.scroll.y) / (i32)dc->cv.zoom,
+        .x = (i32)((x - dc->cv.scroll.x) / ZOOM_C(dc)),
+        .y = (i32)((y - dc->cv.scroll.y) / ZOOM_C(dc)),
     };
 }
 
@@ -1801,13 +1803,13 @@ void canvas_free(Display* dp, struct Canvas* cv) {
 }
 
 void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
-    double old_zoom = (double)dc->cv.zoom;
-    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, 1, CANVAS.max_zoom);
+    double old_zoom = ZOOM_C(dc);
+    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, CANVAS.min_zoom, CANVAS.max_zoom);
     // keep cursor at same position
-    dc->cv.scroll.x += (i32)((dc->cv.scroll.x - cursor.x)
-                             * ((double)dc->cv.zoom / old_zoom - 1));
-    dc->cv.scroll.y += (i32)((dc->cv.scroll.y - cursor.y)
-                             * ((double)dc->cv.zoom / old_zoom - 1));
+    dc->cv.scroll.x +=
+        (i32)((dc->cv.scroll.x - cursor.x) * (ZOOM_C(dc) / old_zoom - 1));
+    dc->cv.scroll.y +=
+        (i32)((dc->cv.scroll.y - cursor.y) * (ZOOM_C(dc) / old_zoom - 1));
 }
 
 u32 get_statusline_height(struct DrawCtx* dc) {
@@ -2084,7 +2086,7 @@ void update_screen(struct Ctx* ctx) {
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
 
-            double const z = 1.0 / dc->cv.zoom;
+            double const z = 1.0 / ZOOM_C(dc);
             XRenderSetPictureTransform(
                 dc->dp,
                 src_pict,
@@ -2103,7 +2105,7 @@ void update_screen(struct Ctx* ctx) {
                 0, 0,
                 0, 0,
                 dc->cv.scroll.x, dc->cv.scroll.y,
-                dc->cv.width * dc->cv.zoom, dc->cv.height * dc->cv.zoom
+                (u32)(dc->cv.width * ZOOM_C(dc)), (u32)(dc->cv.height * ZOOM_C(dc))
             );
             // clang-format on
 
@@ -2423,7 +2425,7 @@ struct Ctx ctx_init(Display* dp) {
                         .height = NIL,
                         .im = NULL,
                         .type = IMT_Png,  // save as png by default
-                        .zoom = 1,
+                        .zoom = 0,
                         .scroll = {0, 0},
                     },
                 .cache = (struct Cache) {.pm = 0},
