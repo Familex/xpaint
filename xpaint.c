@@ -2625,10 +2625,16 @@ void setup(Display* dp, struct Ctx* ctx) {
             canvas_fill(&ctx->dc, CANVAS.background_argb);
         }
 
-        ctx->dc.width = MIN(WINDOW.max_launch_size.x, ctx->dc.cv.width);
-        ctx->dc.height =
-            MIN(WINDOW.max_launch_size.y,
-                ctx->dc.cv.height + get_statusline_height(&ctx->dc));
+        ctx->dc.width = CLAMP(
+            ctx->dc.cv.width,
+            WINDOW.min_launch_size.x,
+            WINDOW.max_launch_size.x
+        );
+        ctx->dc.height = CLAMP(
+            ctx->dc.cv.height + get_statusline_height(&ctx->dc),
+            WINDOW.min_launch_size.y,
+            WINDOW.max_launch_size.y
+        );
         XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }
 
