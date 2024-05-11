@@ -1609,6 +1609,9 @@ void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
 i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     i32 const pointer_x_rel = x - sc->x;
     i32 const pointer_y_rel = y - sc->y;
+    if (pointer_x_rel == 0 && pointer_y_rel == 0) {
+        return NIL;  // prevent 0.0 / 0.0 division
+    }
     double const segment_rad = PI * 2 / MAX(1, sc->item_count);
     double const segment_deg = segment_rad / PI * 180;
     double const pointer_r =
