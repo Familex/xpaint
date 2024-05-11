@@ -2116,16 +2116,19 @@ void update_screen(struct Ctx* ctx) {
             struct SelectionData sd = CURR_TC(ctx).d.sel;
             Pair p = {MIN(sd.bx, sd.ex), MIN(sd.by, sd.ey)};
             Pair dim = {MAX(sd.bx, sd.ex) - p.x, MAX(sd.by, sd.ey) - p.y};
-            draw_rect(
-                dc,
-                point_from_cv_to_scr(dc, p),
-                point_from_cv_to_scr_no_move(dc, dim),
-                0x00000,
-                SELECTION_TOOL.line_w,
-                SELECTION_TOOL.line_style,
-                SELECTION_TOOL.cap_style,
-                SELECTION_TOOL.join_style
-            );
+            if (!SELECTION_DRAGGING(&CURR_TC(ctx))
+                || SELECTION_TOOL.draw_while_drag) {
+                draw_rect(
+                    dc,
+                    point_from_cv_to_scr(dc, p),
+                    point_from_cv_to_scr_no_move(dc, dim),
+                    SELECTION_TOOL.rect_argb,
+                    SELECTION_TOOL.line_w,
+                    SELECTION_TOOL.line_style,
+                    SELECTION_TOOL.cap_style,
+                    SELECTION_TOOL.join_style
+                );
+            }
             if (SELECTION_DRAGGING(&CURR_TC(ctx))) {
                 i32 dx = sd.drag_to.x - sd.drag_from.x;
                 i32 dy = sd.drag_to.y - sd.drag_from.y;
