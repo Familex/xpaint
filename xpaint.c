@@ -71,7 +71,6 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define ZOOM_SPEED       (1.2)
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
-#define CURR_COL(p_tc)     ((p_tc)->sdata.colarr[(p_tc)->sdata.curr_col])
 // XXX workaround
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
@@ -262,6 +261,7 @@ struct Ctx {
         struct ToolSharedData {
             argb* colarr;
             u32 curr_col;
+            u32 prev_col;
             u32 line_w;
         } sdata;
         union ToolData {
@@ -344,6 +344,8 @@ static char* str_new_va(char const* fmt, va_list args);
 static void str_free(char** str_dyn);
 static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 static struct IconData get_icon_data(enum Icon icon);
+static void tc_set_curr_col_num(struct ToolCtx* tc, u32 value);
+static argb* tc_curr_col(struct ToolCtx* tc);
 
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
@@ -604,6 +606,15 @@ struct IconData get_icon_data(enum Icon icon) {
     }
 }
 
+void tc_set_curr_col_num(struct ToolCtx* tc, u32 value) {
+    tc->sdata.prev_col = tc->sdata.curr_col;
+    tc->sdata.curr_col = value;
+}
+
+argb* tc_curr_col(struct ToolCtx* tc) {
+    return &tc->sdata.colarr[tc->sdata.curr_col];
+}
+
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
@@ -836,7 +847,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     CURR_TC(ctx).sdata.line_w = cl_cmd->d.set.d.line_w.value;
                 } break;
                 case ClCDS_Col: {
-                    CURR_COL(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.v;
+                    *tc_curr_col(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.v;
                 } break;
                 case ClCDS_Font: {
                     char const* font = cl_cmd->d.set.d.font.name_dyn;
@@ -1441,11 +1452,11 @@ void tool_drawer_on_release(
             point_from_scr_to_cv(dc, inp->last_processed_pointer),
             pointer,
             tc->d.drawer.fn,
-            CURR_COL(tc),
+            *tc_curr_col(tc),
             tc->sdata.line_w
         );
     } else {
-        tc->d.drawer.fn(dc, pointer, tc->sdata.line_w, CURR_COL(tc));
+        tc->d.drawer.fn(dc, pointer, tc->sdata.line_w, *tc_curr_col(tc));
     }
     inp->last_processed_pointer = (Pair) {event->x, event->y};
 }
@@ -1472,7 +1483,7 @@ void tool_drawer_on_drag(
         prev_pointer,
         pointer,
         tc->d.drawer.fn,
-        CURR_COL(tc),
+        *tc_curr_col(tc),
         tc->sdata.line_w
     );
     inp->last_processed_pointer = (Pair) {event->x, event->y};
@@ -1528,7 +1539,7 @@ void tool_fill_on_release(
     }
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
-    flood_fill(dc->cv.im, CURR_COL(tc), pointer.x, pointer.y);
+    flood_fill(dc->cv.im, *tc_curr_col(tc), pointer.x, pointer.y);
 }
 
 void tool_picker_on_release(
@@ -1544,7 +1555,7 @@ void tool_picker_on_release(
             (Pair) {0, 0},
             (Pair) {(i32)dc->cv.width, (i32)dc->cv.height}
         )) {
-        CURR_COL(tc) = XGetPixel(dc->cv.im, pointer.x, pointer.y);
+        *tc_curr_col(tc) = XGetPixel(dc->cv.im, pointer.x, pointer.y);
     }
 }
 
@@ -2257,7 +2268,7 @@ void update_statusline(struct Ctx* ctx) {
         draw_int(dc, (i32)tc->sdata.line_w, line_w_c, SchmNorm, False);
         /* color */ {
             char col_value[col_value_size + 1];
-            sprintf(col_value, "#%06X", CURR_COL(tc) & 0xFFFFFF);
+            sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
             draw_string(dc, col_value, col_c, SchmNorm, False);
             /* color count */ {
                 // FIXME how it possible
@@ -2293,7 +2304,7 @@ void update_statusline(struct Ctx* ctx) {
                 ) {(i32)(dc->width - col_name_w - col_rect_w - col_count_w),
                    (i32)(dc->height - statusline_h)},
                 (Pair) {(i32)col_rect_w, (i32)statusline_h},
-                CURR_COL(tc)
+                *tc_curr_col(tc)
             );
         }
     }
@@ -2454,6 +2465,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             struct ToolCtx tc = {
                 .sdata.colarr = NULL,
                 .sdata.curr_col = 0,
+                .sdata.prev_col = 0,
                 .sdata.line_w = TOOLS.default_line_w,
             };
             arrpush(ctx->tcarr, tc);
@@ -2831,6 +2843,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 input_state_set(&ctx->input, InputT_Color);
                 update_statusline(ctx);
             }
+            HANDLE_KEY_CASE(XK_x) {
+                tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).sdata.prev_col);
+                update_statusline(ctx);
+            }
             if (BETWEEN(key_sym, XK_1, XK_9)) {
                 u32 val = key_sym - XK_1;
                 if (val < TCS_NUM) {
@@ -2872,7 +2888,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             HANDLE_KEY_CASE_MASK(ControlMask, XK_Up) {
                 u32 const len = arrlen(CURR_TC(ctx).sdata.colarr);
                 if (len != MAX_COLORS) {
-                    CURR_TC(ctx).sdata.curr_col = len;
+                    tc_set_curr_col_num(&CURR_TC(ctx), len);
                     arrpush(CURR_TC(ctx).sdata.colarr, 0xFF000000);
                     update_statusline(ctx);
                 }
@@ -2896,8 +2912,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                     // selected digit counts from left to
                     // right except alpha (aarrggbb <=> --012345)
                     u32 shift = (5 - ctx->input.d.col.current_digit) * 4;
-                    CURR_COL(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
-                    CURR_COL(&CURR_TC(ctx)) |= val << shift;  // set
+                    *tc_curr_col(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
+                    *tc_curr_col(&CURR_TC(ctx)) |= val << shift;  // set
                     to_next_input_digit(&ctx->input, True);
                     update_statusline(ctx);
                 }
@@ -3000,9 +3016,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             && !(e.state & ControlMask)) {
             u32 col_num = arrlen(CURR_TC(ctx).sdata.colarr);
             assert(col_num != 0);
-            CURR_TC(ctx).sdata.curr_col =
+            tc_set_curr_col_num(
+                &CURR_TC(ctx),
                 (CURR_TC(ctx).sdata.curr_col + (key_sym == XK_Up ? 1 : -1))
-                % col_num;
+                    % col_num
+            );
             update_statusline(ctx);
         }
         HANDLE_KEY_CASE_MASK(ControlMask, XK_s) {  // save to current file
