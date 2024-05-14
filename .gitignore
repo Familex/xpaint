@@ -4,3 +4,5 @@ xpaint
 xpaint-d
 .cache/
 compile_commands.json
+.kdev*/
+*.kdev*
