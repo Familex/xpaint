@@ -13,7 +13,7 @@ help: ## display this help
 	@sed -ne '/@sed/!s/:.*##//p' $(MAKEFILE_LIST) | column -tl 2
 
 xpaint: $(SRC) $(HEADER) $(RES) ## build release application
-	@$(CC) -o $@ $(SRC) $(CCFLAGS) -O3 -DNDEBUG
+	@$(CC) -o $@ $(SRC) $(CCFLAGS) -O2 -DNDEBUG
 
 xpaint-d: $(SRC) $(HEADER) $(RES) ## build debug application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) -g
