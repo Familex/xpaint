@@ -401,8 +401,11 @@ static void tool_fill_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct 
 static void tool_picker_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struct Input* inp, XButtonReleasedEvent const* event);
 
 static Bool history_move(struct Ctx* ctx, Bool forward);
-static Bool history_push(struct History** hist, struct Ctx* ctx);
+static void history_push(struct History** hist, struct Ctx* ctx);
 static void history_forward(struct Ctx* ctx);
+static void history_apply(struct Ctx* ctx, struct History* hist);
+static Bool history_restore(struct Ctx* ctx);
+static struct History history_clone(struct History const* hist);
 
 static void historyarr_clear(Display* dp, struct History** hist);
 
@@ -1571,40 +1574,44 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
         return False;
     }
 
-    struct History const curr = arrpop(*hist_pop);
+    struct History curr = arrpop(*hist_pop);
     history_push(hist_save, ctx);
 
-    // apply history
-    XDestroyImage(ctx->dc.cv.im);
-    ctx->dc.cv.im = curr.im;
+    history_apply(ctx, &curr);
 
     return True;
 }
 
-Bool history_push(struct History** hist, struct Ctx* ctx) {
+void history_push(struct History** hist, struct Ctx* ctx) {
     trace("xpaint: history push");
-
-    struct History new_item = {
-        .im = ctx->dc.cv.im,
-    };
-
-    new_item.im = XSubImage(
-        ctx->dc.cv.im,
-        0,
-        0,
-        ctx->dc.cv.im->width,
-        ctx->dc.cv.im->height
-    );
-
-    arrpush(*hist, new_item);
-
-    return True;
+    arrpush(*hist, history_clone(&(struct History) {.im = ctx->dc.cv.im}));
 }
 
 void history_forward(struct Ctx* ctx) {
     // next history invalidated after user action
     historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
     history_push(&ctx->hist_prevarr, ctx);
+}
+
+void history_apply(struct Ctx* ctx, struct History* hist) {
+    XDestroyImage(ctx->dc.cv.im);
+    ctx->dc.cv.im = hist->im;
+}
+
+Bool history_restore(struct Ctx* ctx) {
+    if (!arrlen(ctx->hist_prevarr)) {
+        return False;
+    }
+    struct History hist = history_clone(&arrlast(ctx->hist_prevarr));
+    history_apply(ctx, &hist);
+    return True;
+}
+
+struct History history_clone(struct History const* hist) {
+    struct History result;
+    result.im = XSubImage(hist->im, 0, 0, hist->im->width, hist->im->height);
+
+    return result;
 }
 
 void historyarr_clear(Display* dp, struct History** histarr) {
