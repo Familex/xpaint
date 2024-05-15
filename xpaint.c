@@ -402,6 +402,7 @@ static void tool_picker_on_release(struct DrawCtx* dc, struct ToolCtx* tc, struc
 
 static Bool history_move(struct Ctx* ctx, Bool forward);
 static Bool history_push(struct History** hist, struct Ctx* ctx);
+static void history_forward(struct Ctx* ctx);
 
 static void historyarr_clear(Display* dp, struct History** hist);
 
@@ -411,7 +412,7 @@ static void canvas_fill_circle(struct DrawCtx* dc, Pair c, u32 d, argb col);
 static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col);
 static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col);
-static Bool canvas_load(struct DrawCtx* dc, char const* file_name, argb transp);
+static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
 static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height);
@@ -896,11 +897,14 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
         case ClC_Load: {
             char const* path =
                 COALESCE(cl_cmd->d.load.path_dyn, ctx->finp.path_dyn);
-            msg_to_show = str_new(
-                canvas_load(&ctx->dc, path, 0) ? "image loaded from '%s'"
-                                               : "failed load image from '%s'",
-                path
-            );
+            XImage* loaded_image = read_file_from_path(&ctx->dc, path, 0);
+            if (loaded_image) {
+                history_forward(ctx);
+                canvas_load(&ctx->dc, loaded_image, path);
+                msg_to_show = str_new("image_loaded from '%s'", path);
+            } else {
+                msg_to_show = str_new("failed load image from '%s'", path);
+            }
         } break;
         case ClC_Last: assert(!"invalid enum value");
     }
@@ -1597,6 +1601,12 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
     return True;
 }
 
+void history_forward(struct Ctx* ctx) {
+    // next history invalidated after user action
+    historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
+    history_push(&ctx->hist_prevarr, ctx);
+}
+
 void historyarr_clear(Display* dp, struct History** histarr) {
     for (u32 i = 0; i < arrlenu(*histarr); ++i) {
         struct History* h = &(*histarr)[i];
@@ -1792,16 +1802,11 @@ void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col) {
     }
 }
 
-static Bool
-canvas_load(struct DrawCtx* dc, char const* file_name, argb transp) {
-    XImage* im = read_file_from_path(dc, file_name, 0);
-    if (!im) {
-        return False;
-    }
+static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path) {
+    assert(im);
     canvas_free(dc->dp, &dc->cv);
     dc->cv.im = im;
-    dc->cv.type = file_type(file_name);
-    return True;
+    dc->cv.type = file_type(file_path);
 }
 
 void canvas_free(Display* dp, struct Canvas* cv) {
@@ -2602,7 +2607,10 @@ void setup(Display* dp, struct Ctx* ctx) {
         );
         // read canvas data from file or create empty
         if (ctx->finp.path_dyn) {
-            if (!canvas_load(&ctx->dc, ctx->finp.path_dyn, 0)) {
+            XImage* im = read_file_from_path(&ctx->dc, ctx->finp.path_dyn, 0);
+            if (im) {
+                canvas_load(&ctx->dc, im, ctx->finp.path_dyn);
+            } else {
                 die("xpaint: failed to read input file");
             }
         } else {
@@ -2653,9 +2661,7 @@ void setup(Display* dp, struct Ctx* ctx) {
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     if (e->button == XLeftMouseBtn) {
-        // next history invalidated after user action
-        historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
-        history_push(&ctx->hist_prevarr, ctx);
+        history_forward(ctx);
     }
     if (CURR_TC(ctx).on_press) {
         CURR_TC(ctx).on_press(&ctx->dc, &CURR_TC(ctx), &ctx->input, e);
