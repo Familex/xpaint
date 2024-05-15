@@ -279,7 +279,7 @@ struct Ctx {
     }* tcarr;
     u32 curr_tc;
     struct History {
-        struct Canvas cv;
+        XImage* im;
     } *hist_prevarr, *hist_nextarr;
     struct SelectionCircle {
         Bool is_active;
@@ -1570,10 +1570,9 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     struct History const curr = arrpop(*hist_pop);
     history_push(hist_save, ctx);
 
-    canvas_free(ctx->dc.dp, &ctx->dc.cv);
-
     // apply history
-    ctx->dc.cv = curr.cv;
+    XDestroyImage(ctx->dc.cv.im);
+    ctx->dc.cv.im = curr.im;
 
     return True;
 }
@@ -1582,10 +1581,10 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
     trace("xpaint: history push");
 
     struct History new_item = {
-        .cv = ctx->dc.cv,
+        .im = ctx->dc.cv.im,
     };
 
-    new_item.cv.im = XSubImage(
+    new_item.im = XSubImage(
         ctx->dc.cv.im,
         0,
         0,
@@ -1601,7 +1600,7 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
 void historyarr_clear(Display* dp, struct History** histarr) {
     for (u32 i = 0; i < arrlenu(*histarr); ++i) {
         struct History* h = &(*histarr)[i];
-        canvas_free(dp, &h->cv);
+        XDestroyImage(h->im);
     }
     arrfree(*histarr);
 }
