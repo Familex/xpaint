@@ -194,8 +194,6 @@ struct DrawCtx {
     struct Canvas {
         XImage* im;
         enum ImageType type;
-        u32 width;
-        u32 height;
         i32 zoom;  // 0 == no zoom
         Pair scroll;
     } cv;
@@ -472,18 +470,18 @@ i32 main(i32 argc, char** argv) {
             file_ctx_set(&ctx.fout, argv[++i]);
         } else if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--width")) {
             main_arg_bound_check("-w or --width", argc, argv, i);
-            ctx.dc.cv.width = strtol(argv[++i], NULL, 0);
-            if (ctx.dc.cv.width <= 0) {
+            // ctx.dc.width == ctx.dc.cv.im->width at program start
+            ctx.dc.width = strtol(argv[++i], NULL, 0);
+            if (!ctx.dc.width) {
                 die("xpaint: canvas width must be positive number");
             }
-            ctx.dc.width = ctx.dc.cv.width;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--height")) {
             main_arg_bound_check("-h or --height", argc, argv, i);
-            ctx.dc.cv.height = strtol(argv[++i], NULL, 0);
-            if (ctx.dc.cv.height <= 0) {
+            // ctx.dc.height == ctx.dc.cv.im->height at program start
+            ctx.dc.height = strtol(argv[++i], NULL, 0);
+            if (!ctx.dc.height) {
                 die("xpaint: canvas height must be positive number");
             }
-            ctx.dc.height = ctx.dc.cv.height;
         } else {
             die("Usage: xpaint [OPTIONS] [FILE]\n"
                 "\n"
@@ -764,8 +762,8 @@ Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
     }
     Bool result = False;
 
-    i32 w = (i32)dc->cv.width;
-    i32 h = (i32)dc->cv.height;
+    i32 w = dc->cv.im->width;
+    i32 h = dc->cv.im->height;
     u8* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
     switch (type) {
         case IMT_Png: {
@@ -1342,8 +1340,8 @@ void tool_selection_on_press(
             sd->drag_from = pointer;
             sd->drag_to = pointer;
         } else {
-            sd->bx = CLAMP(pointer.x, 0, dc->cv.width);
-            sd->by = CLAMP(pointer.y, 0, dc->cv.height);
+            sd->bx = CLAMP(pointer.x, 0, dc->cv.im->width);
+            sd->by = CLAMP(pointer.y, 0, dc->cv.im->height);
             sd->ex = NIL;
             sd->ey = NIL;
         }
@@ -1409,8 +1407,8 @@ void tool_selection_on_drag(
     if (SELECTION_DRAGGING(tc)) {
         tc->d.sel.drag_to = pointer;
     } else if (inp->is_holding) {
-        tc->d.sel.ex = CLAMP(pointer.x, 0, dc->cv.width);
-        tc->d.sel.ey = CLAMP(pointer.y, 0, dc->cv.height);
+        tc->d.sel.ex = CLAMP(pointer.x, 0, dc->cv.im->width);
+        tc->d.sel.ey = CLAMP(pointer.y, 0, dc->cv.im->height);
     }
 }
 
@@ -1553,7 +1551,7 @@ void tool_picker_on_release(
     if (point_in_rect(
             pointer,
             (Pair) {0, 0},
-            (Pair) {(i32)dc->cv.width, (i32)dc->cv.height}
+            (Pair) {(i32)dc->cv.im->width, (i32)dc->cv.im->height}
         )) {
         *tc_curr_col(tc) = XGetPixel(dc->cv.im, pointer.x, pointer.y);
     }
@@ -1587,8 +1585,13 @@ Bool history_push(struct History** hist, struct Ctx* ctx) {
         .cv = ctx->dc.cv,
     };
 
-    new_item.cv.im =
-        XSubImage(ctx->dc.cv.im, 0, 0, ctx->dc.cv.width, ctx->dc.cv.height);
+    new_item.cv.im = XSubImage(
+        ctx->dc.cv.im,
+        0,
+        0,
+        ctx->dc.cv.im->width,
+        ctx->dc.cv.im->height
+    );
 
     arrpush(*hist, new_item);
 
@@ -1722,8 +1725,8 @@ void canvas_fill_circle(struct DrawCtx* dc, Pair c, u32 d, argb col) {
             double const dr = (dx - r) * (dx - r) + (dy - r) * (dy - r);
             u32 const x = l + dx;
             u32 const y = t + dy;
-            if (!BETWEEN(x, 0, dc->cv.width - 1)
-                || !BETWEEN(y, 0, dc->cv.height - 1) || dr > r_sq) {
+            if (!BETWEEN(x, 0, dc->cv.im->width - 1)
+                || !BETWEEN(y, 0, dc->cv.im->height - 1) || dr > r_sq) {
                 continue;
             }
             argb const bg = XGetPixel(dc->cv.im, x, y);
@@ -1799,8 +1802,6 @@ canvas_load(struct DrawCtx* dc, char const* file_name, argb transp) {
     canvas_free(dc->dp, &dc->cv);
     dc->cv.im = im;
     dc->cv.type = file_type(file_name);
-    dc->cv.width = dc->cv.im->width;
-    dc->cv.height = dc->cv.im->height;
     return True;
 }
 
@@ -1809,8 +1810,6 @@ void canvas_free(Display* dp, struct Canvas* cv) {
         XDestroyImage(cv->im);
         cv->im = NULL;
     }
-    cv->width = 0;
-    cv->height = 0;
 }
 
 void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
@@ -2055,20 +2054,20 @@ void update_screen(struct Ctx* ctx) {
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
-            if (dc->cache.pm == 0 || dc->cache.pm_w != dc->cv.width
-                || dc->cache.pm_h != dc->cv.height) {
+            if (dc->cache.pm == 0 || dc->cache.pm_w != dc->cv.im->width
+                || dc->cache.pm_h != dc->cv.im->height) {
                 if (dc->cache.pm != 0) {
                     XFreePixmap(dc->dp, dc->cache.pm);
                 }
                 dc->cache.pm = XCreatePixmap(
                     dc->dp,
                     dc->window,
-                    dc->cv.width,
-                    dc->cv.height,
+                    dc->cv.im->width,
+                    dc->cv.im->height,
                     dc->vinfo.depth
                 );
-                dc->cache.pm_w = dc->cv.width;
-                dc->cache.pm_h = dc->cv.height;
+                dc->cache.pm_w = dc->cv.im->width;
+                dc->cache.pm_h = dc->cv.im->height;
             }
             // clang-format off
             XPutImage(
@@ -2078,7 +2077,7 @@ void update_screen(struct Ctx* ctx) {
                 dc->cv.im,
                 0, 0,
                 0, 0,
-                dc->cv.width, dc->cv.height
+                dc->cv.im->width, dc->cv.im->height
             );
             // clang-format on
 
@@ -2116,7 +2115,7 @@ void update_screen(struct Ctx* ctx) {
                 0, 0,
                 0, 0,
                 dc->cv.scroll.x, dc->cv.scroll.y,
-                (u32)(dc->cv.width * ZOOM_C(dc)), (u32)(dc->cv.height * ZOOM_C(dc))
+                (u32)(dc->cv.im->width * ZOOM_C(dc)), (u32)(dc->cv.im->height * ZOOM_C(dc))
             );
             // clang-format on
 
@@ -2361,10 +2360,8 @@ void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height) {
         trace("resize_canvas: invalid canvas size");
         return;
     }
-    u32 old_width = dc->cv.width;
-    u32 old_height = dc->cv.height;
-    dc->cv.width = new_width;
-    dc->cv.height = new_height;
+    u32 old_width = dc->cv.im->width;
+    u32 old_height = dc->cv.im->height;
 
     // FIXME can fill color be changed?
     XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
@@ -2432,8 +2429,6 @@ struct Ctx ctx_init(Display* dp) {
                 .height = CANVAS.default_height,
                 .cv =
                     (struct Canvas) {
-                        .width = NIL,
-                        .height = NIL,
                         .im = NULL,
                         .type = IMT_Png,  // save as png by default
                         .zoom = 0,
@@ -2612,16 +2607,11 @@ void setup(Display* dp, struct Ctx* ctx) {
                 die("xpaint: failed to read input file");
             }
         } else {
-            ctx->dc.cv.width = ctx->dc.cv.width != NIL ? ctx->dc.cv.width
-                                                       : CANVAS.default_width;
-            ctx->dc.cv.height = ctx->dc.cv.height != NIL
-                ? ctx->dc.cv.height
-                : CANVAS.default_height;
             Pixmap data = XCreatePixmap(
                 dp,
                 ctx->dc.window,
-                ctx->dc.cv.width,
-                ctx->dc.cv.height,
+                ctx->dc.width,
+                ctx->dc.height,
                 ctx->dc.vinfo.depth
             );
             ctx->dc.cv.im = XGetImage(
@@ -2629,8 +2619,8 @@ void setup(Display* dp, struct Ctx* ctx) {
                 data,
                 0,
                 0,
-                ctx->dc.cv.width,
-                ctx->dc.cv.height,
+                ctx->dc.width,
+                ctx->dc.height,
                 AllPlanes,
                 ZPixmap
             );
@@ -2640,12 +2630,12 @@ void setup(Display* dp, struct Ctx* ctx) {
         }
 
         ctx->dc.width = CLAMP(
-            ctx->dc.cv.width,
+            ctx->dc.cv.im->width,
             WINDOW.min_launch_size.x,
             WINDOW.max_launch_size.x
         );
         ctx->dc.height = CLAMP(
-            ctx->dc.cv.height + get_statusline_height(&ctx->dc),
+            ctx->dc.cv.im->height + get_statusline_height(&ctx->dc),
             WINDOW.min_launch_size.y,
             WINDOW.max_launch_size.y
         );
@@ -2858,11 +2848,11 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 u32 const value = e.state & ShiftMask ? 25 : 5;
                 canvas_resize(
                     &ctx->dc,
-                    (i32)(ctx->dc.cv.width
+                    (i32)(ctx->dc.cv.im->width
                           + (key_sym == XK_Left        ? -value
                                  : key_sym == XK_Right ? value
                                                        : 0)),
-                    (i32)(ctx->dc.cv.height
+                    (i32)(ctx->dc.cv.im->height
                           + (key_sym == XK_Down     ? -value
                                  : key_sym == XK_Up ? value
                                                     : 0))
