@@ -68,6 +68,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define PI               (3.141)
 // default value for signed integers
 #define NIL              (-1)
+#define PNIL             ((Pair) {NIL, NIL})
 #define ZOOM_SPEED       (1.2)
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
@@ -75,15 +76,14 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define HAS_SELECTION(p_tc) \
-    ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.ex != NIL \
-     && (p_tc)->d.sel.ey != NIL && (p_tc)->d.sel.bx != NIL \
-     && (p_tc)->d.sel.by != NIL && (p_tc)->d.sel.ex != (p_tc)->d.sel.bx \
-     && (p_tc)->d.sel.ey != (p_tc)->d.sel.by)
+    ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.end.x != NIL \
+     && (p_tc)->d.sel.end.y != NIL && (p_tc)->d.sel.begin.x != NIL \
+     && (p_tc)->d.sel.begin.y != NIL \
+     && (p_tc)->d.sel.end.x != (p_tc)->d.sel.begin.x \
+     && (p_tc)->d.sel.end.y != (p_tc)->d.sel.begin.y)
 #define SELECTION_DRAGGING(p_tc) \
     ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
      && (p_tc)->d.sel.drag_from.y != NIL)
-#define ASSERT_DRAWER(p_tc) \
-    (assert(tc->t == Tool_Pencil || tc->t == Tool_Brush))
 #define UNREACHABLE() __builtin_unreachable()
 #define ZOOM_C(dc_p)  (pow(ZOOM_SPEED, (double)(dc_p)->cv.zoom))
 
@@ -221,11 +221,11 @@ struct Ctx {
     struct DrawCtx dc;
     struct Input {
         Pair prev_c;
-        Pair last_processed_pointer;
         u32 holding_button;
         u64 last_proc_drag_ev_us;
         Bool is_holding;
         Bool is_dragging;
+        Pair drag_from;
         enum InputTag {
             InputT_Interact,
             InputT_Color,
@@ -261,13 +261,12 @@ struct Ctx {
             u32 curr_col;
             u32 prev_col;
             u32 line_w;
+            Pair anchor;
         } sdata;
         union ToolData {
             struct SelectionData {
-                // selection begin
-                i32 by, bx;
-                // selection end
-                i32 ey, ex;
+                // selection bounds
+                Pair begin, end;
                 // NIL if selection not dragging
                 Pair drag_from, drag_to;
             } sel;
@@ -353,7 +352,6 @@ static void file_ctx_free(struct FileCtx* file_ctx);
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
-static Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
@@ -663,10 +661,6 @@ Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y) {
 
 Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p) {
     return (Pair) {.x = (i32)(p.x * ZOOM_C(dc)), .y = (i32)(p.y * ZOOM_C(dc))};
-}
-
-Pair point_from_scr_to_cv(struct DrawCtx const* dc, Pair p) {
-    return point_from_scr_to_cv_xy(dc, p.x, p.y);
 }
 
 Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
@@ -1253,12 +1247,10 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_drag = &tool_selection_on_drag;
             new_tc.tool_name_dyn = str_new("selection");
             new_tc.d.sel = (struct SelectionData) {
-                .by = NIL,
-                .bx = NIL,
-                .ey = NIL,
-                .ex = NIL,
-                .drag_from = {NIL, NIL},
-                .drag_to = {NIL, NIL},
+                .begin = PNIL,
+                .end = PNIL,
+                .drag_from = PNIL,
+                .drag_to = PNIL,
             };
             break;
         case Tool_Brush:
@@ -1338,19 +1330,13 @@ void tool_selection_on_press(
     if (event->button == XLeftMouseBtn) {
         struct SelectionData* sd = &tc->d.sel;
         Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-        if (HAS_SELECTION(tc)
-            && point_in_rect(
-                pointer,
-                (Pair) {sd->bx, sd->by},
-                (Pair) {sd->ex, sd->ey}
-            )) {
+        if (HAS_SELECTION(tc) && point_in_rect(pointer, sd->begin, sd->end)) {
             sd->drag_from = pointer;
             sd->drag_to = pointer;
         } else {
-            sd->bx = CLAMP(pointer.x, 0, dc->cv.im->width);
-            sd->by = CLAMP(pointer.y, 0, dc->cv.im->height);
-            sd->ex = NIL;
-            sd->ey = NIL;
+            sd->begin.x = CLAMP(pointer.x, 0, dc->cv.im->width);
+            sd->begin.y = CLAMP(pointer.y, 0, dc->cv.im->height);
+            sd->end = PNIL;
         }
     }
 }
@@ -1374,11 +1360,13 @@ void tool_selection_on_release(
             pointer.x - sd->drag_from.x,
             pointer.y - sd->drag_from.y
         };
-        Pair area = {MIN(sd->bx, sd->ex), MIN(sd->by, sd->ey)};
+        Pair area = {MIN(sd->begin.x, sd->end.x), MIN(sd->begin.y, sd->end.y)};
         canvas_copy_region(
             dc,
             area,
-            (Pair) {MAX(sd->bx, sd->ex) - area.x, MAX(sd->by, sd->ey) - area.y},
+            (Pair
+            ) {MAX(sd->begin.x, sd->end.x) - area.x,
+               MAX(sd->begin.y, sd->end.y) - area.y},
             (Pair) {area.x + move_vec.x, area.y + move_vec.y},
             !(event->state & ShiftMask)
         );
@@ -1389,12 +1377,7 @@ void tool_selection_on_release(
         return;
     }
     // unselect area
-    sd->bx = NIL;
-    sd->ey = NIL;
-    sd->by = NIL;
-    sd->ex = NIL;
-    sd->drag_from = (Pair) {NIL, NIL};
-    sd->drag_to = (Pair) {NIL, NIL};
+    sd->begin = sd->end = sd->drag_from = sd->drag_to = PNIL;
     XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
     trace("clipboard released");
 }
@@ -1414,8 +1397,8 @@ void tool_selection_on_drag(
     if (SELECTION_DRAGGING(tc)) {
         tc->d.sel.drag_to = pointer;
     } else if (inp->is_holding) {
-        tc->d.sel.ex = CLAMP(pointer.x, 0, dc->cv.im->width);
-        tc->d.sel.ey = CLAMP(pointer.y, 0, dc->cv.im->height);
+        tc->d.sel.end.x = CLAMP(pointer.x, 0, dc->cv.im->width);
+        tc->d.sel.end.y = CLAMP(pointer.y, 0, dc->cv.im->height);
     }
 }
 
@@ -1425,16 +1408,12 @@ void tool_drawer_on_press(
     struct Input* inp,
     XButtonPressedEvent const* event
 ) {
-    ASSERT_DRAWER(tc);
-
     if (event->button != XLeftMouseBtn) {
         return;
     }
 
-    if (event->state & ShiftMask) {
-        //
-    } else {
-        inp->last_processed_pointer = (Pair) {NIL, NIL};
+    if (!(event->state & ShiftMask)) {
+        tc->sdata.anchor = PNIL;
     }
 }
 
@@ -1444,8 +1423,6 @@ void tool_drawer_on_release(
     struct Input* inp,
     XButtonReleasedEvent const* event
 ) {
-    ASSERT_DRAWER(tc);
-
     if (event->button != XLeftMouseBtn || inp->is_dragging) {
         return;
     }
@@ -1454,7 +1431,7 @@ void tool_drawer_on_release(
     if (event->state & ShiftMask) {
         canvas_line(
             dc,
-            point_from_scr_to_cv(dc, inp->last_processed_pointer),
+            tc->sdata.anchor,
             pointer,
             tc->d.drawer.fn,
             *tc_curr_col(tc),
@@ -1463,7 +1440,7 @@ void tool_drawer_on_release(
     } else {
         tc->d.drawer.fn(dc, pointer, tc->sdata.line_w, *tc_curr_col(tc));
     }
-    inp->last_processed_pointer = (Pair) {event->x, event->y};
+    tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
 
 void tool_drawer_on_drag(
@@ -1472,17 +1449,13 @@ void tool_drawer_on_drag(
     struct Input* inp,
     XMotionEvent const* event
 ) {
-    ASSERT_DRAWER(tc);
-    assert(inp->is_holding);
-
     if (inp->holding_button != XLeftMouseBtn) {
         return;
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    Pair prev_pointer = (inp->last_processed_pointer.x != NIL)
-        ? point_from_scr_to_cv(dc, inp->last_processed_pointer)
-        : pointer;
+    Pair prev_pointer =
+        (tc->sdata.anchor.x != NIL) ? tc->sdata.anchor : pointer;
     canvas_line(
         dc,
         prev_pointer,
@@ -1491,7 +1464,7 @@ void tool_drawer_on_drag(
         *tc_curr_col(tc),
         tc->sdata.line_w
     );
-    inp->last_processed_pointer = (Pair) {event->x, event->y};
+    tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
 
 static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
@@ -2137,8 +2110,11 @@ void update_screen(struct Ctx* ctx) {
     /* current selection */ {
         if (HAS_SELECTION(&CURR_TC(ctx))) {
             struct SelectionData sd = CURR_TC(ctx).d.sel;
-            Pair p = {MIN(sd.bx, sd.ex), MIN(sd.by, sd.ey)};
-            Pair dim = {MAX(sd.bx, sd.ex) - p.x, MAX(sd.by, sd.ey) - p.y};
+            Pair p = {MIN(sd.begin.x, sd.end.x), MIN(sd.begin.y, sd.end.y)};
+            Pair dim = {
+                MAX(sd.begin.x, sd.end.x) - p.x,
+                MAX(sd.begin.y, sd.end.y) - p.y
+            };
             if (!SELECTION_DRAGGING(&CURR_TC(ctx))
                 || SELECTION_TOOL.draw_while_drag) {
                 draw_rect(
@@ -2449,11 +2425,7 @@ struct Ctx ctx_init(Display* dp) {
                 .png_compression_level = PNG_DEFAULT_COMPRESSION,
                 .jpg_quality_level = JPG_DEFAULT_QUALITY,
             },
-        .input =
-            (struct Input) {
-                .t = InputT_Interact,
-                .last_processed_pointer = {NIL, NIL},
-            },
+        .input = (struct Input) {.t = InputT_Interact},
         .sel_buf.im = NULL,
         .tcarr = NULL,
         .curr_tc = 0,
@@ -2790,18 +2762,17 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             HANDLE_KEY_CASE_MASK(ControlMask, XK_c) {
                 if (HAS_SELECTION(&CURR_TC(ctx))) {
+                    struct SelectionData* sd = &CURR_TC(ctx).d.sel;
                     XSetSelectionOwner(
                         ctx->dc.dp,
                         atoms[A_Clipboard],
                         ctx->dc.window,
                         CurrentTime
                     );
-                    i32 x = MIN(CURR_TC(ctx).d.sel.bx, CURR_TC(ctx).d.sel.ex);
-                    i32 y = MIN(CURR_TC(ctx).d.sel.by, CURR_TC(ctx).d.sel.ey);
-                    u32 width =
-                        MAX(CURR_TC(ctx).d.sel.ex, CURR_TC(ctx).d.sel.bx) - x;
-                    u32 height =
-                        MAX(CURR_TC(ctx).d.sel.ey, CURR_TC(ctx).d.sel.by) - y;
+                    i32 x = MIN(sd->begin.x, sd->end.x);
+                    i32 y = MIN(sd->begin.y, sd->end.y);
+                    u32 width = MAX(sd->end.x, sd->begin.x) - x;
+                    u32 height = MAX(sd->end.y, sd->begin.y) - y;
                     if (ctx->sel_buf.im != NULL) {
                         XDestroyImage(ctx->sel_buf.im);
                     }
@@ -3052,7 +3023,11 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
 
     if (ctx->input.is_holding) {
-        ctx->input.is_dragging = True;
+        if (!ctx->input.is_dragging) {
+            ctx->input.is_dragging = True;
+            ctx->input.drag_from =
+                point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
+        }
         if (CURR_TC(ctx).on_drag) {
             struct timeval current_time;
             gettimeofday(&current_time, 0x0);
