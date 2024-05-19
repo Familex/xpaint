@@ -2070,6 +2070,24 @@ static int draw_rect(
     );
 }
 
+static int
+draw_line(struct DrawCtx* dc, Pair from, Pair to, enum Schm sc, Bool invert) {
+    XSetForeground(
+        dc->dp,
+        dc->screen_gc,
+        invert ? COL_BG(dc, sc) : COL_FG(dc, sc)
+    );
+    return XDrawLine(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        from.x,
+        from.y,
+        to.x,
+        to.y
+    );
+}
+
 static u32
 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     XGlyphInfo ext;
@@ -2085,6 +2103,7 @@ static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
 }
 
 void update_screen(struct Ctx* ctx) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     /* draw canvas */ {
         fill_rect(
@@ -2165,15 +2184,14 @@ void update_screen(struct Ctx* ctx) {
         }
     }
     /* current selection */ {
-        if (HAS_SELECTION(&CURR_TC(ctx))) {
-            struct SelectionData sd = CURR_TC(ctx).d.sel;
+        if (HAS_SELECTION(tc)) {
+            struct SelectionData sd = tc->d.sel;
             Pair p = {MIN(sd.begin.x, sd.end.x), MIN(sd.begin.y, sd.end.y)};
             Pair dim = {
                 MAX(sd.begin.x, sd.end.x) - p.x,
                 MAX(sd.begin.y, sd.end.y) - p.y
             };
-            if (!SELECTION_DRAGGING(&CURR_TC(ctx))
-                || SELECTION_TOOL.draw_while_drag) {
+            if (!SELECTION_DRAGGING(tc) || SELECTION_TOOL.draw_while_drag) {
                 draw_rect(
                     dc,
                     point_from_cv_to_scr(dc, p),
@@ -2185,7 +2203,7 @@ void update_screen(struct Ctx* ctx) {
                     SELECTION_TOOL.join_style
                 );
             }
-            if (SELECTION_DRAGGING(&CURR_TC(ctx))) {
+            if (SELECTION_DRAGGING(tc)) {
                 i32 dx = sd.drag_to.x - sd.drag_from.x;
                 i32 dy = sd.drag_to.y - sd.drag_from.y;
                 draw_rect(
@@ -2200,6 +2218,17 @@ void update_screen(struct Ctx* ctx) {
                 );
             }
         }
+    }
+    if (WINDOW.anchor_size && tc->sdata.anchor.x != NIL
+        && !ctx->input.is_dragging) {
+        i32 const size = WINDOW.anchor_size;
+        Pair center = point_from_cv_to_scr(dc, tc->sdata.anchor);
+        Pair lu = (Pair) {center.x - size, center.y - size};
+        Pair ld = (Pair) {center.x - size, center.y + size};
+        Pair ru = (Pair) {center.x + size, center.y - size};
+        Pair rd = (Pair) {center.x + size, center.y + size};
+        draw_line(dc, lu, rd, SchmNorm, True);
+        draw_line(dc, ld, ru, SchmNorm, True);
     }
 
     update_statusline(ctx);  // backbuffer swaped here

@@ -24,10 +24,12 @@ struct {
     u32 background_argb;
     Pair min_launch_size;
     Pair max_launch_size;
+    i32 anchor_size;  // 0 to disable
 } const WINDOW = {
     .background_argb = 0xFF181818,
     .min_launch_size = {350, 300},
     .max_launch_size = {1000, 1000},
+    .anchor_size = 8
 };
 
 struct {
