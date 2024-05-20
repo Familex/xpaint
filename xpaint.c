@@ -288,7 +288,7 @@ struct Ctx {
         i32 y;
         u32 item_count;
         struct Item {
-            void (*on_select)(struct ToolCtx*);
+            void (*on_select)(struct Ctx*);
             i32 hicon;  // I_*
         }* items;
     } sc;
@@ -1626,22 +1626,22 @@ void historyarr_clear(Display* dp, struct History** histarr) {
 }
 
 // clang-format off
-static void tool_ctx_set_selection(struct ToolCtx* tc) { set_current_tool(tc, Tool_Selection); }
-static void tool_ctx_set_pencil(struct ToolCtx* tc) { set_current_tool(tc, Tool_Pencil); }
-static void tool_ctx_set_fill(struct ToolCtx* tc) { set_current_tool(tc, Tool_Fill); }
-static void tool_ctx_set_picker(struct ToolCtx* tc) { set_current_tool(tc, Tool_Picker); }
-static void tool_ctx_set_brush(struct ToolCtx* tc) { set_current_tool(tc, Tool_Brush); }
-static void tool_ctx_set_figure(struct ToolCtx* tc) { set_current_tool(tc, Tool_Figure); }
+static void sel_circ_set_tool_selection(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Selection); }
+static void sel_circ_set_tool_pencil(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Pencil); }
+static void sel_circ_set_tool_fill(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Fill); }
+static void sel_circ_set_tool_picker(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Picker); }
+static void sel_circ_set_tool_brush(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Brush); }
+static void sel_circ_set_tool_figure(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Figure); }
 // clang-format on
 
 void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
     static struct Item tools[] = {
-        {.on_select = &tool_ctx_set_selection, .hicon = I_Select},
-        {.on_select = &tool_ctx_set_pencil, .hicon = I_Pencil},
-        {.on_select = &tool_ctx_set_fill, .hicon = I_Fill},
-        {.on_select = &tool_ctx_set_picker, .hicon = I_Picker},
-        {.on_select = &tool_ctx_set_brush, .hicon = I_Brush},
-        {.on_select = &tool_ctx_set_figure, .hicon = I_Figure},
+        {.on_select = &sel_circ_set_tool_selection, .hicon = I_Select},
+        {.on_select = &sel_circ_set_tool_pencil, .hicon = I_Pencil},
+        {.on_select = &sel_circ_set_tool_fill, .hicon = I_Fill},
+        {.on_select = &sel_circ_set_tool_picker, .hicon = I_Picker},
+        {.on_select = &sel_circ_set_tool_brush, .hicon = I_Brush},
+        {.on_select = &sel_circ_set_tool_figure, .hicon = I_Figure},
     };
 
     sc->is_active = True;
@@ -2715,7 +2715,7 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
-        tool_ctx_set_pencil(&ctx->tcarr[i]);
+        set_current_tool(&ctx->tcarr[i], Tool_Pencil);
     }
     history_push(&ctx->hist_prevarr, ctx);
 
@@ -2748,7 +2748,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     if (e->button == XRightMouseBtn) {
         i32 const selected_item = current_sel_circ_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
-            ctx->sc.items[selected_item].on_select(&CURR_TC(ctx));
+            ctx->sc.items[selected_item].on_select(ctx);
         }
         free_sel_circ(&ctx->sc);
         update_screen(ctx);
