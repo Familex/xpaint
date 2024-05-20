@@ -87,8 +87,6 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define UNREACHABLE() __builtin_unreachable()
 #define ZOOM_C(dc_p)  (pow(ZOOM_SPEED, (double)(dc_p)->cv.zoom))
 
-typedef u32 argb;
-
 enum {
     A_Clipboard,
     A_Targets,
@@ -116,6 +114,143 @@ enum ImageType {
     IMT_Png,
     IMT_Jpg,
     IMT_Unknown,
+};
+
+struct Ctx;
+struct DrawCtx;
+struct ToolCtx;
+
+typedef void (*draw_fn)(struct Ctx* ctx, Pair p);
+
+typedef u8 (*circle_get_alpha_fn)(
+    struct Ctx* ctx,
+    double circle_radius,
+    Pair p  // point relative circle center
+);
+
+struct Ctx {
+    struct DrawCtx {
+        Display* dp;
+        XVisualInfo vinfo;
+        XIM xim;
+        XIC xic;
+        XRenderPictFormat* xrnd_pic_format;
+        Colormap colmap;
+        GC gc;
+        GC screen_gc;
+        Window window;
+        u32 width;
+        u32 height;
+        XdbeBackBuffer back_buffer;  // double buffering
+        i32 png_compression_level;  // FIXME find better place
+        i32 jpg_quality_level;  // FIXME find better place
+        struct Canvas {
+            XImage* im;
+            enum ImageType type;
+            i32 zoom;  // 0 == no zoom
+            Pair scroll;
+        } cv;
+        struct Fnt {
+            XftFont* xfont;
+            u32 h;
+        } fnt;
+        struct Scheme {
+            XftColor fg;
+            XftColor bg;
+        }* schemes_dyn;  // must be len of SchmLast
+        struct Cache {
+            u32 pm_w;  // to validate pm
+            u32 pm_h;
+            Pixmap pm;  // pixel buffer to update screen
+        } cache;
+    } dc;
+
+    struct Input {
+        Pair prev_c;
+        u32 holding_button;
+        u64 last_proc_drag_ev_us;
+        Bool is_holding;
+        Bool is_dragging;
+        Pair drag_from;
+
+        enum InputTag {
+            InputT_Interact,
+            InputT_Color,
+            InputT_Console,
+        } t;
+        union InputData {
+            struct InputColorData {
+                u32 current_digit;
+            } col;
+            struct InputConsoleData {
+                char* cmdarr;
+                char** compls_arr;
+                Bool compls_valid;
+                usize compls_curr;
+            } cl;
+        } d;
+    } input;
+
+    struct ToolCtx {
+        void (*on_press)(struct Ctx*, XButtonPressedEvent const*);
+        void (*on_release)(struct Ctx*, XButtonReleasedEvent const*);
+        void (*on_drag)(struct Ctx*, XMotionEvent const*);
+        void (*on_move)(struct Ctx*, XMotionEvent const*);
+        char* tool_name_dyn;
+
+        struct ToolSharedData {
+            argb* colarr;
+            u32 curr_col;
+            u32 prev_col;
+            u32 line_w;
+            Pair anchor;
+        } sdata;
+
+        enum ToolTag {
+            Tool_Selection,
+            Tool_Pencil,
+            Tool_Fill,
+            Tool_Picker,
+            Tool_Brush,
+            Tool_Figure,
+        } t;
+        union ToolData {
+            struct SelectionData {
+                // selection bounds
+                Pair begin, end;
+                // NIL if selection not dragging
+                Pair drag_from, drag_to;
+            } sel;
+            // Tool_Pencil | Tool_Brush
+            struct DrawerData {
+                draw_fn fn;
+            } drawer;
+        } d;
+    }* tcarr;
+    u32 curr_tc;
+
+    struct History {
+        XImage* im;
+    } *hist_prevarr, *hist_nextarr;
+
+    struct SelectionCircle {
+        Bool is_active;
+        i32 x;
+        i32 y;
+        u32 item_count;
+        struct Item {
+            void (*on_select)(struct Ctx*);
+            i32 hicon;  // I_*
+        }* items;
+    } sc;
+
+    struct SelectionBuffer {
+        XImage* im;
+    } sel_buf;
+
+    struct FileCtx {
+        char* path_dyn;
+    } finp, fout;
 };
 
 struct ClCommand {
@@ -179,133 +314,6 @@ struct ClCommand {
         } load;
     } d;
 };
-
-struct DrawCtx {
-    Display* dp;
-    XVisualInfo vinfo;
-    XIM xim;
-    XIC xic;
-    XRenderPictFormat* xrnd_pic_format;
-    GC gc;
-    GC screen_gc;
-    Window window;
-    u32 width;
-    u32 height;
-    XdbeBackBuffer back_buffer;  // double buffering
-    struct Canvas {
-        XImage* im;
-        enum ImageType type;
-        i32 zoom;  // 0 == no zoom
-        Pair scroll;
-    } cv;
-    struct Fnt {
-        XftFont* xfont;
-        u32 h;
-    } fnt;
-    struct Scheme {
-        XftColor fg;
-        XftColor bg;
-    }* schemes_dyn;  // must be len of SchmLast
-    Colormap colmap;
-    struct Cache {
-        u32 pm_w;  // to validate pm
-        u32 pm_h;
-        Pixmap pm;  // pixel buffer to update screen
-    } cache;
-    i32 png_compression_level;  // FIXME find better place
-    i32 jpg_quality_level;  // FIXME find better place
-};
-
-typedef void (*draw_fn)(struct DrawCtx*, Pair, u32, argb);
-
-struct Ctx {
-    struct DrawCtx dc;
-    struct Input {
-        Pair prev_c;
-        u32 holding_button;
-        u64 last_proc_drag_ev_us;
-        Bool is_holding;
-        Bool is_dragging;
-        Pair drag_from;
-        enum InputTag {
-            InputT_Interact,
-            InputT_Color,
-            InputT_Console,
-        } t;
-        union InputData {
-            struct InputColorData {
-                u32 current_digit;
-            } col;
-            struct InputConsoleData {
-                char* cmdarr;
-                char** compls_arr;
-                Bool compls_valid;
-                usize compls_curr;
-            } cl;
-        } d;
-    } input;
-    struct ToolCtx {
-        void (*on_press)(struct Ctx*, XButtonPressedEvent const*);
-        void (*on_release)(struct Ctx*, XButtonReleasedEvent const*);
-        void (*on_drag)(struct Ctx*, XMotionEvent const*);
-        void (*on_move)(struct Ctx*, XMotionEvent const*);
-        char* tool_name_dyn;
-        enum ToolTag {
-            Tool_Selection,
-            Tool_Pencil,
-            Tool_Fill,
-            Tool_Picker,
-            Tool_Brush,
-            Tool_Figure,
-        } t;
-        struct ToolSharedData {
-            argb* colarr;
-            u32 curr_col;
-            u32 prev_col;
-            u32 line_w;
-            Pair anchor;
-        } sdata;
-        union ToolData {
-            struct SelectionData {
-                // selection bounds
-                Pair begin, end;
-                // NIL if selection not dragging
-                Pair drag_from, drag_to;
-            } sel;
-            // Tool_Pencil | Tool_Brush
-            struct DrawerData {
-                draw_fn fn;
-            } drawer;
-        } d;
-    }* tcarr;
-    u32 curr_tc;
-    struct History {
-        XImage* im;
-    } *hist_prevarr, *hist_nextarr;
-    struct SelectionCircle {
-        Bool is_active;
-        i32 x;
-        i32 y;
-        u32 item_count;
-        struct Item {
-            void (*on_select)(struct Ctx*);
-            i32 hicon;  // I_*
-        }* items;
-    } sc;
-    struct SelectionBuffer {
-        XImage* im;
-    } sel_buf;
-    struct FileCtx {
-        char* path_dyn;
-    } finp, fout;
-};
-
-typedef u8 (*circle_get_alpha_fn)(
-    struct DrawCtx* dc,
-    struct ToolCtx* tc,
-    double circle_radius,
-    Pair p  // point relative circle center
-);
 
 typedef struct {
     enum {
@@ -414,17 +422,17 @@ static struct History history_clone(struct History const* hist);
 
 static void historyarr_clear(Display* dp, struct History** hist);
 
-static void canvas_fill(struct DrawCtx* dc, argb col);
-static void canvas_line(struct DrawCtx* dc, Pair from, Pair to, draw_fn draw, argb col, u32 line_w);
-static void canvas_circle(struct DrawCtx* dc, Pair c, u32 d, argb col, circle_get_alpha_fn get_a);
-static void canvas_brush(struct DrawCtx* dc, Pair c, u32 d, argb col);
-static void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col);
-static void canvas_copy_region(struct DrawCtx* dc, Pair from, Pair dims, Pair to, Bool clear_source);
-static void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col);
+static void canvas_draw_fn_brush(struct Ctx* ctx, Pair c);
+static void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c);
+static void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col);
+static void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw);
+static void canvas_circle(struct Ctx* ctx, Pair c, u32 d, argb col, circle_get_alpha_fn get_a);
+static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
+static void canvas_fill(struct Ctx* ctx, argb col);
 static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
 static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
-static void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height);
+static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 
 static u32 get_statusline_height(struct DrawCtx* dc);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
@@ -1265,14 +1273,14 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.fn = &canvas_brush;
+            new_tc.d.drawer.fn = &canvas_draw_fn_brush;
             new_tc.tool_name_dyn = str_new("brush");
             break;
         case Tool_Pencil:
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.fn = &canvas_fill_square;
+            new_tc.d.drawer.fn = &canvas_draw_fn_pencil;
             new_tc.tool_name_dyn = str_new("pencil");
             break;
         case Tool_Fill:
@@ -1356,7 +1364,7 @@ void tool_selection_on_release(
         };
         Pair area = {MIN(sd->begin.x, sd->end.x), MIN(sd->begin.y, sd->end.y)};
         canvas_copy_region(
-            dc,
+            ctx,
             area,
             (Pair
             ) {MAX(sd->begin.x, sd->end.x) - area.x,
@@ -1416,16 +1424,9 @@ void tool_drawer_on_release(
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (event->state & ShiftMask) {
-        canvas_line(
-            dc,
-            tc->sdata.anchor,
-            pointer,
-            tc->d.drawer.fn,
-            *tc_curr_col(tc),
-            tc->sdata.line_w
-        );
+        canvas_line(ctx, tc->sdata.anchor, pointer, tc->d.drawer.fn);
     } else {
-        tc->d.drawer.fn(dc, pointer, tc->sdata.line_w, *tc_curr_col(tc));
+        tc->d.drawer.fn(ctx, pointer);
     }
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
@@ -1438,33 +1439,21 @@ void tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_line(
-        dc,
-        tc->sdata.anchor,
-        pointer,
-        tc->d.drawer.fn,
-        *tc_curr_col(tc),
-        tc->sdata.line_w
-    );
+    canvas_line(ctx, tc->sdata.anchor, pointer, tc->d.drawer.fn);
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
 
-static u8 canvas_circle_pairs_get_a(
-    struct DrawCtx* dc,
-    struct ToolCtx* tc,
-    double r,
-    Pair p
-) {
+static u8 canvas_circle_pairs_get_a(struct Ctx* ctx, double r, Pair p) {
     return 0xFF;
 }
 
 static void
-canvas_circle_pairs(struct DrawCtx* dc, Pair c1, Pair c2, argb col, Bool fill) {
+canvas_circle_pairs(struct Ctx* ctx, Pair c1, Pair c2, argb col, Bool fill) {
     i32 const dx = c1.x - c2.x;
     i32 const dy = c1.y - c2.y;
     double const d = sqrt(dx * dx + dy * dy);
     canvas_circle(
-        dc,
+        ctx,
         (Pair) {(c1.x + c2.x) / 2, (c1.y + c2.y) / 2},
         (u32)d,
         col,
@@ -1484,7 +1473,7 @@ void tool_figure_on_release(
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     // FIXME make callback
-    canvas_circle_pairs(dc, pointer, tc->sdata.anchor, *tc_curr_col(tc), True);
+    canvas_circle_pairs(ctx, pointer, tc->sdata.anchor, *tc_curr_col(tc), True);
 }
 
 void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
@@ -1497,7 +1486,7 @@ void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     history_restore(ctx);
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     // FIXME make callback
-    canvas_circle_pairs(dc, pointer, tc->sdata.anchor, *tc_curr_col(tc), True);
+    canvas_circle_pairs(ctx, pointer, tc->sdata.anchor, *tc_curr_col(tc), True);
 }
 
 static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
@@ -1686,7 +1675,8 @@ static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
     return True;
 }
 
-void canvas_fill(struct DrawCtx* dc, argb col) {
+void canvas_fill(struct Ctx* ctx, argb col) {
+    struct DrawCtx* dc = &ctx->dc;
     assert(dc && dc->cv.im);
 
     for (i32 i = 0; i < dc->cv.im->width; ++i) {
@@ -1696,14 +1686,8 @@ void canvas_fill(struct DrawCtx* dc, argb col) {
     }
 }
 
-void canvas_line(
-    struct DrawCtx* dc,
-    Pair from,
-    Pair to,
-    draw_fn draw,
-    argb col,
-    u32 line_w
-) {
+void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
+    struct DrawCtx* dc = &ctx->dc;
     assert(dc->cv.im);
 
     i32 dx = abs(to.x - from.x);
@@ -1714,7 +1698,7 @@ void canvas_line(
 
     while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
            && from.y < dc->cv.im->height) {
-        draw(dc, from, line_w, col);
+        draw(ctx, from);
         if (from.x == to.x && from.y == to.y) {
             break;
         }
@@ -1741,12 +1725,13 @@ static double circle_ease(double v) {
 }
 
 void canvas_circle(
-    struct DrawCtx* dc,
+    struct Ctx* ctx,
     Pair c,
     u32 d,
     argb col,
     circle_get_alpha_fn get_a
 ) {
+    struct DrawCtx* dc = &ctx->dc;
     if (d == 1) {
         ximage_put_checked(dc->cv.im, c.x, c.y, col);
         return;
@@ -1765,40 +1750,48 @@ void canvas_circle(
                 continue;
             }
             argb const bg = XGetPixel(dc->cv.im, x, y);
-            // FIXME pass tc
             argb const blended =
-                blend_background(col, bg, get_a(dc, NULL, r, (Pair) {dx, dy}));
+                blend_background(col, bg, get_a(ctx, r, (Pair) {dx, dy}));
             XPutPixel(dc->cv.im, x, y, blended);
         }
     }
 }
 
-static u8
-canvas_brush_get_a(struct DrawCtx* dc, struct ToolCtx* tc, double r, Pair p) {
+static u8 canvas_brush_get_a(struct Ctx* ctx, double r, Pair p) {
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
     return (u32)((1.0 - circle_ease(curr_r / r)) * 0xFF);
 }
 
-void canvas_brush(struct DrawCtx* dc, Pair c, u32 d, argb col) {
-    canvas_circle(dc, c, d, col, &canvas_brush_get_a);
+void canvas_draw_fn_brush(struct Ctx* ctx, Pair c) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    canvas_circle(
+        ctx,
+        c,
+        tc->sdata.line_w,
+        *tc_curr_col(tc),
+        &canvas_brush_get_a
+    );
 }
 
-void canvas_fill_square(struct DrawCtx* dc, Pair c, u32 side, argb col) {
-    u32 const r = side / 2;
-    for (u32 i = 0; i < side; ++i) {
-        for (u32 j = 0; j < side; ++j) {
-            ximage_put_checked(dc->cv.im, c.x - r + i, c.y - r + j, col);
-        }
-    }
+void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    i32 const w = (i32)tc->sdata.line_w;
+    canvas_fill_rect(
+        ctx,
+        (Pair) {c.x - w / 2, c.y - w / 2},
+        (Pair) {w, w},
+        *tc_curr_col(tc)
+    );
 }
 
 void canvas_copy_region(
-    struct DrawCtx* dc,
+    struct Ctx* ctx,
     Pair from,
     Pair dims,
     Pair to,
     Bool clear_source
 ) {
+    struct DrawCtx* dc = &ctx->dc;
     i32 const w = dc->cv.im->width;
     i32 const h = dc->cv.im->height;
 
@@ -1831,7 +1824,8 @@ void canvas_copy_region(
     free(region_dyn);
 }
 
-void canvas_fill_rect(struct DrawCtx* dc, Pair c, Pair dims, argb col) {
+void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
+    struct DrawCtx* dc = &ctx->dc;
     for (u32 x = c.x; x < (c.x + dims.x); ++x) {
         for (u32 y = c.y; y < (c.y + dims.y); ++y) {
             ximage_put_checked(dc->cv.im, x, y, col);
@@ -2428,13 +2422,14 @@ void show_message_va(struct Ctx* ctx, char const* fmt, ...) {
     va_end(ap);
 }
 
-void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height) {
+void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     if (new_width <= 0 || new_height <= 0) {
         trace("resize_canvas: invalid canvas size");
         return;
     }
-    u32 old_width = dc->cv.im->width;
-    u32 old_height = dc->cv.im->height;
+    struct DrawCtx* dc = &ctx->dc;
+    u32 const old_width = dc->cv.im->width;
+    u32 const old_height = dc->cv.im->height;
 
     // FIXME can fill color be changed?
     XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
@@ -2444,7 +2439,7 @@ void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height) {
     // fill new area if needed
     if (old_width < new_width) {
         canvas_fill_rect(
-            dc,
+            ctx,
             (Pair) {(i32)old_width, 0},
             (Pair) {(i32)(new_width - old_width), new_height},
             CANVAS.background_argb
@@ -2452,7 +2447,7 @@ void canvas_resize(struct DrawCtx* dc, i32 new_width, i32 new_height) {
     }
     if (old_height < new_height) {
         canvas_fill_rect(
-            dc,
+            ctx,
             (Pair) {0, (i32)old_height},
             (Pair) {new_width, (i32)(new_height - old_height)},
             CANVAS.background_argb
@@ -2698,7 +2693,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             );
             XFreePixmap(dp, data);
             // initial canvas color
-            canvas_fill(&ctx->dc, CANVAS.background_argb);
+            canvas_fill(ctx, CANVAS.background_argb);
         }
 
         ctx->dc.width = CLAMP(
@@ -2916,7 +2911,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             if (BETWEEN(key_sym, XK_Left, XK_Down) && e.state & ControlMask) {
                 u32 const value = e.state & ShiftMask ? 25 : 5;
                 canvas_resize(
-                    &ctx->dc,
+                    ctx,
                     (i32)(ctx->dc.cv.im->width
                           + (key_sym == XK_Left        ? -value
                                  : key_sym == XK_Right ? value

@@ -14,6 +14,8 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef size_t usize;
 
+typedef u32 argb;
+
 typedef struct {
     i32 x;
     i32 y;
