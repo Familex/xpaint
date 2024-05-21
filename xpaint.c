@@ -44,6 +44,7 @@ INCBIN(u8, pic_tool_pencil, "res/tool-pencil.png");
 INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
 INCBIN(u8, pic_tool_select, "res/tool-select.png");
 INCBIN(u8, pic_tool_brush, "res/tool-brush.png");
+INCBIN(u8, pic_tool_figure, "res/tool-figure.png");
 INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
@@ -618,6 +619,7 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_Fill: return (D) {pic_tool_fill_data, RES_SZ_TOOL_FILL};
         case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
         case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
+        case I_Figure: return (D) {pic_tool_figure_data, RES_SZ_TOOL_FIGURE};
         default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
     }
 }
