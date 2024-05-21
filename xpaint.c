@@ -226,6 +226,12 @@ struct Ctx {
             struct DrawerData {
                 draw_fn fn;
             } drawer;
+            struct FigureData {
+                enum FigureType {
+                    Figure_Circle,
+                    Figure_Rectangle,
+                } curr;
+            } fig;
         } d;
     }* tcarr;
     u32 curr_tc;
@@ -393,9 +399,9 @@ static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
 static void cl_pop(struct InputConsoleData* cl);
 
-static void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y);
-static void free_sel_circ(struct SelectionCircle* sel_circ);
-static i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y);
+static void sel_circ_init(struct Ctx* ctx, i32 x, i32 y);
+static void sel_circ_free(struct SelectionCircle* sel_circ);
+static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
 
 // separate functions, because they are callbacks
 static void tool_ctx_free(struct ToolCtx* tc);
@@ -425,6 +431,7 @@ static void historyarr_clear(Display* dp, struct History** hist);
 
 static void canvas_draw_fn_brush(struct Ctx* ctx, Pair c);
 static void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c);
+static void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2);
 static void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col);
 static void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw);
 static void canvas_circle(struct Ctx* ctx, Pair c, u32 d, argb col, circle_get_alpha_fn get_a);
@@ -1445,24 +1452,6 @@ void tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
 
-static u8 canvas_circle_pairs_get_a(struct Ctx* ctx, double r, Pair p) {
-    return 0xFF;
-}
-
-static void
-canvas_circle_pairs(struct Ctx* ctx, Pair c1, Pair c2, argb col, Bool fill) {
-    i32 const dx = c1.x - c2.x;
-    i32 const dy = c1.y - c2.y;
-    double const d = sqrt(dx * dx + dy * dy);
-    canvas_circle(
-        ctx,
-        (Pair) {(c1.x + c2.x) / 2, (c1.y + c2.y) / 2},
-        (u32)d,
-        col,
-        &canvas_circle_pairs_get_a
-    );
-}
-
 void tool_figure_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
@@ -1474,8 +1463,7 @@ void tool_figure_on_release(
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    // FIXME make callback
-    canvas_circle_pairs(ctx, pointer, tc->sdata.anchor, *tc_curr_col(tc), True);
+    canvas_figure(ctx, pointer, tc->sdata.anchor);
 }
 
 void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
@@ -1487,8 +1475,7 @@ void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     history_restore(ctx);
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    // FIXME make callback
-    canvas_circle_pairs(ctx, pointer, tc->sdata.anchor, *tc_curr_col(tc), True);
+    canvas_figure(ctx, pointer, tc->sdata.anchor);
 }
 
 static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
@@ -1623,26 +1610,45 @@ static void sel_circ_set_tool_fill(struct Ctx* ctx) { set_current_tool(&CURR_TC(
 static void sel_circ_set_tool_picker(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Picker); }
 static void sel_circ_set_tool_brush(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Brush); }
 static void sel_circ_set_tool_figure(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Figure); }
+static void sel_circ_figure_set_circle(struct Ctx* ctx) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    assert(tc->t == Tool_Figure);
+    tc->d.fig.curr = Figure_Circle;
+}
+static void sel_circ_figure_set_rectangle(struct Ctx* ctx) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    assert(tc->t == Tool_Figure);
+    tc->d.fig.curr = Figure_Rectangle;
+}
 // clang-format on
 
-void init_sel_circ_tools(struct SelectionCircle* sc, i32 x, i32 y) {
-    static struct Item tools[] = {
-        {.on_select = &sel_circ_set_tool_selection, .hicon = I_Select},
-        {.on_select = &sel_circ_set_tool_pencil, .hicon = I_Pencil},
-        {.on_select = &sel_circ_set_tool_fill, .hicon = I_Fill},
-        {.on_select = &sel_circ_set_tool_picker, .hicon = I_Picker},
-        {.on_select = &sel_circ_set_tool_brush, .hicon = I_Brush},
-        {.on_select = &sel_circ_set_tool_figure, .hicon = I_Figure},
-    };
-
-    sc->is_active = True;
-    sc->x = x;
-    sc->y = y;
-    sc->item_count = LENGTH(tools);
-    sc->items = tools;
+void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
+    if (CURR_TC(ctx).t == Tool_Figure) {
+        static struct Item callbacks[] = {
+            {.on_select = &sel_circ_figure_set_circle, .hicon = I_Figure},
+            {.on_select = &sel_circ_figure_set_rectangle, .hicon = I_Figure},
+            {.on_select = &sel_circ_set_tool_pencil, .hicon = I_Pencil},
+        };
+        ctx->sc.items = callbacks;
+        ctx->sc.item_count = LENGTH(callbacks);
+    } else {
+        static struct Item callbacks[] = {
+            {.on_select = &sel_circ_set_tool_selection, .hicon = I_Select},
+            {.on_select = &sel_circ_set_tool_pencil, .hicon = I_Pencil},
+            {.on_select = &sel_circ_set_tool_fill, .hicon = I_Fill},
+            {.on_select = &sel_circ_set_tool_picker, .hicon = I_Picker},
+            {.on_select = &sel_circ_set_tool_brush, .hicon = I_Brush},
+            {.on_select = &sel_circ_set_tool_figure, .hicon = I_Figure},
+        };
+        ctx->sc.items = callbacks;
+        ctx->sc.item_count = LENGTH(callbacks);
+    }
+    ctx->sc.x = x;
+    ctx->sc.y = y;
+    ctx->sc.is_active = True;
 }
 
-i32 current_sel_circ_item(struct SelectionCircle const* sc, i32 x, i32 y) {
+i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     i32 const pointer_x_rel = x - sc->x;
     i32 const pointer_y_rel = y - sc->y;
     if (pointer_x_rel == 0 && pointer_y_rel == 0) {
@@ -1786,6 +1792,46 @@ void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c) {
     );
 }
 
+static u8 canvas_figure_circle_get_a_fill(struct Ctx* ctx, double r, Pair p) {
+    return 0xFF;
+}
+
+static u8 canvas_figure_circle_get_a(struct Ctx* ctx, double r, Pair p) {
+    double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
+    // FIXME fixed border width (same as line_w)
+    return ((curr_r / r) > 0.9) * 0xFF;
+}
+
+void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    if (tc->t != Tool_Figure) {
+        return;
+    }
+    argb const col = *tc_curr_col(tc);
+    Bool const fill = True;  // FIXME configure
+    i32 const dx = p1.x - p2.x;
+    i32 const dy = p1.y - p2.y;
+
+    switch (tc->d.fig.curr) {
+        case Figure_Circle: {
+            double const d = sqrt(dx * dx + dy * dy);
+            canvas_circle(
+                ctx,
+                (Pair) {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2},
+                (u32)d,
+                col,
+                fill ? &canvas_figure_circle_get_a_fill
+                     : &canvas_figure_circle_get_a
+            );
+        } break;
+        case Figure_Rectangle:
+            if (fill) {
+                canvas_fill_rect(ctx, p2, (Pair) {dx, dy}, col);
+            }
+            break;
+    }
+}
+
 void canvas_copy_region(
     struct Ctx* ctx,
     Pair from,
@@ -1828,8 +1874,11 @@ void canvas_copy_region(
 
 void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
     struct DrawCtx* dc = &ctx->dc;
-    for (u32 x = c.x; x < (c.x + dims.x); ++x) {
-        for (u32 y = c.y; y < (c.y + dims.y); ++y) {
+    Bool const nx = dims.x < 0;
+    Bool const ny = dims.y < 0;
+    for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
+        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
+             ++y) {
             ximage_put_checked(dc->cv.im, x, y, col);
         }
     }
@@ -1928,8 +1977,7 @@ void draw_selection_circle(
         }
 
         // selected item fill
-        i32 const current_item =
-            current_sel_circ_item(sc, pointer_x, pointer_y);
+        i32 const current_item = sel_circ_curr_item(sc, pointer_x, pointer_y);
         if (current_item != NIL) {
             XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmFocus));
             XFillArc(
@@ -2457,7 +2505,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     }
 }
 
-void free_sel_circ(struct SelectionCircle* sel_circ) {
+void sel_circ_free(struct SelectionCircle* sel_circ) {
     sel_circ->is_active = False;
 }
 
@@ -2730,7 +2778,7 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_screen(ctx);
     }
     if (e->button == XRightMouseBtn) {
-        init_sel_circ_tools(&ctx->sc, e->x, e->y);
+        sel_circ_init(ctx, e->x, e->y);
         draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
 
@@ -2743,11 +2791,11 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     if (e->button == XRightMouseBtn) {
-        i32 const selected_item = current_sel_circ_item(&ctx->sc, e->x, e->y);
+        i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
             ctx->sc.items[selected_item].on_select(ctx);
         }
-        free_sel_circ(&ctx->sc);
+        sel_circ_free(&ctx->sc);
         update_screen(ctx);
         ctx->input.is_holding = False;
         ctx->input.is_dragging = False;
