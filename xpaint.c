@@ -197,7 +197,6 @@ struct Ctx {
         void (*on_release)(struct Ctx*, XButtonReleasedEvent const*);
         void (*on_drag)(struct Ctx*, XMotionEvent const*);
         void (*on_move)(struct Ctx*, XMotionEvent const*);
-        char* tool_name_dyn;
 
         struct ToolSharedData {
             argb* colarr;
@@ -367,6 +366,7 @@ static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 static struct IconData get_icon_data(enum Icon icon);
 static void tc_set_curr_col_num(struct ToolCtx* tc, u32 value);
 static argb* tc_curr_col(struct ToolCtx* tc);
+static char const* tc_get_tool_name(struct ToolCtx* tc);
 
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
@@ -640,6 +640,22 @@ argb* tc_curr_col(struct ToolCtx* tc) {
     return &tc->sdata.colarr[tc->sdata.curr_col];
 }
 
+char const* tc_get_tool_name(struct ToolCtx* tc) {
+    switch (tc->t) {
+        case Tool_Selection: return "select ";
+        case Tool_Pencil: return "pencil ";
+        case Tool_Fill: return "fill   ";
+        case Tool_Picker: return "picker ";
+        case Tool_Brush: return "brush  ";
+        case Tool_Figure:
+            switch (tc->d.fig.curr) {
+                case Figure_Circle: return "fig:cir";
+                case Figure_Rectangle: return "fig:rct";
+            }
+    }
+    UNREACHABLE();
+}
+
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
@@ -670,7 +686,6 @@ void file_ctx_free(struct FileCtx* file_ctx) {
 
 void tool_ctx_free(struct ToolCtx* tc) {
     arrfree(tc->sdata.colarr);
-    str_free(&tc->tool_name_dyn);
 }
 
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
@@ -1270,7 +1285,6 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_press = &tool_selection_on_press;
             new_tc.on_release = &tool_selection_on_release;
             new_tc.on_drag = &tool_selection_on_drag;
-            new_tc.tool_name_dyn = str_new("selection");
             new_tc.d.sel = (struct SelectionData) {
                 .begin = PNIL,
                 .end = PNIL,
@@ -1283,28 +1297,19 @@ static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
             new_tc.d.drawer.fn = &canvas_draw_fn_brush;
-            new_tc.tool_name_dyn = str_new("brush");
             break;
         case Tool_Pencil:
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
             new_tc.d.drawer.fn = &canvas_draw_fn_pencil;
-            new_tc.tool_name_dyn = str_new("pencil");
             break;
-        case Tool_Fill:
-            new_tc.on_release = &tool_fill_on_release;
-            new_tc.tool_name_dyn = str_new("fill");
-            break;
-        case Tool_Picker:
-            new_tc.on_release = &tool_picker_on_release;
-            new_tc.tool_name_dyn = str_new("color picker");
-            break;
+        case Tool_Fill: new_tc.on_release = &tool_fill_on_release; break;
+        case Tool_Picker: new_tc.on_release = &tool_picker_on_release; break;
         case Tool_Figure:
             new_tc.on_press = &tool_drawer_on_press;  // same behavior
             new_tc.on_release = &tool_figure_on_release;
             new_tc.on_drag = &tool_figure_on_drag;
-            new_tc.tool_name_dyn = str_new("figure");
             break;
     }
     tool_ctx_free(tc);
@@ -2325,11 +2330,9 @@ void update_statusline(struct Ctx* ctx) {
             tcs_w += gap;
         }
         u32 const col_name_w = get_string_width(dc, "#FFFFFF", 7) + gap;
-        // FIXME how many symbols?
-        u32 const input_state_w =
-            get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
-        u32 const tool_name_w =
-            get_string_width(dc, "FFFFFFFFFFFFFF", 14) + gap;
+        // fixed length
+        u32 const input_state_w = get_string_width(dc, "FFF", 3) + gap;
+        u32 const tool_name_w = get_string_width(dc, "FFFFFFF", 7) + gap;
         // left **bottom** corners of captions
         Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE.padding_bottom)};
         Pair const input_state_c = {(i32)(tcs_c.x + tcs_w), tcs_c.y};
@@ -2365,22 +2368,16 @@ void update_statusline(struct Ctx* ctx) {
         /* input state */ {
             draw_string(
                 dc,
-                ctx->input.t == InputT_Interact      ? "intearct"
-                    : ctx->input.t == InputT_Color   ? "color"
-                    : ctx->input.t == InputT_Console ? "console"
-                                                     : "unknown",
+                ctx->input.t == InputT_Interact      ? "INT"
+                    : ctx->input.t == InputT_Color   ? "COL"
+                    : ctx->input.t == InputT_Console ? "CMD"
+                                                     : "???",
                 input_state_c,
                 SchmNorm,
                 False
             );
         }
-        draw_string(
-            dc,
-            tc->tool_name_dyn ? tc->tool_name_dyn : "N/A",
-            tool_name_c,
-            SchmNorm,
-            False
-        );
+        draw_string(dc, tc_get_tool_name(tc), tool_name_c, SchmNorm, False);
         draw_int(dc, (i32)tc->sdata.line_w, line_w_c, SchmNorm, False);
         /* color */ {
             char col_value[col_value_size + 1];
