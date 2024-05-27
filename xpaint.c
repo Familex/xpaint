@@ -230,6 +230,7 @@ struct Ctx {
                     Figure_Circle,
                     Figure_Rectangle,
                 } curr;
+                Bool fill;
             } fig;
         } d;
     }* tcarr;
@@ -433,6 +434,7 @@ static void canvas_draw_fn_brush(struct Ctx* ctx, Pair c);
 static void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c);
 static void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2);
 static void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col);
+static void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w);
 static void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw);
 static void canvas_circle(struct Ctx* ctx, Pair c, u32 d, argb col, circle_get_alpha_fn get_a);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
@@ -1615,6 +1617,7 @@ static void sel_circ_set_tool_fill(struct Ctx* ctx) { set_current_tool(&CURR_TC(
 static void sel_circ_set_tool_picker(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Picker); }
 static void sel_circ_set_tool_brush(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Brush); }
 static void sel_circ_set_tool_figure(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Figure); }
+static void sel_circ_figure_toggle_fill(struct Ctx* ctx) { CURR_TC(ctx).d.fig.fill ^= 1; }
 static void sel_circ_figure_set_circle(struct Ctx* ctx) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     assert(tc->t == Tool_Figure);
@@ -1632,6 +1635,7 @@ void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
         static struct Item callbacks[] = {
             {.on_select = &sel_circ_figure_set_circle, .icon = I_Figure},
             {.on_select = &sel_circ_figure_set_rectangle, .icon = I_Figure},
+            {.on_select = &sel_circ_figure_toggle_fill, .icon = I_Fill},
             {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
         };
         ctx->sc.items = callbacks;
@@ -1812,12 +1816,12 @@ void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
     if (tc->t != Tool_Figure) {
         return;
     }
+    struct FigureData const* fig = &tc->d.fig;
     argb const col = *tc_curr_col(tc);
-    Bool const fill = True;  // FIXME configure
     i32 const dx = p1.x - p2.x;
     i32 const dy = p1.y - p2.y;
 
-    switch (tc->d.fig.curr) {
+    switch (fig->curr) {
         case Figure_Circle: {
             double const d = sqrt(dx * dx + dy * dy);
             canvas_circle(
@@ -1825,13 +1829,15 @@ void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
                 (Pair) {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2},
                 (u32)d,
                 col,
-                fill ? &canvas_figure_circle_get_a_fill
-                     : &canvas_figure_circle_get_a
+                fig->fill ? &canvas_figure_circle_get_a_fill
+                          : &canvas_figure_circle_get_a
             );
         } break;
         case Figure_Rectangle:
-            if (fill) {
+            if (fig->fill) {
                 canvas_fill_rect(ctx, p2, (Pair) {dx, dy}, col);
+            } else {
+                canvas_rect(ctx, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
             }
             break;
     }
@@ -1886,6 +1892,20 @@ void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
              ++y) {
             ximage_put_checked(dc->cv.im, x, y, col);
         }
+    }
+}
+
+void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
+    Pair const cap = (Pair) {dims.x < 0 ? (i32)w : 0, dims.y < 0 ? (i32)w : 0};
+    Pair const c1 = (Pair) {c.x - cap.x, c.y - cap.y};
+    Pair const c2 = (Pair) {c.x + dims.x + cap.x, c.y + dims.y + cap.y};
+    canvas_fill_rect(ctx, c1, (Pair) {dims.x + cap.x, (i32)w}, col);
+    canvas_fill_rect(ctx, c1, (Pair) {(i32)w, dims.y + cap.y}, col);
+    canvas_fill_rect(ctx, c2, (Pair) {-dims.x - cap.x, -(i32)w}, col);
+    canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -dims.y - cap.y}, col);
+    if (dims.x < 0 && dims.y < 0) {
+        canvas_fill_rect(ctx, c1, (Pair) {(i32)w, (i32)w}, col);
+        canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -(i32)w}, col);
     }
 }
 
