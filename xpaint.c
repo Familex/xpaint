@@ -247,7 +247,7 @@ struct Ctx {
         u32 item_count;
         struct Item {
             void (*on_select)(struct Ctx*);
-            i32 hicon;  // I_*
+            enum Icon icon;
         }* items;
     } sc;
 
@@ -1625,20 +1625,20 @@ static void sel_circ_figure_set_rectangle(struct Ctx* ctx) {
 void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
     if (CURR_TC(ctx).t == Tool_Figure) {
         static struct Item callbacks[] = {
-            {.on_select = &sel_circ_figure_set_circle, .hicon = I_Figure},
-            {.on_select = &sel_circ_figure_set_rectangle, .hicon = I_Figure},
-            {.on_select = &sel_circ_set_tool_pencil, .hicon = I_Pencil},
+            {.on_select = &sel_circ_figure_set_circle, .icon = I_Figure},
+            {.on_select = &sel_circ_figure_set_rectangle, .icon = I_Figure},
+            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
         };
         ctx->sc.items = callbacks;
         ctx->sc.item_count = LENGTH(callbacks);
     } else {
         static struct Item callbacks[] = {
-            {.on_select = &sel_circ_set_tool_selection, .hicon = I_Select},
-            {.on_select = &sel_circ_set_tool_pencil, .hicon = I_Pencil},
-            {.on_select = &sel_circ_set_tool_fill, .hicon = I_Fill},
-            {.on_select = &sel_circ_set_tool_picker, .hicon = I_Picker},
-            {.on_select = &sel_circ_set_tool_brush, .hicon = I_Brush},
-            {.on_select = &sel_circ_set_tool_figure, .hicon = I_Figure},
+            {.on_select = &sel_circ_set_tool_selection, .icon = I_Select},
+            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
+            {.on_select = &sel_circ_set_tool_fill, .icon = I_Fill},
+            {.on_select = &sel_circ_set_tool_picker, .icon = I_Picker},
+            {.on_select = &sel_circ_set_tool_brush, .icon = I_Brush},
+            {.on_select = &sel_circ_set_tool_figure, .icon = I_Figure},
         };
         ctx->sc.items = callbacks;
         ctx->sc.item_count = LENGTH(callbacks);
@@ -1953,7 +1953,7 @@ void draw_selection_circle(
 
         // item images
         for (u32 item = 0; item < sc->item_count; ++item) {
-            XImage* image = images[sc->items[item].hicon];
+            XImage* image = images[sc->items[item].icon];
             assert(image != NULL);
 
             XPutImage(
