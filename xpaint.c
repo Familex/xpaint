@@ -359,15 +359,20 @@ static void trace(char const* fmt, ...);
 static void* ecalloc(u32 n, u32 size);
 static u32 digit_count(u32 number);
 static void arrpoputf8(char const* strarr);
+static usize first_dismatch(char const* restrict s1, char const* restrict s2);
+static struct IconData get_icon_data(enum Icon icon);
+static double brush_ease(double v);
+
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
 static char* str_new_va(char const* fmt, va_list args);
 static void str_free(char** str_dyn);
-static usize first_dismatch(char const* restrict s1, char const* restrict s2);
-static struct IconData get_icon_data(enum Icon icon);
+
 static void tc_set_curr_col_num(struct ToolCtx* tc, u32 value);
 static argb* tc_curr_col(struct ToolCtx* tc);
-static char const* tc_get_tool_name(struct ToolCtx* tc);
+static void tc_set_tool(struct ToolCtx* tc, enum ToolTag type);
+static char const* tc_get_tool_name(struct ToolCtx const* tc);
+static void tc_free(struct ToolCtx* tc);
 
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
@@ -380,11 +385,12 @@ static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
+static enum ImageType file_type(char const* file_path);
+static u8* ximage_to_rgb(XImage const* image, Bool rgba);
+static argb blend_background(argb fg, argb bg, u32 a);
 static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
-static enum ImageType file_type(char const* file_path);
-static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
@@ -400,14 +406,11 @@ static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
 static void cl_pop(struct InputConsoleData* cl);
 
+static void input_state_set(struct Input* input, enum InputTag is);
+
 static void sel_circ_init(struct Ctx* ctx, i32 x, i32 y);
 static void sel_circ_free(struct SelectionCircle* sel_circ);
 static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
-
-// separate functions, because they are callbacks
-static void tool_ctx_free(struct ToolCtx* tc);
-
-static void input_state_set(struct Input* input, enum InputTag is);
 
 // separate functions, because they are callbacks
 static void tool_selection_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
@@ -427,9 +430,9 @@ static void history_forward(struct Ctx* ctx);
 static void history_apply(struct Ctx* ctx, struct History* hist);
 static Bool history_restore(struct Ctx* ctx);
 static struct History history_clone(struct History const* hist);
-
 static void historyarr_clear(Display* dp, struct History** hist);
 
+static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static void canvas_draw_fn_brush(struct Ctx* ctx, Pair c);
 static void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c);
 static void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2);
@@ -444,7 +447,14 @@ static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 
-static u32 get_statusline_height(struct DrawCtx* dc);
+static u32 get_statusline_height(struct DrawCtx const* dc);
+static void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert);
+static void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert);
+static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col);
+static int draw_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col, u32 line_w, i32 line_st, i32 cap_st, i32 join_st);
+static int draw_line(struct DrawCtx* dc, Pair from, Pair to, enum Schm sc, Bool invert);
+static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
+static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
@@ -466,13 +476,14 @@ static Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event);
 static Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event);
 static Bool client_message_hdlr(struct Ctx* ctx, XEvent* event);
 static void cleanup(struct Ctx* ctx);
-
-static void main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos);
 // clang-format on
 
 static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
 static XImage* images[I_Last];
+
+static void
+main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos);
 
 i32 main(i32 argc, char** argv) {
     Display* display = XOpenDisplay(NULL);
@@ -540,6 +551,17 @@ i32 main(i32 argc, char** argv) {
     return EXIT_SUCCESS;
 }
 
+void main_arg_bound_check(
+    char const* cmd_name,
+    i32 argc,
+    char** argv,
+    u32 pos
+) {
+    if (pos + 1 == argc || argv[pos + 1][0] == '-') {
+        die("xpaint: supply argument for %s", cmd_name);
+    }
+}
+
 void die(char const* errstr, ...) {
     va_list ap;
 
@@ -586,6 +608,32 @@ void arrpoputf8(char const* strarr) {
     }
 }
 
+usize first_dismatch(char const* restrict s1, char const* restrict s2) {
+    if (!s1 || !s2) {
+        return 0;
+    }
+    usize offset = 0;
+    for (; s1[offset] && s1[offset] == s2[offset]; ++offset) {};
+    return offset;
+}
+
+struct IconData get_icon_data(enum Icon icon) {
+    typedef struct IconData D;
+    switch (icon) {
+        case I_Select: return (D) {pic_tool_select_data, RES_SZ_TOOL_SELECT};
+        case I_Pencil: return (D) {pic_tool_pencil_data, RES_SZ_TOOL_PENCIL};
+        case I_Fill: return (D) {pic_tool_fill_data, RES_SZ_TOOL_FILL};
+        case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
+        case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
+        case I_Figure: return (D) {pic_tool_figure_data, RES_SZ_TOOL_FIGURE};
+        default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
+    }
+}
+
+double brush_ease(double v) {
+    return (v == 1.0) ? v : 1 - pow(2, -10 * v);
+}
+
 char* str_new(char const* fmt, ...) {
     va_list ap1;
     va_start(ap1, fmt);
@@ -611,28 +659,6 @@ void str_free(char** str_dyn) {
     }
 }
 
-usize first_dismatch(char const* restrict s1, char const* restrict s2) {
-    if (!s1 || !s2) {
-        return 0;
-    }
-    usize offset = 0;
-    for (; s1[offset] && s1[offset] == s2[offset]; ++offset) {};
-    return offset;
-}
-
-struct IconData get_icon_data(enum Icon icon) {
-    typedef struct IconData D;
-    switch (icon) {
-        case I_Select: return (D) {pic_tool_select_data, RES_SZ_TOOL_SELECT};
-        case I_Pencil: return (D) {pic_tool_pencil_data, RES_SZ_TOOL_PENCIL};
-        case I_Fill: return (D) {pic_tool_fill_data, RES_SZ_TOOL_FILL};
-        case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
-        case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
-        case I_Figure: return (D) {pic_tool_figure_data, RES_SZ_TOOL_FIGURE};
-        default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
-    }
-}
-
 void tc_set_curr_col_num(struct ToolCtx* tc, u32 value) {
     tc->sdata.prev_col = tc->sdata.curr_col;
     tc->sdata.curr_col = value;
@@ -642,7 +668,49 @@ argb* tc_curr_col(struct ToolCtx* tc) {
     return &tc->sdata.colarr[tc->sdata.curr_col];
 }
 
-char const* tc_get_tool_name(struct ToolCtx* tc) {
+void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
+    struct ToolCtx new_tc = {
+        .t = type,
+        .sdata = tc->sdata,
+    };
+    tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
+    switch (type) {
+        case Tool_Selection:
+            new_tc.on_press = &tool_selection_on_press;
+            new_tc.on_release = &tool_selection_on_release;
+            new_tc.on_drag = &tool_selection_on_drag;
+            new_tc.d.sel = (struct SelectionData) {
+                .begin = PNIL,
+                .end = PNIL,
+                .drag_from = PNIL,
+                .drag_to = PNIL,
+            };
+            break;
+        case Tool_Brush:
+            new_tc.on_press = &tool_drawer_on_press;
+            new_tc.on_release = &tool_drawer_on_release;
+            new_tc.on_drag = &tool_drawer_on_drag;
+            new_tc.d.drawer.fn = &canvas_draw_fn_brush;
+            break;
+        case Tool_Pencil:
+            new_tc.on_press = &tool_drawer_on_press;
+            new_tc.on_release = &tool_drawer_on_release;
+            new_tc.on_drag = &tool_drawer_on_drag;
+            new_tc.d.drawer.fn = &canvas_draw_fn_pencil;
+            break;
+        case Tool_Fill: new_tc.on_release = &tool_fill_on_release; break;
+        case Tool_Picker: new_tc.on_release = &tool_picker_on_release; break;
+        case Tool_Figure:
+            new_tc.on_press = &tool_drawer_on_press;  // same behavior
+            new_tc.on_release = &tool_figure_on_release;
+            new_tc.on_drag = &tool_figure_on_drag;
+            break;
+    }
+    tc_free(tc);
+    *tc = new_tc;
+}
+
+char const* tc_get_tool_name(struct ToolCtx const* tc) {
     switch (tc->t) {
         case Tool_Selection: return "select ";
         case Tool_Pencil: return "pencil ";
@@ -656,6 +724,10 @@ char const* tc_get_tool_name(struct ToolCtx* tc) {
             }
     }
     UNREACHABLE();
+}
+
+void tc_free(struct ToolCtx* tc) {
+    arrfree(tc->sdata.colarr);
 }
 
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
@@ -686,10 +758,6 @@ void file_ctx_free(struct FileCtx* file_ctx) {
     str_free(&file_ctx->path_dyn);
 }
 
-void tool_ctx_free(struct ToolCtx* tc) {
-    arrfree(tc->sdata.colarr);
-}
-
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
     return point_from_cv_to_scr_xy(dc, p.x, p.y);
 }
@@ -717,15 +785,61 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-static u32 argb_to_abgr(argb v) {
-    u32 const a = v & 0xFF000000;
-    u8 const red = (v & 0x00FF0000) >> (2 * 8);
-    u32 const g = v & 0x0000FF00;
-    u8 const blue = v & 0x000000FF;
-    return a | blue << (2 * 8) | g | red;
+enum ImageType file_type(char const* file_path) {
+    if (!file_path) {
+        return IMT_Unknown;
+    }
+    static u32 const HEADER_SIZE = 8;  // read extra symbols for simplicity
+    u8 h[HEADER_SIZE];
+    enum ImageType result = IMT_Unknown;
+
+    FILE* file = fopen(file_path, "r");
+    if (!file) {
+        return IMT_Unknown;
+    }
+    // on file read error just fail on header check
+    fread(h, sizeof(u8), HEADER_SIZE, file);
+
+    // jpeg SOI marker and another marker begin
+    if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) {
+        result = IMT_Jpg;
+    } else
+        // png header
+        if (h[0] == 0x89 && h[1] == 0x50 && h[2] == 0x4E && h[3] == 0x47
+            && h[4] == 0x0D && h[5] == 0x0A && h[6] == 0x1A && h[7] == 0x0A) {
+            result = IMT_Png;
+        }
+
+    fclose(file);
+    return result;
 }
 
-static argb blend_background(argb fg, argb bg, u32 a) {
+u8* ximage_to_rgb(XImage const* image, Bool rgba) {
+    u32 w = image->width;
+    u32 h = image->height;
+    usize pixel_size = rgba ? 4 : 3;
+    usize data_size = (size_t)w * h * pixel_size;
+    u8* data = (u8*)ecalloc(1, data_size);
+    if (data == NULL) {
+        return NULL;
+    }
+    i32 ii = 0;
+    for (i32 y = 0; y < h; ++y) {
+        for (i32 x = 0; x < w; ++x) {
+            u64 pixel = XGetPixel((XImage*)image, x, y);
+            data[ii + 0] = (pixel & 0xFF0000) >> 16U;
+            data[ii + 1] = (pixel & 0xFF00) >> 8U;
+            data[ii + 2] = (pixel & 0xFF);
+            if (rgba) {
+                data[ii + 3] = (pixel & 0xFF000000) >> 24U;
+            }
+            ii += (i32)pixel_size;
+        }
+    }
+    return data;
+}
+
+argb blend_background(argb fg, argb bg, u32 a) {
     u32 const fgr = (fg >> 16) & 0xFF;
     u32 const fgg = (fg >> 8) & 0xFF;
     u32 const fgb = fg & 0xFF;
@@ -742,6 +856,14 @@ static argb blend_background(argb fg, argb bg, u32 a) {
     u32 const blue = (alpha * fgb + inv_alpha * bgb) >> 8;
 
     return 0xFF << 24 | red << 16 | green << 8 | blue;
+}
+
+static u32 argb_to_abgr(argb v) {
+    u32 const a = v & 0xFF000000;
+    u8 const red = (v & 0x00FF0000) >> (2 * 8);
+    u32 const g = v & 0x0000FF00;
+    u8 const blue = v & 0x000000FF;
+    return a | blue << (2 * 8) | g | red;
 }
 
 static XImage* read_file_from_memory(
@@ -818,60 +940,6 @@ Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
     }
     free(rgba_dyn);
     return result;
-}
-
-enum ImageType file_type(char const* file_path) {
-    if (!file_path) {
-        return IMT_Unknown;
-    }
-    static u32 const HEADER_SIZE = 8;  // read extra symbols for simplicity
-    u8 h[HEADER_SIZE];
-    enum ImageType result = IMT_Unknown;
-
-    FILE* file = fopen(file_path, "r");
-    if (!file) {
-        return IMT_Unknown;
-    }
-    // on file read error just fail on header check
-    fread(h, sizeof(u8), HEADER_SIZE, file);
-
-    // jpeg SOI marker and another marker begin
-    if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) {
-        result = IMT_Jpg;
-    } else
-        // png header
-        if (h[0] == 0x89 && h[1] == 0x50 && h[2] == 0x4E && h[3] == 0x47
-            && h[4] == 0x0D && h[5] == 0x0A && h[6] == 0x1A && h[7] == 0x0A) {
-            result = IMT_Png;
-        }
-
-    fclose(file);
-    return result;
-}
-
-u8* ximage_to_rgb(XImage const* image, Bool rgba) {
-    u32 w = image->width;
-    u32 h = image->height;
-    usize pixel_size = rgba ? 4 : 3;
-    usize data_size = (size_t)w * h * pixel_size;
-    u8* data = (u8*)ecalloc(1, data_size);
-    if (data == NULL) {
-        return NULL;
-    }
-    i32 ii = 0;
-    for (i32 y = 0; y < h; ++y) {
-        for (i32 x = 0; x < w; ++x) {
-            u64 pixel = XGetPixel((XImage*)image, x, y);
-            data[ii + 0] = (pixel & 0xFF0000) >> 16U;
-            data[ii + 1] = (pixel & 0xFF00) >> 8U;
-            data[ii + 2] = (pixel & 0xFF);
-            if (rgba) {
-                data[ii + 3] = (pixel & 0xFF000000) >> 24U;
-            }
-            ii += (i32)pixel_size;
-        }
-    }
-    return data;
 }
 
 ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
@@ -1276,48 +1344,6 @@ void cl_pop(struct InputConsoleData* cl) {
     cl_compls_free(cl);
 }
 
-static void set_current_tool(struct ToolCtx* tc, enum ToolTag type) {
-    struct ToolCtx new_tc = {
-        .t = type,
-        .sdata = tc->sdata,
-    };
-    tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
-    switch (type) {
-        case Tool_Selection:
-            new_tc.on_press = &tool_selection_on_press;
-            new_tc.on_release = &tool_selection_on_release;
-            new_tc.on_drag = &tool_selection_on_drag;
-            new_tc.d.sel = (struct SelectionData) {
-                .begin = PNIL,
-                .end = PNIL,
-                .drag_from = PNIL,
-                .drag_to = PNIL,
-            };
-            break;
-        case Tool_Brush:
-            new_tc.on_press = &tool_drawer_on_press;
-            new_tc.on_release = &tool_drawer_on_release;
-            new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.fn = &canvas_draw_fn_brush;
-            break;
-        case Tool_Pencil:
-            new_tc.on_press = &tool_drawer_on_press;
-            new_tc.on_release = &tool_drawer_on_release;
-            new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.fn = &canvas_draw_fn_pencil;
-            break;
-        case Tool_Fill: new_tc.on_release = &tool_fill_on_release; break;
-        case Tool_Picker: new_tc.on_release = &tool_picker_on_release; break;
-        case Tool_Figure:
-            new_tc.on_press = &tool_drawer_on_press;  // same behavior
-            new_tc.on_release = &tool_figure_on_release;
-            new_tc.on_drag = &tool_figure_on_drag;
-            break;
-    }
-    tool_ctx_free(tc);
-    *tc = new_tc;
-}
-
 void input_state_set(struct Input* input, enum InputTag const is) {
     switch (input->t) {
         case InputT_Console: cl_free(&input->d.cl); break;
@@ -1336,6 +1362,83 @@ void input_state_set(struct Input* input, enum InputTag const is) {
             break;
         case InputT_Interact: break;
     }
+}
+
+// clang-format off
+static void sel_circ_set_tool_selection(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Selection); }
+static void sel_circ_set_tool_pencil(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Pencil); }
+static void sel_circ_set_tool_fill(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Fill); }
+static void sel_circ_set_tool_picker(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Picker); }
+static void sel_circ_set_tool_brush(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Brush); }
+static void sel_circ_set_tool_figure(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Figure); }
+static void sel_circ_figure_toggle_fill(struct Ctx* ctx) { CURR_TC(ctx).d.fig.fill ^= 1; }
+static void sel_circ_figure_set_circle(struct Ctx* ctx) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    assert(tc->t == Tool_Figure);
+    tc->d.fig.curr = Figure_Circle;
+}
+static void sel_circ_figure_set_rectangle(struct Ctx* ctx) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    assert(tc->t == Tool_Figure);
+    tc->d.fig.curr = Figure_Rectangle;
+}
+// clang-format on
+
+void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
+    if (CURR_TC(ctx).t == Tool_Figure) {
+        static struct Item callbacks[] = {
+            {.on_select = &sel_circ_figure_set_circle, .icon = I_Figure},
+            {.on_select = &sel_circ_figure_set_rectangle, .icon = I_Figure},
+            {.on_select = &sel_circ_figure_toggle_fill, .icon = I_Fill},
+            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
+        };
+        ctx->sc.items = callbacks;
+        ctx->sc.item_count = LENGTH(callbacks);
+    } else {
+        static struct Item callbacks[] = {
+            {.on_select = &sel_circ_set_tool_selection, .icon = I_Select},
+            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
+            {.on_select = &sel_circ_set_tool_fill, .icon = I_Fill},
+            {.on_select = &sel_circ_set_tool_picker, .icon = I_Picker},
+            {.on_select = &sel_circ_set_tool_brush, .icon = I_Brush},
+            {.on_select = &sel_circ_set_tool_figure, .icon = I_Figure},
+        };
+        ctx->sc.items = callbacks;
+        ctx->sc.item_count = LENGTH(callbacks);
+    }
+    ctx->sc.x = x;
+    ctx->sc.y = y;
+    ctx->sc.is_active = True;
+}
+
+void sel_circ_free(struct SelectionCircle* sel_circ) {
+    sel_circ->is_active = False;
+}
+
+i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
+    i32 const pointer_x_rel = x - sc->x;
+    i32 const pointer_y_rel = y - sc->y;
+    if (pointer_x_rel == 0 && pointer_y_rel == 0) {
+        return NIL;  // prevent 0.0 / 0.0 division
+    }
+    double const segment_rad = PI * 2 / MAX(1, sc->item_count);
+    double const segment_deg = segment_rad / PI * 180;
+    double const pointer_r =
+        sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
+
+    if (pointer_r > SELECTION_CIRCLE.outer_r_px
+        || pointer_r < SELECTION_CIRCLE.inner_r_px) {
+        return NIL;
+    }
+    // FIXME do it right
+    double angle = -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
+    if (pointer_x_rel < 0) {
+        angle += 180;
+    } else if (pointer_y_rel >= 0) {
+        angle += 360;
+    }
+
+    return (i32)(angle / segment_deg);
 }
 
 void tool_selection_on_press(
@@ -1610,80 +1713,7 @@ void historyarr_clear(Display* dp, struct History** histarr) {
     arrfree(*histarr);
 }
 
-// clang-format off
-static void sel_circ_set_tool_selection(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Selection); }
-static void sel_circ_set_tool_pencil(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Pencil); }
-static void sel_circ_set_tool_fill(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Fill); }
-static void sel_circ_set_tool_picker(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Picker); }
-static void sel_circ_set_tool_brush(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Brush); }
-static void sel_circ_set_tool_figure(struct Ctx* ctx) { set_current_tool(&CURR_TC(ctx), Tool_Figure); }
-static void sel_circ_figure_toggle_fill(struct Ctx* ctx) { CURR_TC(ctx).d.fig.fill ^= 1; }
-static void sel_circ_figure_set_circle(struct Ctx* ctx) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    assert(tc->t == Tool_Figure);
-    tc->d.fig.curr = Figure_Circle;
-}
-static void sel_circ_figure_set_rectangle(struct Ctx* ctx) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    assert(tc->t == Tool_Figure);
-    tc->d.fig.curr = Figure_Rectangle;
-}
-// clang-format on
-
-void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
-    if (CURR_TC(ctx).t == Tool_Figure) {
-        static struct Item callbacks[] = {
-            {.on_select = &sel_circ_figure_set_circle, .icon = I_Figure},
-            {.on_select = &sel_circ_figure_set_rectangle, .icon = I_Figure},
-            {.on_select = &sel_circ_figure_toggle_fill, .icon = I_Fill},
-            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
-        };
-        ctx->sc.items = callbacks;
-        ctx->sc.item_count = LENGTH(callbacks);
-    } else {
-        static struct Item callbacks[] = {
-            {.on_select = &sel_circ_set_tool_selection, .icon = I_Select},
-            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
-            {.on_select = &sel_circ_set_tool_fill, .icon = I_Fill},
-            {.on_select = &sel_circ_set_tool_picker, .icon = I_Picker},
-            {.on_select = &sel_circ_set_tool_brush, .icon = I_Brush},
-            {.on_select = &sel_circ_set_tool_figure, .icon = I_Figure},
-        };
-        ctx->sc.items = callbacks;
-        ctx->sc.item_count = LENGTH(callbacks);
-    }
-    ctx->sc.x = x;
-    ctx->sc.y = y;
-    ctx->sc.is_active = True;
-}
-
-i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
-    i32 const pointer_x_rel = x - sc->x;
-    i32 const pointer_y_rel = y - sc->y;
-    if (pointer_x_rel == 0 && pointer_y_rel == 0) {
-        return NIL;  // prevent 0.0 / 0.0 division
-    }
-    double const segment_rad = PI * 2 / MAX(1, sc->item_count);
-    double const segment_deg = segment_rad / PI * 180;
-    double const pointer_r =
-        sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
-
-    if (pointer_r > SELECTION_CIRCLE.outer_r_px
-        || pointer_r < SELECTION_CIRCLE.inner_r_px) {
-        return NIL;
-    }
-    // FIXME do it right
-    double angle = -atan(pointer_y_rel * 1.0 / pointer_x_rel) / PI * 180;
-    if (pointer_x_rel < 0) {
-        angle += 180;
-    } else if (pointer_y_rel >= 0) {
-        angle += 360;
-    }
-
-    return (i32)(angle / segment_deg);
-}
-
-static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
+Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
     if (x >= im->width || y >= im->height) {
         return False;
     }
@@ -1692,91 +1722,9 @@ static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
     return True;
 }
 
-void canvas_fill(struct Ctx* ctx, argb col) {
-    struct DrawCtx* dc = &ctx->dc;
-    assert(dc && dc->cv.im);
-
-    for (i32 i = 0; i < dc->cv.im->width; ++i) {
-        for (i32 j = 0; j < dc->cv.im->height; ++j) {
-            XPutPixel(dc->cv.im, i, j, col);
-        }
-    }
-}
-
-void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
-    struct DrawCtx* dc = &ctx->dc;
-    assert(dc->cv.im);
-
-    i32 dx = abs(to.x - from.x);
-    i32 sx = from.x < to.x ? 1 : -1;
-    i32 dy = -abs(to.y - from.y);
-    i32 sy = from.y < to.y ? 1 : -1;
-    i32 error = dx + dy;
-
-    while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
-           && from.y < dc->cv.im->height) {
-        draw(ctx, from);
-        if (from.x == to.x && from.y == to.y) {
-            break;
-        }
-        i32 e2 = 2 * error;
-        if (e2 >= dy) {
-            if (from.x == to.x) {
-                break;
-            }
-            error += dy;
-            from.x += sx;
-        }
-        if (e2 <= dx) {
-            if (from.y == to.y) {
-                break;
-            }
-            error += dx;
-            from.y += sy;
-        }
-    }
-}
-
-static double circle_ease(double v) {
-    return (v == 1.0) ? v : 1 - pow(2, -10 * v);
-}
-
-void canvas_circle(
-    struct Ctx* ctx,
-    Pair c,
-    u32 d,
-    argb col,
-    circle_get_alpha_fn get_a
-) {
-    struct DrawCtx* dc = &ctx->dc;
-    if (d == 1) {
-        ximage_put_checked(dc->cv.im, c.x, c.y, col);
-        return;
-    }
-    double const r = d / 2.0;
-    double const r_sq = r * r;
-    u32 const l = c.x - (u32)r;
-    u32 const t = c.y - (u32)r;
-    for (i32 dx = 0; dx < d; ++dx) {
-        for (i32 dy = 0; dy < d; ++dy) {
-            double const dr = (dx - r) * (dx - r) + (dy - r) * (dy - r);
-            u32 const x = l + dx;
-            u32 const y = t + dy;
-            if (!BETWEEN(x, 0, dc->cv.im->width - 1)
-                || !BETWEEN(y, 0, dc->cv.im->height - 1) || dr > r_sq) {
-                continue;
-            }
-            argb const bg = XGetPixel(dc->cv.im, x, y);
-            argb const blended =
-                blend_background(col, bg, get_a(ctx, r, (Pair) {dx, dy}));
-            XPutPixel(dc->cv.im, x, y, blended);
-        }
-    }
-}
-
 static u8 canvas_brush_get_a(struct Ctx* ctx, double r, Pair p) {
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
-    return (u32)((1.0 - circle_ease(curr_r / r)) * 0xFF);
+    return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
 }
 
 void canvas_draw_fn_brush(struct Ctx* ctx, Pair c) {
@@ -1843,6 +1791,99 @@ void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
     }
 }
 
+void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
+    struct DrawCtx* dc = &ctx->dc;
+    Bool const nx = dims.x < 0;
+    Bool const ny = dims.y < 0;
+    for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
+        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
+             ++y) {
+            ximage_put_checked(dc->cv.im, x, y, col);
+        }
+    }
+}
+
+void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
+    Pair const cap = (Pair) {dims.x < 0 ? (i32)w : 0, dims.y < 0 ? (i32)w : 0};
+    Pair const c1 = (Pair) {c.x - cap.x, c.y - cap.y};
+    Pair const c2 = (Pair) {c.x + dims.x + cap.x, c.y + dims.y + cap.y};
+    canvas_fill_rect(ctx, c1, (Pair) {dims.x + cap.x, (i32)w}, col);
+    canvas_fill_rect(ctx, c1, (Pair) {(i32)w, dims.y + cap.y}, col);
+    canvas_fill_rect(ctx, c2, (Pair) {-dims.x - cap.x, -(i32)w}, col);
+    canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -dims.y - cap.y}, col);
+    if (dims.x < 0 && dims.y < 0) {
+        canvas_fill_rect(ctx, c1, (Pair) {(i32)w, (i32)w}, col);
+        canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -(i32)w}, col);
+    }
+}
+
+void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
+    struct DrawCtx* dc = &ctx->dc;
+    assert(dc->cv.im);
+
+    i32 dx = abs(to.x - from.x);
+    i32 sx = from.x < to.x ? 1 : -1;
+    i32 dy = -abs(to.y - from.y);
+    i32 sy = from.y < to.y ? 1 : -1;
+    i32 error = dx + dy;
+
+    while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
+           && from.y < dc->cv.im->height) {
+        draw(ctx, from);
+        if (from.x == to.x && from.y == to.y) {
+            break;
+        }
+        i32 e2 = 2 * error;
+        if (e2 >= dy) {
+            if (from.x == to.x) {
+                break;
+            }
+            error += dy;
+            from.x += sx;
+        }
+        if (e2 <= dx) {
+            if (from.y == to.y) {
+                break;
+            }
+            error += dx;
+            from.y += sy;
+        }
+    }
+}
+
+void canvas_circle(
+    struct Ctx* ctx,
+    Pair c,
+    u32 d,
+    argb col,
+    circle_get_alpha_fn get_a
+) {
+    struct DrawCtx* dc = &ctx->dc;
+    if (d == 1) {
+        ximage_put_checked(dc->cv.im, c.x, c.y, col);
+        return;
+    }
+    double const r = d / 2.0;
+    double const r_sq = r * r;
+    u32 const l = c.x - (u32)r;
+    u32 const t = c.y - (u32)r;
+    for (i32 dx = 0; dx < d; ++dx) {
+        for (i32 dy = 0; dy < d; ++dy) {
+            double const dr = (dx - r) * (dx - r) + (dy - r) * (dy - r);
+            u32 const x = l + dx;
+            u32 const y = t + dy;
+            if (!BETWEEN(x, 0, dc->cv.im->width - 1)
+                || !BETWEEN(y, 0, dc->cv.im->height - 1) || dr > r_sq) {
+                continue;
+            }
+            argb const bg = XGetPixel(dc->cv.im, x, y);
+            argb const blended =
+                blend_background(col, bg, get_a(ctx, r, (Pair) {dx, dy}));
+            XPutPixel(dc->cv.im, x, y, blended);
+        }
+    }
+}
+
 void canvas_copy_region(
     struct Ctx* ctx,
     Pair from,
@@ -1883,29 +1924,14 @@ void canvas_copy_region(
     free(region_dyn);
 }
 
-void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
+void canvas_fill(struct Ctx* ctx, argb col) {
     struct DrawCtx* dc = &ctx->dc;
-    Bool const nx = dims.x < 0;
-    Bool const ny = dims.y < 0;
-    for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
-        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
-             ++y) {
-            ximage_put_checked(dc->cv.im, x, y, col);
-        }
-    }
-}
+    assert(dc && dc->cv.im);
 
-void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
-    Pair const cap = (Pair) {dims.x < 0 ? (i32)w : 0, dims.y < 0 ? (i32)w : 0};
-    Pair const c1 = (Pair) {c.x - cap.x, c.y - cap.y};
-    Pair const c2 = (Pair) {c.x + dims.x + cap.x, c.y + dims.y + cap.y};
-    canvas_fill_rect(ctx, c1, (Pair) {dims.x + cap.x, (i32)w}, col);
-    canvas_fill_rect(ctx, c1, (Pair) {(i32)w, dims.y + cap.y}, col);
-    canvas_fill_rect(ctx, c2, (Pair) {-dims.x - cap.x, -(i32)w}, col);
-    canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -dims.y - cap.y}, col);
-    if (dims.x < 0 && dims.y < 0) {
-        canvas_fill_rect(ctx, c1, (Pair) {(i32)w, (i32)w}, col);
-        canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -(i32)w}, col);
+    for (i32 i = 0; i < dc->cv.im->width; ++i) {
+        for (i32 j = 0; j < dc->cv.im->height; ++j) {
+            XPutPixel(dc->cv.im, i, j, col);
+        }
     }
 }
 
@@ -1933,8 +1959,141 @@ void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
         (i32)((dc->cv.scroll.y - cursor.y) * (ZOOM_C(dc) / old_zoom - 1));
 }
 
-u32 get_statusline_height(struct DrawCtx* dc) {
+void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
+    if (new_width <= 0 || new_height <= 0) {
+        trace("resize_canvas: invalid canvas size");
+        return;
+    }
+    struct DrawCtx* dc = &ctx->dc;
+    u32 const old_width = dc->cv.im->width;
+    u32 const old_height = dc->cv.im->height;
+
+    // FIXME can fill color be changed?
+    XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
+    XDestroyImage(dc->cv.im);
+    dc->cv.im = new_cv_im;
+
+    // fill new area if needed
+    if (old_width < new_width) {
+        canvas_fill_rect(
+            ctx,
+            (Pair) {(i32)old_width, 0},
+            (Pair) {(i32)(new_width - old_width), new_height},
+            CANVAS.background_argb
+        );
+    }
+    if (old_height < new_height) {
+        canvas_fill_rect(
+            ctx,
+            (Pair) {0, (i32)old_height},
+            (Pair) {new_width, (i32)(new_height - old_height)},
+            CANVAS.background_argb
+        );
+    }
+}
+
+u32 get_statusline_height(struct DrawCtx const* dc) {
     return dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
+}
+
+void draw_string(
+    struct DrawCtx* dc,
+    char const* str,
+    Pair c,
+    enum Schm sc,
+    Bool invert
+) {
+    XftDraw* d =
+        XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, dc->colmap);
+    XftDrawStringUtf8(
+        d,
+        invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
+        dc->fnt.xfont,
+        c.x,
+        c.y,
+        (XftChar8*)str,
+        (i32)strlen(str)
+    );
+    XftDrawDestroy(d);
+}
+
+void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
+    char* msg = str_new("%d", i);
+    draw_string(dc, msg, c, sc, invert);
+    str_free(&msg);
+}
+
+// XXX always opaque
+int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col) {
+    XSetForeground(dc->dp, dc->screen_gc, col | 0xFF000000);
+    return XFillRectangle(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        p.x,
+        p.y,
+        dim.x,
+        dim.y
+    );
+}
+
+int draw_rect(
+    struct DrawCtx* dc,
+    Pair p,
+    Pair dim,
+    argb col,
+    u32 line_w,
+    i32 line_st,
+    i32 cap_st,
+    i32 join_st
+) {
+    XSetForeground(dc->dp, dc->screen_gc, col);
+    XSetLineAttributes(dc->dp, dc->screen_gc, line_w, line_st, cap_st, join_st);
+    return XDrawRectangle(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        p.x,
+        p.y,
+        dim.x,
+        dim.y
+    );
+}
+
+int draw_line(
+    struct DrawCtx* dc,
+    Pair from,
+    Pair to,
+    enum Schm sc,
+    Bool invert
+) {
+    XSetForeground(
+        dc->dp,
+        dc->screen_gc,
+        invert ? COL_BG(dc, sc) : COL_FG(dc, sc)
+    );
+    return XDrawLine(
+        dc->dp,
+        dc->back_buffer,
+        dc->screen_gc,
+        from.x,
+        from.y,
+        to.x,
+        to.y
+    );
+}
+
+u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
+    XGlyphInfo ext;
+    XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
+    return ext.xOff;
+}
+
+u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
+    static u32 const MAX_BUF = 50;
+    char buf[MAX_BUF];
+    snprintf(buf, MAX_BUF, format, i);
+    return get_string_width(dc, buf, strlen(buf));
 }
 
 void draw_selection_circle(
@@ -2074,103 +2233,6 @@ void draw_selection_circle(
     }
 }
 
-static void draw_string(
-    struct DrawCtx* dc,
-    char const* str,
-    Pair c,
-    enum Schm sc,
-    Bool invert
-) {
-    XftDraw* d =
-        XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, dc->colmap);
-    XftDrawStringUtf8(
-        d,
-        invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
-        dc->fnt.xfont,
-        c.x,
-        c.y,
-        (XftChar8*)str,
-        (i32)strlen(str)
-    );
-    XftDrawDestroy(d);
-}
-
-static void
-draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
-    char* msg = str_new("%d", i);
-    draw_string(dc, msg, c, sc, invert);
-    str_free(&msg);
-}
-
-// XXX always opaque
-static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col) {
-    XSetForeground(dc->dp, dc->screen_gc, col | 0xFF000000);
-    return XFillRectangle(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
-        p.x,
-        p.y,
-        dim.x,
-        dim.y
-    );
-}
-
-static int draw_rect(
-    struct DrawCtx* dc,
-    Pair p,
-    Pair dim,
-    argb col,
-    u32 line_w,
-    i32 line_st,
-    i32 cap_st,
-    i32 join_st
-) {
-    XSetForeground(dc->dp, dc->screen_gc, col);
-    XSetLineAttributes(dc->dp, dc->screen_gc, line_w, line_st, cap_st, join_st);
-    return XDrawRectangle(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
-        p.x,
-        p.y,
-        dim.x,
-        dim.y
-    );
-}
-
-static int
-draw_line(struct DrawCtx* dc, Pair from, Pair to, enum Schm sc, Bool invert) {
-    XSetForeground(
-        dc->dp,
-        dc->screen_gc,
-        invert ? COL_BG(dc, sc) : COL_FG(dc, sc)
-    );
-    return XDrawLine(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
-        from.x,
-        from.y,
-        to.x,
-        to.y
-    );
-}
-
-static u32
-get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
-    XGlyphInfo ext;
-    XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
-    return ext.xOff;
-}
-
-static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
-    static u32 const MAX_BUF = 50;
-    char buf[MAX_BUF];
-    snprintf(buf, MAX_BUF, format, i);
-    return get_string_width(dc, buf, strlen(buf));
-}
-
 void update_screen(struct Ctx* ctx) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
@@ -2292,12 +2354,12 @@ void update_screen(struct Ctx* ctx) {
         && !ctx->input.is_dragging) {
         i32 const size = WINDOW.anchor_size;
         Pair center = point_from_cv_to_scr(dc, tc->sdata.anchor);
-        Pair lu = (Pair) {center.x - size, center.y - size};
-        Pair ld = (Pair) {center.x - size, center.y + size};
-        Pair ru = (Pair) {center.x + size, center.y - size};
-        Pair rd = (Pair) {center.x + size, center.y + size};
-        draw_line(dc, lu, rd, SchmNorm, True);
-        draw_line(dc, ld, ru, SchmNorm, True);
+        Pair lt = (Pair) {center.x - size, center.y - size};
+        Pair lb = (Pair) {center.x - size, center.y + size};
+        Pair rt = (Pair) {center.x + size, center.y - size};
+        Pair rb = (Pair) {center.x + size, center.y + size};
+        draw_line(dc, lt, rb, SchmNorm, True);
+        draw_line(dc, lb, rt, SchmNorm, True);
     }
 
     update_statusline(ctx);  // backbuffer swaped here
@@ -2487,72 +2549,6 @@ void show_message_va(struct Ctx* ctx, char const* fmt, ...) {
     show_message(ctx, msg_dyn);
     str_free(&msg_dyn);
     va_end(ap);
-}
-
-void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
-    if (new_width <= 0 || new_height <= 0) {
-        trace("resize_canvas: invalid canvas size");
-        return;
-    }
-    struct DrawCtx* dc = &ctx->dc;
-    u32 const old_width = dc->cv.im->width;
-    u32 const old_height = dc->cv.im->height;
-
-    // FIXME can fill color be changed?
-    XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
-    XDestroyImage(dc->cv.im);
-    dc->cv.im = new_cv_im;
-
-    // fill new area if needed
-    if (old_width < new_width) {
-        canvas_fill_rect(
-            ctx,
-            (Pair) {(i32)old_width, 0},
-            (Pair) {(i32)(new_width - old_width), new_height},
-            CANVAS.background_argb
-        );
-    }
-    if (old_height < new_height) {
-        canvas_fill_rect(
-            ctx,
-            (Pair) {0, (i32)old_height},
-            (Pair) {new_width, (i32)(new_height - old_height)},
-            CANVAS.background_argb
-        );
-    }
-}
-
-void sel_circ_free(struct SelectionCircle* sel_circ) {
-    sel_circ->is_active = False;
-}
-
-void run(struct Ctx* ctx) {
-    static Bool (*const handlers[LASTEvent])(struct Ctx*, XEvent*) = {
-        [KeyPress] = &key_press_hdlr,
-        [ButtonPress] = &button_press_hdlr,
-        [ButtonRelease] = &button_release_hdlr,
-        [MotionNotify] = &motion_notify_hdlr,
-        [Expose] = &expose_hdlr,
-        [DestroyNotify] = &destroy_notify_hdlr,
-        [ConfigureNotify] = &configure_notify_hdlr,
-        [SelectionRequest] = &selection_request_hdlr,
-        [SelectionNotify] = &selection_notify_hdlr,
-        [ClientMessage] = &client_message_hdlr,
-        [MappingNotify] = &mapping_notify_hdlr,
-    };
-
-    Bool running = True;
-    XEvent event;
-
-    XSync(ctx->dc.dp, False);
-    while (running && !XNextEvent(ctx->dc.dp, &event)) {
-        if (XFilterEvent(&event, ctx->dc.window)) {
-            continue;
-        }
-        if (handlers[event.type]) {
-            running = handlers[event.type](ctx, &event);
-        }
-    }
 }
 
 struct Ctx ctx_init(Display* dp) {
@@ -2777,12 +2773,41 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
-        set_current_tool(&ctx->tcarr[i], Tool_Pencil);
+        tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
     }
     history_push(&ctx->hist_prevarr, ctx);
 
     /* show up window */
     XMapRaised(dp, ctx->dc.window);
+}
+
+void run(struct Ctx* ctx) {
+    static Bool (*const handlers[LASTEvent])(struct Ctx*, XEvent*) = {
+        [KeyPress] = &key_press_hdlr,
+        [ButtonPress] = &button_press_hdlr,
+        [ButtonRelease] = &button_release_hdlr,
+        [MotionNotify] = &motion_notify_hdlr,
+        [Expose] = &expose_hdlr,
+        [DestroyNotify] = &destroy_notify_hdlr,
+        [ConfigureNotify] = &configure_notify_hdlr,
+        [SelectionRequest] = &selection_request_hdlr,
+        [SelectionNotify] = &selection_notify_hdlr,
+        [ClientMessage] = &client_message_hdlr,
+        [MappingNotify] = &mapping_notify_hdlr,
+    };
+
+    Bool running = True;
+    XEvent event;
+
+    XSync(ctx->dc.dp, False);
+    while (running && !XNextEvent(ctx->dc.dp, &event)) {
+        if (XFilterEvent(&event, ctx->dc.window)) {
+            continue;
+        }
+        if (handlers[event.type]) {
+            running = handlers[event.type](ctx, &event);
+        }
+    }
 }
 
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
@@ -3369,7 +3394,7 @@ void cleanup(struct Ctx* ctx) {
     }
     /* ToolCtx */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
-            tool_ctx_free(&ctx->tcarr[i]);
+            tc_free(&ctx->tcarr[i]);
         }
         arrfree(ctx->tcarr);
     }
@@ -3405,12 +3430,5 @@ void cleanup(struct Ctx* ctx) {
         XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
         XFreeColormap(ctx->dc.dp, ctx->dc.colmap);
         XDestroyWindow(ctx->dc.dp, ctx->dc.window);
-    }
-}
-
-static void
-main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos) {
-    if (pos + 1 == argc || argv[pos + 1][0] == '-') {
-        die("xpaint: supply argument for %s", cmd_name);
     }
 }
