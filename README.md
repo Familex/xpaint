@@ -12,6 +12,9 @@ For detailed program description and usage see [man 1 xpaint](./xpaint.1).
 - Xft headers (libXft-devel on fedora, libxft-dev on alpine)
 - X11 extentions headers (libXext-devel on fedora, libxext-dev on alpine)
 
+Execute `nix-shell --pure` in project root to enter the shell with
+installed dependencies.
+
 ## Build
 
 In order to build [xpaint](./xpaint),
