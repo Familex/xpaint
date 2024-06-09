@@ -229,6 +229,7 @@ struct Ctx {
                 enum FigureType {
                     Figure_Circle,
                     Figure_Rectangle,
+                    Figure_Triangle,
                 } curr;
                 Bool fill;
             } fig;
@@ -438,6 +439,8 @@ static void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c);
 static void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2);
 static void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col);
 static void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w);
+static void canvas_fill_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col);
+static void canvas_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w);
 static void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw);
 static void canvas_circle(struct Ctx* ctx, Pair c, u32 d, argb col, circle_get_alpha_fn get_a);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
@@ -721,6 +724,7 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
             switch (tc->d.fig.curr) {
                 case Figure_Circle: return "fig:cir";
                 case Figure_Rectangle: return "fig:rct";
+                case Figure_Triangle: return "fig:tri";
             }
     }
     UNREACHABLE();
@@ -797,8 +801,11 @@ enum ImageType file_type(char const* file_path) {
     if (!file) {
         return IMT_Unknown;
     }
-    // on file read error just fail on header check
-    fread(h, sizeof(u8), HEADER_SIZE, file);
+
+    if (fread(h, sizeof(u8), HEADER_SIZE, file) != HEADER_SIZE) {
+        fclose(file);
+        return IMT_Unknown;
+    }
 
     // jpeg SOI marker and another marker begin
     if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) {
@@ -1372,16 +1379,14 @@ static void sel_circ_set_tool_picker(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx
 static void sel_circ_set_tool_brush(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Brush); }
 static void sel_circ_set_tool_figure(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Figure); }
 static void sel_circ_figure_toggle_fill(struct Ctx* ctx) { CURR_TC(ctx).d.fig.fill ^= 1; }
-static void sel_circ_figure_set_circle(struct Ctx* ctx) {
+static void sel_circ_set_figure(struct Ctx* ctx, enum FigureType type) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     assert(tc->t == Tool_Figure);
-    tc->d.fig.curr = Figure_Circle;
+    tc->d.fig.curr = type;
 }
-static void sel_circ_figure_set_rectangle(struct Ctx* ctx) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    assert(tc->t == Tool_Figure);
-    tc->d.fig.curr = Figure_Rectangle;
-}
+static void sel_circ_figure_set_circle(struct Ctx* ctx) { sel_circ_set_figure(ctx, Figure_Circle); }
+static void sel_circ_figure_set_rectangle(struct Ctx* ctx) { sel_circ_set_figure(ctx, Figure_Rectangle); }
+static void sel_circ_figure_set_triangle(struct Ctx* ctx) { sel_circ_set_figure(ctx, Figure_Triangle); }
 // clang-format on
 
 void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
@@ -1389,6 +1394,7 @@ void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
         static struct Item callbacks[] = {
             {.on_select = &sel_circ_figure_set_circle, .icon = I_Figure},
             {.on_select = &sel_circ_figure_set_rectangle, .icon = I_Figure},
+            {.on_select = &sel_circ_figure_set_triangle, .icon = I_Figure},
             {.on_select = &sel_circ_figure_toggle_fill, .icon = I_Fill},
             {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
         };
@@ -1781,13 +1787,27 @@ void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
                           : &canvas_figure_circle_get_a
             );
         } break;
-        case Figure_Rectangle:
+        case Figure_Rectangle: {
             if (fig->fill) {
                 canvas_fill_rect(ctx, p2, (Pair) {dx, dy}, col);
             } else {
                 canvas_rect(ctx, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
             }
-            break;
+        } break;
+        // FIXME combine with Figure_Rectangle? same signatures
+        case Figure_Triangle: {
+            if (fig->fill) {
+                canvas_fill_triangle(ctx, p2, (Pair) {dx, dy}, col);
+            } else {
+                canvas_triangle(
+                    ctx,
+                    p2,
+                    (Pair) {dx, dy},
+                    col,
+                    tc->sdata.line_w
+                );
+            }
+        } break;
     }
 }
 
@@ -1804,6 +1824,7 @@ void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
 }
 
 void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
+    // draw 4 sides and fill 2 corners (edge case on negative-negative input)
     Pair const cap = (Pair) {dims.x < 0 ? (i32)w : 0, dims.y < 0 ? (i32)w : 0};
     Pair const c1 = (Pair) {c.x - cap.x, c.y - cap.y};
     Pair const c2 = (Pair) {c.x + dims.x + cap.x, c.y + dims.y + cap.y};
@@ -1817,6 +1838,33 @@ void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
     }
 }
 
+void canvas_fill_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col) {
+    struct DrawCtx* dc = &ctx->dc;
+    for (i32 i = 0; i < abs(dims.x); ++i) {
+        i32 const line_w = (i32)(abs(dims.y) * ((double)i / abs(dims.x)));
+        for (i32 j = 0; j < line_w; ++j) {
+            // FIXME fix shape
+            ximage_put_checked(
+                dc->cv.im,
+                c.x + (dims.x > 0 ? i : -i),
+                c.y + (dims.y > 0 ? j : -j),
+                col
+            );
+        }
+    }
+}
+
+void canvas_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
+    Pair const edges[3] = {
+        {c.x + dims.x / 2, c.y},
+        {c.x, c.y + dims.y},
+        {c.x + dims.x, c.y + dims.y},
+    };
+    canvas_line(ctx, edges[0], edges[1], &canvas_draw_fn_pencil);
+    canvas_line(ctx, edges[1], edges[2], &canvas_draw_fn_pencil);
+    canvas_line(ctx, edges[0], edges[2], &canvas_draw_fn_pencil);
+}
+
 void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
     struct DrawCtx* dc = &ctx->dc;
     assert(dc->cv.im);
@@ -1827,6 +1875,7 @@ void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
     i32 sy = from.y < to.y ? 1 : -1;
     i32 error = dx + dy;
 
+    // FIXME don't work if start point out of canvas
     while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
            && from.y < dc->cv.im->height) {
         draw(ctx, from);
