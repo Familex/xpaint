@@ -1760,9 +1760,11 @@ static u8 canvas_figure_circle_get_a_fill(struct Ctx* ctx, double r, Pair p) {
 }
 
 static u8 canvas_figure_circle_get_a(struct Ctx* ctx, double r, Pair p) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    i32 const w = (i32)tc->sdata.line_w;
+
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
-    // FIXME fixed border width (same as line_w)
-    return ((curr_r / r) > 0.9) * 0xFF;
+    return (r - curr_r < w) * 0xFF;
 }
 
 void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
