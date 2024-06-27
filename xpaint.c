@@ -957,7 +957,12 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
         case ClC_Set: {
             switch (cl_cmd->d.set.t) {
                 case ClCDS_LineW: {
-                    CURR_TC(ctx).sdata.line_w = cl_cmd->d.set.d.line_w.value;
+                    u32 val = cl_cmd->d.set.d.line_w.value; 
+                    if(val < 1) {
+                        msg_to_show = str_new("line_w must be 1 or greater, using default");
+                        val = TOOLS.default_line_w;
+                    }
+                    CURR_TC(ctx).sdata.line_w = val;
                 } break;
                 case ClCDS_Col: {
                     *tc_curr_col(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.v;
