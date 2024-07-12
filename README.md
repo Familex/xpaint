@@ -1,6 +1,10 @@
-# xpaint
+<h1 align='center'>
+  xpaint
+</h1>
 
-Simple paint application written for X.
+<p align='center'>
+  simple paint application written for X
+</p>
 
 ## Documentation
 
