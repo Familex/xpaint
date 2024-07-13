@@ -6,3 +6,6 @@ xpaint-d
 compile_commands.json
 .kdev*/
 *.kdev*
+
+.envrc
+.direnv/
