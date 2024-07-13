@@ -45,6 +45,9 @@ INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
 INCBIN(u8, pic_tool_select, "res/tool-select.png");
 INCBIN(u8, pic_tool_brush, "res/tool-brush.png");
 INCBIN(u8, pic_tool_figure, "res/tool-figure.png");
+INCBIN(u8, pic_fig_rect, "res/figure-rectangle.png");
+INCBIN(u8, pic_fig_circ, "res/figure-circle.png");
+INCBIN(u8, pic_fig_tri, "res/figure-triangle.png");
 INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
@@ -103,6 +106,9 @@ enum Icon {
     I_Picker,
     I_Brush,
     I_Figure,
+    I_FigRect,
+    I_FigCirc,
+    I_FigTri,
     I_Last,
 };
 
@@ -629,6 +635,9 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
         case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
         case I_Figure: return (D) {pic_tool_figure_data, RES_SZ_TOOL_FIGURE};
+        case I_FigRect: return (D) {pic_fig_rect_data, RES_SZ_FIGURE_RECTANGLE};
+        case I_FigCirc: return (D) {pic_fig_circ_data, RES_SZ_FIGURE_CIRCLE};
+        case I_FigTri: return (D) {pic_fig_tri_data, RES_SZ_FIGURE_TRIANGLE};
         default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
     }
 }
@@ -1392,9 +1401,9 @@ static void sel_circ_figure_set_triangle(struct Ctx* ctx) { sel_circ_set_figure(
 void sel_circ_init(struct Ctx* ctx, i32 x, i32 y) {
     if (CURR_TC(ctx).t == Tool_Figure) {
         static struct Item callbacks[] = {
-            {.on_select = &sel_circ_figure_set_circle, .icon = I_Figure},
-            {.on_select = &sel_circ_figure_set_rectangle, .icon = I_Figure},
-            {.on_select = &sel_circ_figure_set_triangle, .icon = I_Figure},
+            {.on_select = &sel_circ_figure_set_circle, .icon = I_FigCirc},
+            {.on_select = &sel_circ_figure_set_rectangle, .icon = I_FigRect},
+            {.on_select = &sel_circ_figure_set_triangle, .icon = I_FigTri},
             {.on_select = &sel_circ_figure_toggle_fill, .icon = I_Fill},
             {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
         };
