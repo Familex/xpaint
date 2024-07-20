@@ -22,7 +22,7 @@ installed dependencies.
 ## Build
 
 In order to build [xpaint](./xpaint),
-execute `make all` command in the project root.
+execute `make xpaint` command in the project root.
 
 Execute `make help` command to see list of all available targets.
 
@@ -32,7 +32,7 @@ Change [config.h](./config.h) file to configure application.
 
 ## Install
 
-Edit [config.mk](./config.mk) to match your local setup
+Edit [Makefile](./Makefile) to match your local setup
 (app is installed into the `/usr/local` namespace by default).
 
 Afterwards execute `make clean install` to build and install app

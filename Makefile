@@ -1,10 +1,23 @@
-include config.mk
+#### variables section
+# change them if needed
 
-SRC = xpaint.c
-HEADER = types.h config.h
-RES = ./res
+# xpaint version
+VERSION = 0.2.0
 
-all: xpaint ## build application
+# instalation path
+PREFIX = /usr/local
+MANPREFIX = $(PREFIX)/share/man
+
+# tools
+CC ?= cc
+CLANGTIDY ?= clang-tidy
+
+#### targets section
+
+SRC = ./xpaint.c
+DEPS = $(SRC) ./res ./types.h ./config.h
+
+all: help ## default target
 
 help: ## display this help
 	@echo 'Usage: make [TARGET]... [ARGS="..."]'
@@ -12,10 +25,13 @@ help: ## display this help
 	@echo 'targets:'
 	@sed -ne '/@sed/!s/:.*##//p' $(MAKEFILE_LIST) | column -tl 2
 
-xpaint: $(SRC) $(HEADER) $(RES) ## build release application
+run: xpaint-d ## run application with ARGS
+	./xpaint-d -v $(ARGS)
+
+xpaint: $(DEPS) ## build release application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) -O2 -DNDEBUG
 
-xpaint-d: $(SRC) $(HEADER) $(RES) ## build debug application
+xpaint-d: $(DEPS) ## build debug application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) -g
 
 clean: ## remove generated files
@@ -33,14 +49,25 @@ uninstall: ## uninstall application
 	rm -f $(PREFIX)/bin/xpaint
 	rm -f $(MANPREFIX)/man1/xpaint.1
 
-run: xpaint-d ## run application. ARGS may be used
-	./xpaint-d -v $(ARGS)
-
 check: ## check code with clang-tidy
 	$(CLANGTIDY) $(SRC)
 
 dev: clean ## generate dev files
 	bear -- make xpaint-d
 
-.PHONY: all clean install uninstall
-.PHONY: run check dev
+.PHONY: all help run clean install uninstall check dev
+
+#### compiler and linker flags
+
+INCS = -I/usr/X11R6/include -I/usr/include/freetype2
+LIBS = -L/usr/X11R6/lib -lX11 -lX11 -lm -lXext -lXft -lXrender
+DEFINES = -DVERSION=\"$(VERSION)\" \
+	$(shell \
+		for res in ./res/* ; do \
+			echo -n $$(basename $$res) \
+				| tr '-' '_' \
+				| sed -En 's/(.*)\..*/\U-DRES_SZ_\1/p'; \
+			echo -n "=$$(stat -c %s $$res) "; \
+		done \
+	)
+CCFLAGS = -std=c99 -pedantic -Wall $(INCS) $(LIBS) $(DEFINES)
