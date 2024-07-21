@@ -1,11 +1,16 @@
-private/
-build/
-xpaint
-xpaint-d
-.cache/
-compile_commands.json
-.kdev*/
-*.kdev*
+# artifacts
+/private/
+/build/
+/xpaint
+/xpaint-d
+/result
 
-.envrc
-.direnv/
+# build
+/.cache/
+/compile_commands.json
+/.kdev*/
+
+# env
+/.envrc
+/.direnv/
+
