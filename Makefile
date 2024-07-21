@@ -9,7 +9,7 @@ PREFIX = /usr/local
 MANPREFIX = $(PREFIX)/share/man
 
 # tools
-CC ?= cc
+CC ?= clang
 CLANGTIDY ?= clang-tidy
 
 #### targets section
