@@ -2693,7 +2693,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         &(XSetWindowAttributes
         ) {.colormap = ctx->dc.colmap,
            .border_pixel = 0,
-           .background_pixel = 0xFFFF00FF,
+           .background_pixel = WINDOW.background_argb,
            .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
                | ExposureMask | PointerMotionMask | StructureNotifyMask}
     );
@@ -3297,6 +3297,9 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     ctx->dc.height = event->xconfigure.height;
 
     // backbuffer resizes automatically
+
+    // not required, but reduces flickering
+    update_screen(ctx);
 
     return True;
 }
