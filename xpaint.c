@@ -89,7 +89,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
     ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
      && (p_tc)->d.sel.drag_from.y != NIL)
 #define UNREACHABLE() __builtin_unreachable()
-#define ZOOM_C(dc_p)  (pow(ZOOM_SPEED, (double)(dc_p)->cv.zoom))
+#define ZOOM_C(p_dc)  (pow(ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 
 enum {
     A_Clipboard,
