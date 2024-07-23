@@ -456,7 +456,10 @@ static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 
-static u32 get_statusline_height(struct DrawCtx const* dc);
+static u32 statusline_height(struct DrawCtx const* dc);
+// window size - interface parts (e.g. statusline)
+static Pair clientarea_size(struct DrawCtx const* dc);
+static Pair canvas_size(struct DrawCtx const* dc);
 static void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert);
 static void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert);
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col);
@@ -2052,8 +2055,22 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     }
 }
 
-u32 get_statusline_height(struct DrawCtx const* dc) {
+u32 statusline_height(struct DrawCtx const* dc) {
     return dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
+}
+
+Pair clientarea_size(struct DrawCtx const* dc) {
+    return (Pair) {
+        .x = (i32)(dc->width),
+        .y = (i32)(dc->height - statusline_height(dc)),
+    };
+}
+
+Pair canvas_size(struct DrawCtx const* dc) {
+    return (Pair) {
+        .x = (i32)(dc->cv.im->width * ZOOM_C(dc)),
+        .y = (i32)(dc->cv.im->height * ZOOM_C(dc)),
+    };
 }
 
 void draw_string(
@@ -2358,6 +2375,7 @@ void update_screen(struct Ctx* ctx) {
                 }}
             );
 
+            Pair const cv_size = canvas_size(dc);
             // clang-format off
             XRenderComposite(
                 dc->dp, PictOpSrc,
@@ -2366,7 +2384,7 @@ void update_screen(struct Ctx* ctx) {
                 0, 0,
                 0, 0,
                 dc->cv.scroll.x, dc->cv.scroll.y,
-                (u32)(dc->cv.im->width * ZOOM_C(dc)), (u32)(dc->cv.im->height * ZOOM_C(dc))
+                cv_size.x, cv_size.y
             );
             // clang-format on
 
@@ -2428,10 +2446,12 @@ void update_screen(struct Ctx* ctx) {
 void update_statusline(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
-    u32 const statusline_h = get_statusline_height(dc);
+    u32 const statusline_h = statusline_height(dc);
+    Pair const clientarea = clientarea_size(dc);
+
     fill_rect(
         dc,
-        (Pair) {0, (i32)(dc->height - statusline_h)},
+        (Pair) {0, clientarea.y},
         (Pair) {(i32)dc->width, (i32)statusline_h},
         COL_BG(&ctx->dc, SchmNorm)
     );
@@ -2557,7 +2577,7 @@ void update_statusline(struct Ctx* ctx) {
                 dc,
                 (Pair
                 ) {(i32)(dc->width - col_name_w - col_rect_w - col_count_w),
-                   (i32)(dc->height - statusline_h)},
+                   clientarea.y},
                 (Pair) {(i32)col_rect_w, (i32)statusline_h},
                 *tc_curr_col(tc)
             );
@@ -2825,7 +2845,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             WINDOW.max_launch_size.x
         );
         ctx->dc.height = CLAMP(
-            ctx->dc.cv.im->height + get_statusline_height(&ctx->dc),
+            ctx->dc.cv.im->height + statusline_height(&ctx->dc),
             WINDOW.min_launch_size.y,
             WINDOW.max_launch_size.y
         );
@@ -3293,10 +3313,18 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
-    ctx->dc.width = event->xconfigure.width;
-    ctx->dc.height = event->xconfigure.height;
+    struct DrawCtx* dc = &ctx->dc;
+
+    dc->width = event->xconfigure.width;
+    dc->height = event->xconfigure.height;
 
     // backbuffer resizes automatically
+
+    // place canvas to center of screen
+    Pair const clientarea = clientarea_size(dc);
+    Pair const cv_size = canvas_size(dc);
+    dc->cv.scroll.x = (i32)(clientarea.x - cv_size.x) / 2;
+    dc->cv.scroll.y = (i32)(clientarea.y - cv_size.y) / 2;
 
     // not required, but reduces flickering
     update_screen(ctx);
