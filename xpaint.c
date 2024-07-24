@@ -3315,16 +3315,25 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     struct DrawCtx* dc = &ctx->dc;
 
+    if (dc->width == event->xconfigure.width
+        && dc->height == event->xconfigure.height) {
+        // configure notify calls on move events too
+        return True;
+    }
+
     dc->width = event->xconfigure.width;
     dc->height = event->xconfigure.height;
-
     // backbuffer resizes automatically
 
-    // place canvas to center of screen
-    Pair const clientarea = clientarea_size(dc);
     Pair const cv_size = canvas_size(dc);
-    dc->cv.scroll.x = (i32)(clientarea.x - cv_size.x) / 2;
-    dc->cv.scroll.y = (i32)(clientarea.y - cv_size.y) / 2;
+    Pair const clientarea = clientarea_size(dc);
+
+    // if canvas fits in client area
+    if (cv_size.x <= clientarea.x && cv_size.y <= clientarea.y) {
+        // place canvas to center of screen
+        dc->cv.scroll.x = (i32)(clientarea.x - cv_size.x) / 2;
+        dc->cv.scroll.y = (i32)(clientarea.y - cv_size.y) / 2;
+    }
 
     // not required, but reduces flickering
     update_screen(ctx);
