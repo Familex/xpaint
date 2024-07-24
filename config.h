@@ -86,8 +86,8 @@ struct {
     i32 max_zoom;
 } const CANVAS = {
     .background_argb = 0xFFAA0000,
-    .default_width = 500,
-    .default_height = 800,
+    .default_width = 1000,
+    .default_height = 700,
     .min_zoom = -10,
     .max_zoom = 30,  // at high values visual glitches appear
 };
