@@ -2,50 +2,52 @@
   description = "simple paint application written for X";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    systems.url = "github:nix-systems/default-linux";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-    systems,
-  }: let
-    eachSys = nixpkgs.lib.genAttrs (import systems);
-  in {
-    packages = eachSys (sys: rec {
-      default = xpaint;
-      xpaint = let
-        pkgs = nixpkgs.legacyPackages.${sys};
-        make = "${pkgs.gnumake}/bin/make";
-      in
-        pkgs.stdenv.mkDerivation rec {
-          name = "xpaint";
-          src = pkgs.lib.cleanSource ./.;
+  outputs = inputs:
+    inputs.flake-parts.lib.mkFlake {inherit inputs;} {
+      systems = ["x86_64-linux" "aarch64-linux"];
 
-          nativeBuildInputs = with nixpkgs.legacyPackages.${sys}; [
-            xorg.libX11
-            xorg.libXft
-            xorg.libXext
-          ];
+      perSystem = {
+        pkgs,
+        self',
+        ...
+      }: {
+        packages = rec {
+          default = xpaint;
+          xpaint = let
+            make = "${pkgs.gnumake}/bin/make";
+          in
+            pkgs.stdenv.mkDerivation rec {
+              name = "xpaint";
+              src = pkgs.lib.cleanSource ./.;
 
-          buildPhase = "${make} ${name}";
-          installPhase = "${make} PREFIX=$out install";
+              nativeBuildInputs = with pkgs; [
+                xorg.libX11
+                xorg.libXft
+                xorg.libXext
+              ];
+
+              buildPhase = "${make} ${name}";
+              installPhase = "${make} PREFIX=$out install";
+            };
         };
-    });
 
-    devShells = eachSys (sys: {
-      default = nixpkgs.legacyPackages.${sys}.mkShell.override {} {
-        inputsFrom = [self.packages.${sys}.default];
-        packages = with nixpkgs.legacyPackages.${sys}; [
-          util-linux
-          gnumake
-          clang-tools
-          bear
-        ];
+        devShells = {
+          default = pkgs.mkShell.override {} {
+            inputsFrom = [self'.packages.default];
+            packages = with pkgs; [
+              util-linux
+              gnumake
+              clang-tools
+              bear
+            ];
+          };
+        };
+
+        formatter = pkgs.alejandra;
       };
-    });
-
-    formatter = eachSys (sys: nixpkgs.legacyPackages.${sys}.alejandra);
-  };
+    };
 }
