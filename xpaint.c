@@ -130,7 +130,7 @@ struct ToolCtx;
 typedef void (*draw_fn)(struct Ctx* ctx, Pair p);
 
 typedef u8 (*circle_get_alpha_fn)(
-    struct Ctx* ctx,
+    u32 line_w,
     double circle_radius,
     Pair p  // point relative circle center
 );
@@ -229,7 +229,10 @@ struct Ctx {
             } sel;
             // Tool_Pencil | Tool_Brush
             struct DrawerData {
-                draw_fn fn;
+                enum DrawerType {
+                    DrawerType_Brush,
+                    DrawerType_Pencil,
+                } type;
             } drawer;
             struct FigureData {
                 enum FigureType {
@@ -440,15 +443,14 @@ static struct History history_clone(struct History const* hist);
 static void historyarr_clear(Display* dp, struct History** hist);
 
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
-static void canvas_draw_fn_brush(struct Ctx* ctx, Pair c);
-static void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c);
 static void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2);
-static void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col);
-static void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w);
-static void canvas_fill_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col);
-static void canvas_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w);
-static void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw);
-static void canvas_circle(struct Ctx* ctx, Pair c, u32 d, argb col, circle_get_alpha_fn get_a);
+static void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
+static void canvas_rect(XImage* im, Pair c, Pair dims, argb col, u32 w);
+static void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col);
+static void canvas_triangle(XImage* im, Pair c, Pair dims, argb col, u32 w);
+static void canvas_circle(XImage* im, Pair c, u32 d, argb col, circle_get_alpha_fn get_a, u32 w);
+static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerType type, argb col, u32 w);
+static void canvas_apply_drawer(XImage* im, enum DrawerType type, Pair c, argb col, u32 w);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill(struct Ctx* ctx, argb col);
 static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
@@ -705,13 +707,13 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.fn = &canvas_draw_fn_brush;
+            new_tc.d.drawer.type = DrawerType_Brush;
             break;
         case Tool_Pencil:
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.fn = &canvas_draw_fn_pencil;
+            new_tc.d.drawer.type = DrawerType_Pencil;
             break;
         case Tool_Fill: new_tc.on_release = &tool_fill_on_release; break;
         case Tool_Picker: new_tc.on_release = &tool_picker_on_release; break;
@@ -1561,9 +1563,22 @@ void tool_drawer_on_release(
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (event->state & ShiftMask) {
-        canvas_line(ctx, tc->sdata.anchor, pointer, tc->d.drawer.fn);
+        canvas_line(
+            dc->cv.im,
+            tc->sdata.anchor,
+            pointer,
+            tc->d.drawer.type,
+            *tc_curr_col(tc),
+            tc->sdata.line_w
+        );
     } else {
-        tc->d.drawer.fn(ctx, pointer);
+        canvas_apply_drawer(
+            dc->cv.im,
+            tc->d.drawer.type,
+            pointer,
+            *tc_curr_col(tc),
+            tc->sdata.line_w
+        );
     }
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
@@ -1576,7 +1591,14 @@ void tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_line(ctx, tc->sdata.anchor, pointer, tc->d.drawer.fn);
+    canvas_line(
+        dc->cv.im,
+        tc->sdata.anchor,
+        pointer,
+        tc->d.drawer.type,
+        *tc_curr_col(tc),
+        tc->sdata.line_w
+    );
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
 }
 
@@ -1740,41 +1762,17 @@ Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
     return True;
 }
 
-static u8 canvas_brush_get_a(struct Ctx* ctx, double r, Pair p) {
+// FIXME w unused (required because of circle_get_alpha_fn)
+static u8 canvas_brush_get_a(u32 w, double r, Pair p) {
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
     return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
 }
 
-void canvas_draw_fn_brush(struct Ctx* ctx, Pair c) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    canvas_circle(
-        ctx,
-        c,
-        tc->sdata.line_w,
-        *tc_curr_col(tc),
-        &canvas_brush_get_a
-    );
-}
-
-void canvas_draw_fn_pencil(struct Ctx* ctx, Pair c) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    i32 const w = (i32)tc->sdata.line_w;
-    canvas_fill_rect(
-        ctx,
-        (Pair) {c.x - w / 2, c.y - w / 2},
-        (Pair) {w, w},
-        *tc_curr_col(tc)
-    );
-}
-
-static u8 canvas_figure_circle_get_a_fill(struct Ctx* ctx, double r, Pair p) {
+static u8 canvas_figure_circle_get_a_fill(u32 w, double r, Pair p) {
     return 0xFF;
 }
 
-static u8 canvas_figure_circle_get_a(struct Ctx* ctx, double r, Pair p) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    i32 const w = (i32)tc->sdata.line_w;
-
+static u8 canvas_figure_circle_get_a(u32 w, double r, Pair p) {
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
     return (r - curr_r < w) * 0xFF;
 }
@@ -1785,6 +1783,7 @@ void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
         return;
     }
     struct FigureData const* fig = &tc->d.fig;
+    XImage* im = ctx->dc.cv.im;
     argb const col = *tc_curr_col(tc);
     i32 const dx = p1.x - p2.x;
     i32 const dy = p1.y - p2.y;
@@ -1793,73 +1792,66 @@ void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
         case Figure_Circle: {
             double const d = sqrt(dx * dx + dy * dy);
             canvas_circle(
-                ctx,
+                im,
                 (Pair) {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2},
                 (u32)d,
                 col,
                 fig->fill ? &canvas_figure_circle_get_a_fill
-                          : &canvas_figure_circle_get_a
+                          : &canvas_figure_circle_get_a,
+                tc->sdata.line_w
             );
         } break;
         case Figure_Rectangle: {
             if (fig->fill) {
-                canvas_fill_rect(ctx, p2, (Pair) {dx, dy}, col);
+                canvas_fill_rect(im, p2, (Pair) {dx, dy}, col);
             } else {
-                canvas_rect(ctx, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
+                canvas_rect(im, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
             }
         } break;
         // FIXME combine with Figure_Rectangle? same signatures
         case Figure_Triangle: {
             if (fig->fill) {
-                canvas_fill_triangle(ctx, p2, (Pair) {dx, dy}, col);
+                canvas_fill_triangle(im, p2, (Pair) {dx, dy}, col);
             } else {
-                canvas_triangle(
-                    ctx,
-                    p2,
-                    (Pair) {dx, dy},
-                    col,
-                    tc->sdata.line_w
-                );
+                canvas_triangle(im, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
             }
         } break;
     }
 }
 
-void canvas_fill_rect(struct Ctx* ctx, Pair c, Pair dims, argb col) {
-    struct DrawCtx* dc = &ctx->dc;
+void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
     Bool const nx = dims.x < 0;
     Bool const ny = dims.y < 0;
     for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
         for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
              ++y) {
-            ximage_put_checked(dc->cv.im, x, y, col);
+            ximage_put_checked(im, x, y, col);
         }
     }
 }
 
-void canvas_rect(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
+void canvas_rect(XImage* im, Pair c, Pair dims, argb col, u32 w) {
     // draw 4 sides and fill 2 corners (edge case on negative-negative input)
     Pair const cap = (Pair) {dims.x < 0 ? (i32)w : 0, dims.y < 0 ? (i32)w : 0};
     Pair const c1 = (Pair) {c.x - cap.x, c.y - cap.y};
     Pair const c2 = (Pair) {c.x + dims.x + cap.x, c.y + dims.y + cap.y};
-    canvas_fill_rect(ctx, c1, (Pair) {dims.x + cap.x, (i32)w}, col);
-    canvas_fill_rect(ctx, c1, (Pair) {(i32)w, dims.y + cap.y}, col);
-    canvas_fill_rect(ctx, c2, (Pair) {-dims.x - cap.x, -(i32)w}, col);
-    canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -dims.y - cap.y}, col);
+    canvas_fill_rect(im, c1, (Pair) {dims.x + cap.x, (i32)w}, col);
+    canvas_fill_rect(im, c1, (Pair) {(i32)w, dims.y + cap.y}, col);
+    canvas_fill_rect(im, c2, (Pair) {-dims.x - cap.x, -(i32)w}, col);
+    canvas_fill_rect(im, c2, (Pair) {-(i32)w, -dims.y - cap.y}, col);
     if (dims.x < 0 && dims.y < 0) {
-        canvas_fill_rect(ctx, c1, (Pair) {(i32)w, (i32)w}, col);
-        canvas_fill_rect(ctx, c2, (Pair) {-(i32)w, -(i32)w}, col);
+        canvas_fill_rect(im, c1, (Pair) {(i32)w, (i32)w}, col);
+        canvas_fill_rect(im, c2, (Pair) {-(i32)w, -(i32)w}, col);
     }
 }
 
-void canvas_fill_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col) {
-    struct DrawCtx* dc = &ctx->dc;
+void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col) {
     for (i32 i = 0; i < abs(dims.x); ++i) {
         i32 const line_w = (i32)(abs(dims.y) * ((double)i / abs(dims.x)));
         for (i32 j = 0; j < line_w; ++j) {
             // FIXME fix shape
             ximage_put_checked(
-                dc->cv.im,
+                im,
                 c.x + (dims.x > 0 ? i : -i),
                 c.y + (dims.y > 0 ? j : -j),
                 col
@@ -1868,21 +1860,25 @@ void canvas_fill_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col) {
     }
 }
 
-void canvas_triangle(struct Ctx* ctx, Pair c, Pair dims, argb col, u32 w) {
+void canvas_triangle(XImage* im, Pair c, Pair dims, argb col, u32 w) {
     Pair const edges[3] = {
         {c.x + dims.x / 2, c.y},
         {c.x, c.y + dims.y},
         {c.x + dims.x, c.y + dims.y},
     };
-    canvas_line(ctx, edges[0], edges[1], &canvas_draw_fn_pencil);
-    canvas_line(ctx, edges[1], edges[2], &canvas_draw_fn_pencil);
-    canvas_line(ctx, edges[0], edges[2], &canvas_draw_fn_pencil);
+    canvas_line(im, edges[0], edges[1], DrawerType_Pencil, col, w);
+    canvas_line(im, edges[1], edges[2], DrawerType_Pencil, col, w);
+    canvas_line(im, edges[0], edges[2], DrawerType_Pencil, col, w);
 }
 
-void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
-    struct DrawCtx* dc = &ctx->dc;
-    assert(dc->cv.im);
-
+void canvas_line(
+    XImage* im,
+    Pair from,
+    Pair to,
+    enum DrawerType type,
+    argb col,
+    u32 w
+) {
     i32 dx = abs(to.x - from.x);
     i32 sx = from.x < to.x ? 1 : -1;
     i32 dy = -abs(to.y - from.y);
@@ -1890,9 +1886,9 @@ void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
     i32 error = dx + dy;
 
     // FIXME don't work if start point out of canvas
-    while (from.x >= 0 && from.y >= 0 && from.x < dc->cv.im->width
-           && from.y < dc->cv.im->height) {
-        draw(ctx, from);
+    while (from.x >= 0 && from.y >= 0 && from.x < im->width
+           && from.y < im->height) {
+        canvas_apply_drawer(im, type, from, col, w);
         if (from.x == to.x && from.y == to.y) {
             break;
         }
@@ -1914,16 +1910,39 @@ void canvas_line(struct Ctx* ctx, Pair from, Pair to, draw_fn draw) {
     }
 }
 
+void canvas_apply_drawer(
+    XImage* im,
+    enum DrawerType type,
+    Pair c,
+    argb col,
+    u32 w
+) {
+    switch (type) {
+        case DrawerType_Brush:
+            // FIXME last argument unused (canvas_brush_get_a don't use it)
+            canvas_circle(im, c, w, col, &canvas_brush_get_a, w);
+            break;
+        case DrawerType_Pencil:
+            canvas_fill_rect(
+                im,
+                (Pair) {c.x - (i32)w / 2, c.y - (i32)w / 2},
+                (Pair) {(i32)w, (i32)w},
+                col
+            );
+            break;
+    }
+}
+
 void canvas_circle(
-    struct Ctx* ctx,
+    XImage* im,
     Pair c,
     u32 d,
     argb col,
-    circle_get_alpha_fn get_a
+    circle_get_alpha_fn get_a,
+    u32 w
 ) {
-    struct DrawCtx* dc = &ctx->dc;
     if (d == 1) {
-        ximage_put_checked(dc->cv.im, c.x, c.y, col);
+        ximage_put_checked(im, c.x, c.y, col);
         return;
     }
     double const r = d / 2.0;
@@ -1935,14 +1954,14 @@ void canvas_circle(
             double const dr = (dx - r) * (dx - r) + (dy - r) * (dy - r);
             u32 const x = l + dx;
             u32 const y = t + dy;
-            if (!BETWEEN(x, 0, dc->cv.im->width - 1)
-                || !BETWEEN(y, 0, dc->cv.im->height - 1) || dr > r_sq) {
+            if (!BETWEEN(x, 0, im->width - 1) || !BETWEEN(y, 0, im->height - 1)
+                || dr > r_sq) {
                 continue;
             }
-            argb const bg = XGetPixel(dc->cv.im, x, y);
+            argb const bg = XGetPixel(im, x, y);
             argb const blended =
-                blend_background(col, bg, get_a(ctx, r, (Pair) {dx, dy}));
-            XPutPixel(dc->cv.im, x, y, blended);
+                blend_background(col, bg, get_a(w, r, (Pair) {dx, dy}));
+            XPutPixel(im, x, y, blended);
         }
     }
 }
@@ -2039,7 +2058,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     // fill new area if needed
     if (old_width < new_width) {
         canvas_fill_rect(
-            ctx,
+            dc->cv.im,
             (Pair) {(i32)old_width, 0},
             (Pair) {(i32)(new_width - old_width), new_height},
             CANVAS.background_argb
@@ -2047,7 +2066,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     }
     if (old_height < new_height) {
         canvas_fill_rect(
-            ctx,
+            dc->cv.im,
             (Pair) {0, (i32)old_height},
             (Pair) {new_width, (i32)(new_height - old_height)},
             CANVAS.background_argb
