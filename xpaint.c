@@ -153,6 +153,7 @@ struct Ctx {
         i32 jpg_quality_level;  // FIXME find better place
         struct Canvas {
             XImage* im;
+            XImage* overlay;  // drawn on top of canvas
             enum ImageType type;
             i32 zoom;  // 0 == no zoom
             Pair scroll;
@@ -169,6 +170,7 @@ struct Ctx {
             u32 pm_w;  // to validate pm
             u32 pm_h;
             Pixmap pm;  // pixel buffer to update screen
+            Pixmap overlay;  // extra pixmap for overlay
         } cache;
     } dc;
 
@@ -397,7 +399,8 @@ static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
-static argb blend_background(argb fg, argb bg, u32 a);
+// coefficient c is proportional to the significance of component a
+static argb argb_blend(argb a, argb b, u8 c);
 static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg);
 static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
@@ -438,12 +441,11 @@ static Bool history_move(struct Ctx* ctx, Bool forward);
 static void history_push(struct History** hist, struct Ctx* ctx);
 static void history_forward(struct Ctx* ctx);
 static void history_apply(struct Ctx* ctx, struct History* hist);
-static Bool history_restore(struct Ctx* ctx);
 static struct History history_clone(struct History const* hist);
 static void historyarr_clear(Display* dp, struct History** hist);
 
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
-static void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2);
+static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
 static void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static void canvas_rect(XImage* im, Pair c, Pair dims, argb col, u32 w);
 static void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col);
@@ -452,11 +454,12 @@ static void canvas_circle(XImage* im, Pair c, u32 d, argb col, circle_get_alpha_
 static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerType type, argb col, u32 w);
 static void canvas_apply_drawer(XImage* im, enum DrawerType type, Pair c, argb col, u32 w);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
-static void canvas_fill(struct Ctx* ctx, argb col);
+static void canvas_fill(XImage* im, argb col);
 static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
 static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
+static void overlay_clear(XImage* im);
 
 static u32 statusline_height(struct DrawCtx const* dc);
 // window size - interface parts (e.g. statusline)
@@ -474,6 +477,10 @@ static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
 static void show_message_va(struct Ctx* ctx, char const* fmt, ...);
+
+static void dc_cache_init(struct DrawCtx* dc);
+static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im);
+static void dc_cache_free(struct DrawCtx* dc);
 
 static struct Ctx ctx_init(Display* dp);
 static void setup(Display* dp, struct Ctx* ctx);
@@ -860,23 +867,26 @@ u8* ximage_to_rgb(XImage const* image, Bool rgba) {
     return data;
 }
 
-argb blend_background(argb fg, argb bg, u32 a) {
-    u32 const fgr = (fg >> 16) & 0xFF;
-    u32 const fgg = (fg >> 8) & 0xFF;
-    u32 const fgb = fg & 0xFF;
-    u32 const bgr = (bg >> 16) & 0xFF;
-    u32 const bgg = (bg >> 8) & 0xFF;
-    u32 const bgb = bg & 0xFF;
+argb argb_blend(argb a, argb b, u8 c) {
+    u32 const aa = (a >> 24) & 0xFF;
+    u32 const ar = (a >> 16) & 0xFF;
+    u32 const ag = (a >> 8) & 0xFF;
+    u32 const ab = a & 0xFF;
+    u32 const ba = (b >> 24) & 0xFF;
+    u32 const br = (b >> 16) & 0xFF;
+    u32 const bg = (b >> 8) & 0xFF;
+    u32 const bb = b & 0xFF;
 
     // https://stackoverflow.com/a/12016968
     // result = foreground * alpha + background * (1.0 - alpha)
-    u32 const alpha = a + 1;
-    u32 const inv_alpha = 256 - a;
-    u32 const red = (alpha * fgr + inv_alpha * bgr) >> 8;
-    u32 const green = (alpha * fgg + inv_alpha * bgg) >> 8;
-    u32 const blue = (alpha * fgb + inv_alpha * bgb) >> 8;
+    u32 const blend = c + 1;
+    u32 const inv_blend = 256 - c;
+    u32 const alpha = (blend * aa + inv_blend * ba) >> 8;
+    u32 const red = (blend * ar + inv_blend * br) >> 8;
+    u32 const green = (blend * ag + inv_blend * bg) >> 8;
+    u32 const blue = (blend * ab + inv_blend * bb) >> 8;
 
-    return 0xFF << 24 | red << 16 | green << 8 | blue;
+    return alpha << 24 | red << 16 | green << 8 | blue;
 }
 
 static u32 argb_to_abgr(argb v) {
@@ -905,7 +915,7 @@ static XImage* read_file_from_memory(
     argb* image = (argb*)image_data;
     for (i32 i = 0; i < (width * height); ++i) {
         if (bg) {
-            image[i] = blend_background(image[i], bg, (image[i] >> 24) & 0xFF);
+            image[i] = argb_blend(image[i], bg, (image[i] >> 24) & 0xFF);
         }
         // https://stackoverflow.com/a/17030897
         image[i] = argb_to_abgr(image[i]);
@@ -1608,12 +1618,13 @@ void tool_figure_on_release(
 ) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    if (event->button != XLeftMouseBtn || ctx->input.is_dragging) {
+    if (event->button != XLeftMouseBtn
+        || (!ctx->input.is_dragging && !(event->state & ShiftMask))) {
         return;
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, pointer, tc->sdata.anchor);
+    canvas_figure(ctx, False, pointer, tc->sdata.anchor);
 }
 
 void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
@@ -1623,9 +1634,8 @@ void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         return;
     }
 
-    history_restore(ctx);
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, pointer, tc->sdata.anchor);
+    canvas_figure(ctx, True, pointer, tc->sdata.anchor);
 }
 
 static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
@@ -1729,15 +1739,6 @@ void history_apply(struct Ctx* ctx, struct History* hist) {
     ctx->dc.cv.im = hist->im;
 }
 
-Bool history_restore(struct Ctx* ctx) {
-    if (!arrlen(ctx->hist_prevarr)) {
-        return False;
-    }
-    struct History hist = history_clone(&arrlast(ctx->hist_prevarr));
-    history_apply(ctx, &hist);
-    return True;
-}
-
 struct History history_clone(struct History const* hist) {
     struct History result;
     result.im = XSubImage(hist->im, 0, 0, hist->im->width, hist->im->height);
@@ -1777,13 +1778,13 @@ static u8 canvas_figure_circle_get_a(u32 w, double r, Pair p) {
     return (r - curr_r < w) * 0xFF;
 }
 
-void canvas_figure(struct Ctx* ctx, Pair p1, Pair p2) {
+void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     if (tc->t != Tool_Figure) {
         return;
     }
     struct FigureData const* fig = &tc->d.fig;
-    XImage* im = ctx->dc.cv.im;
+    XImage* im = to_overlay ? ctx->dc.cv.overlay : ctx->dc.cv.im;
     argb const col = *tc_curr_col(tc);
     i32 const dx = p1.x - p2.x;
     i32 const dy = p1.y - p2.y;
@@ -1960,7 +1961,7 @@ void canvas_circle(
             }
             argb const bg = XGetPixel(im, x, y);
             argb const blended =
-                blend_background(col, bg, get_a(w, r, (Pair) {dx, dy}));
+                argb_blend(col, bg, get_a(w, r, (Pair) {dx, dy}));
             XPutPixel(im, x, y, blended);
         }
     }
@@ -2006,13 +2007,10 @@ void canvas_copy_region(
     free(region_dyn);
 }
 
-void canvas_fill(struct Ctx* ctx, argb col) {
-    struct DrawCtx* dc = &ctx->dc;
-    assert(dc && dc->cv.im);
-
-    for (i32 i = 0; i < dc->cv.im->width; ++i) {
-        for (i32 j = 0; j < dc->cv.im->height; ++j) {
-            XPutPixel(dc->cv.im, i, j, col);
+void canvas_fill(XImage* im, argb col) {
+    for (i32 i = 0; i < im->width; ++i) {
+        for (i32 j = 0; j < im->height; ++j) {
+            XPutPixel(im, i, j, col);
         }
     }
 }
@@ -2028,6 +2026,10 @@ void canvas_free(Display* dp, struct Canvas* cv) {
     if (cv->im) {
         XDestroyImage(cv->im);
         cv->im = NULL;
+    }
+    if (cv->overlay) {
+        XDestroyImage(cv->overlay);
+        cv->overlay = NULL;
     }
 }
 
@@ -2049,6 +2051,11 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     struct DrawCtx* dc = &ctx->dc;
     u32 const old_width = dc->cv.im->width;
     u32 const old_height = dc->cv.im->height;
+
+    // resize overlay too
+    XImage* old_overlay = dc->cv.overlay;
+    dc->cv.overlay = XSubImage(dc->cv.overlay, 0, 0, new_width, new_height);
+    XDestroyImage(old_overlay);
 
     // FIXME can fill color be changed?
     XImage* new_cv_im = XSubImage(dc->cv.im, 0, 0, new_width, new_height);
@@ -2072,6 +2079,10 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
             CANVAS.background_argb
         );
     }
+}
+
+void overlay_clear(XImage* im) {
+    canvas_fill(im, 0x00000000);
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
@@ -2341,41 +2352,32 @@ void update_screen(struct Ctx* ctx) {
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
-            if (dc->cache.pm == 0 || dc->cache.pm_w != dc->cv.im->width
-                || dc->cache.pm_h != dc->cv.im->height) {
-                if (dc->cache.pm != 0) {
-                    XFreePixmap(dc->dp, dc->cache.pm);
-                }
-                dc->cache.pm = XCreatePixmap(
-                    dc->dp,
-                    dc->window,
-                    dc->cv.im->width,
-                    dc->cv.im->height,
-                    dc->vinfo.depth
-                );
-                dc->cache.pm_w = dc->cv.im->width;
-                dc->cache.pm_h = dc->cv.im->height;
-            }
-            // clang-format off
-            XPutImage(
-                dc->dp,
-                dc->cache.pm,
-                dc->screen_gc,
-                dc->cv.im,
-                0, 0,
-                0, 0,
-                dc->cv.im->width, dc->cv.im->height
-            );
-            // clang-format on
 
-            Picture src_pict = XRenderCreatePicture(
+            // resize pixmaps if needed
+            if (dc->cache.pm_w != dc->cv.im->width
+                || dc->cache.pm_h != dc->cv.im->height) {
+                dc_cache_free(dc);
+                dc_cache_init(dc);
+            }
+
+            dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im);
+            dc_cache_update_pm(dc, dc->cache.overlay, dc->cv.overlay);
+
+            Picture cv_pict = XRenderCreatePicture(
                 dc->dp,
                 dc->cache.pm,
                 dc->xrnd_pic_format,
                 0,
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
-            Picture dst_pict = XRenderCreatePicture(
+            Picture overlay_pict = XRenderCreatePicture(
+                dc->dp,
+                dc->cache.overlay,
+                dc->xrnd_pic_format,
+                0,
+                &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
+            );
+            Picture bb_pict = XRenderCreatePicture(
                 dc->dp,
                 dc->back_buffer,
                 dc->xrnd_pic_format,
@@ -2386,7 +2388,16 @@ void update_screen(struct Ctx* ctx) {
             double const z = 1.0 / ZOOM_C(dc);
             XRenderSetPictureTransform(
                 dc->dp,
-                src_pict,
+                cv_pict,
+                &(XTransform) {{
+                    {XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0)},
+                    {XDoubleToFixed(0), XDoubleToFixed(z), XDoubleToFixed(0)},
+                    {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)},
+                }}
+            );
+            XRenderSetPictureTransform(
+                dc->dp,
+                overlay_pict,
                 &(XTransform) {{
                     {XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0)},
                     {XDoubleToFixed(0), XDoubleToFixed(z), XDoubleToFixed(0)},
@@ -2398,8 +2409,17 @@ void update_screen(struct Ctx* ctx) {
             // clang-format off
             XRenderComposite(
                 dc->dp, PictOpSrc,
-                src_pict, 0,
-                dst_pict,
+                cv_pict, None,
+                bb_pict,
+                0, 0,
+                0, 0,
+                dc->cv.scroll.x, dc->cv.scroll.y,
+                cv_size.x, cv_size.y
+            );
+            XRenderComposite(
+                dc->dp, PictOpOver,
+                overlay_pict, None,
+                bb_pict,
                 0, 0,
                 0, 0,
                 dc->cv.scroll.x, dc->cv.scroll.y,
@@ -2407,8 +2427,9 @@ void update_screen(struct Ctx* ctx) {
             );
             // clang-format on
 
-            XRenderFreePicture(dc->dp, src_pict);
-            XRenderFreePicture(dc->dp, dst_pict);
+            XRenderFreePicture(dc->dp, cv_pict);
+            XRenderFreePicture(dc->dp, overlay_pict);
+            XRenderFreePicture(dc->dp, bb_pict);
         }
     }
     /* current selection */ {
@@ -2650,6 +2671,53 @@ void show_message_va(struct Ctx* ctx, char const* fmt, ...) {
     va_end(ap);
 }
 
+void dc_cache_init(struct DrawCtx* dc) {
+    assert(dc->cache.pm == 0 && dc->cache.overlay == 0);
+
+    dc->cache.pm = XCreatePixmap(
+        dc->dp,
+        dc->window,
+        dc->cv.im->width,
+        dc->cv.im->height,
+        dc->vinfo.depth
+    );
+    dc->cache.overlay = XCreatePixmap(
+        dc->dp,
+        dc->window,
+        dc->cv.im->width,
+        dc->cv.im->height,
+        dc->vinfo.depth
+    );
+    dc->cache.pm_w = dc->cv.im->width;
+    dc->cache.pm_h = dc->cv.im->height;
+}
+
+void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im) {
+    XPutImage(
+        dc->dp,
+        pm,
+        dc->screen_gc,
+        im,
+        0,
+        0,
+        0,
+        0,
+        dc->cv.im->width,
+        dc->cv.im->height
+    );
+}
+
+void dc_cache_free(struct DrawCtx* dc) {
+    if (dc->cache.pm != 0) {
+        XFreePixmap(dc->dp, dc->cache.pm);
+        dc->cache.pm = 0;
+    }
+    if (dc->cache.overlay != 0) {
+        XFreePixmap(dc->dp, dc->cache.overlay);
+        dc->cache.overlay = 0;
+    }
+}
+
 struct Ctx ctx_init(Display* dp) {
     return (struct Ctx) {
         .dc =
@@ -2855,7 +2923,17 @@ void setup(Display* dp, struct Ctx* ctx) {
             );
             XFreePixmap(dp, data);
             // initial canvas color
-            canvas_fill(ctx, CANVAS.background_argb);
+            canvas_fill(ctx->dc.cv.im, CANVAS.background_argb);
+        }
+        /* overlay */ {
+            ctx->dc.cv.overlay = XSubImage(
+                ctx->dc.cv.im,
+                0,
+                0,
+                ctx->dc.cv.im->width,
+                ctx->dc.cv.im->height
+            );
+            overlay_clear(ctx->dc.cv.overlay);
         }
 
         ctx->dc.width = CLAMP(
@@ -2870,6 +2948,9 @@ void setup(Display* dp, struct Ctx* ctx) {
         );
         XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }
+
+    // draw cache
+    dc_cache_init(&ctx->dc);
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
         tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
@@ -2955,6 +3036,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         update_screen(ctx);
     }
 
+    overlay_clear(ctx->dc.cv.overlay);
     if (CURR_TC(ctx).on_release) {
         CURR_TC(ctx).on_release(ctx, e);
         update_screen(ctx);
@@ -3300,6 +3382,7 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             ctx->input.drag_from =
                 point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
         }
+        overlay_clear(ctx->dc.cv.overlay);
         if (CURR_TC(ctx).on_drag) {
             struct timeval current_time;
             gettimeofday(&current_time, 0x0);
@@ -3316,6 +3399,7 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             update_screen(ctx);
         }
     } else {
+        // FIXME unused
         if (CURR_TC(ctx).on_move) {
             CURR_TC(ctx).on_move(ctx, e);
             ctx->input.last_proc_drag_ev_us = 0;
@@ -3523,11 +3607,7 @@ void cleanup(struct Ctx* ctx) {
         }
     }
     /* DrawCtx */ {
-        /* Cache */ {
-            if (ctx->dc.cache.pm != 0) {
-                XFreePixmap(ctx->dc.dp, ctx->dc.cache.pm);
-            }
-        }
+        dc_cache_free(&ctx->dc);
         /* Scheme */ {  // depends on VisualInfo and Colormap
             for (i32 i = 0; i < SchmLast; ++i) {
                 for (i32 j = 0; j < 2; ++j) {
