@@ -396,6 +396,7 @@ static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
+static Pair point_rotate(Pair p, double deg); // clockwise
 
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -449,7 +450,8 @@ static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
 static void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static void canvas_rect(XImage* im, Pair c, Pair dims, argb col, u32 w);
 static void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col);
-static void canvas_triangle(XImage* im, Pair c, Pair dims, argb col, u32 w);
+// line from a to b is a height of equilateral triangle (b is triangle vertex)
+static void canvas_eq_triangle(XImage* im, Pair a, Pair b, argb col, u32 w);
 static void canvas_circle(XImage* im, Pair c, u32 d, argb col, circle_get_alpha_fn get_a, u32 w);
 static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerType type, argb col, u32 w);
 static void canvas_apply_drawer(XImage* im, enum DrawerType type, Pair c, argb col, u32 w);
@@ -805,9 +807,17 @@ Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     };
 }
 
-static Bool point_in_rect(Pair p, Pair a1, Pair a2) {
+Bool point_in_rect(Pair p, Pair a1, Pair a2) {
     return MIN(a1.x, a2.x) < p.x && p.x < MAX(a1.x, a2.x)
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
+}
+
+Pair point_rotate(Pair p, double deg) {
+    double rad = deg * PI / 180.0;
+    return (Pair) {
+        .x = (i32)(cos(rad) * p.x - sin(rad) * p.y),
+        .y = (i32)(sin(rad) * p.x + cos(rad) * p.y),
+    };
 }
 
 enum ImageType file_type(char const* file_path) {
@@ -1814,7 +1824,7 @@ void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
             if (fig->fill) {
                 canvas_fill_triangle(im, p2, (Pair) {dx, dy}, col);
             } else {
-                canvas_triangle(im, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
+                canvas_eq_triangle(im, p2, p1, col, tc->sdata.line_w);
             }
         } break;
     }
@@ -1861,12 +1871,19 @@ void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col) {
     }
 }
 
-void canvas_triangle(XImage* im, Pair c, Pair dims, argb col, u32 w) {
-    Pair const edges[3] = {
-        {c.x + dims.x / 2, c.y},
-        {c.x, c.y + dims.y},
-        {c.x + dims.x, c.y + dims.y},
+void canvas_eq_triangle(XImage* im, Pair a, Pair b, argb col, u32 w) {
+    Pair const h = {a.x - b.x, a.y - b.y};  // triangle height
+    Pair const h_rot = point_rotate(h, 90.0);
+    Pair const side = {
+        .x = (i32)(h_rot.x * 2.0 / sqrt(3.0)),
+        .y = (i32)(h_rot.y * 2.0 / sqrt(3.0))
     };
+    Pair const edges[3] = {
+        b,
+        (Pair) {a.x + side.x / 2, a.y + side.y / 2},
+        (Pair) {a.x - side.x / 2, a.y - side.y / 2},
+    };
+
     canvas_line(im, edges[0], edges[1], DrawerType_Pencil, col, w);
     canvas_line(im, edges[1], edges[2], DrawerType_Pencil, col, w);
     canvas_line(im, edges[0], edges[2], DrawerType_Pencil, col, w);
