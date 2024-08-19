@@ -21,6 +21,11 @@ typedef struct {
     i32 y;
 } Pair;
 
+typedef struct {
+    double x;
+    double y;
+} DPt;
+
 enum Schm {
     SchmNorm,
     SchmFocus,

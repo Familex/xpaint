@@ -74,6 +74,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define NIL              (-1)
 #define PNIL             ((Pair) {NIL, NIL})
 #define ZOOM_SPEED       (1.2)
+#define ARGB_ALPHA       (0xFF000000)
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -396,7 +397,9 @@ static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
-static Pair point_rotate(Pair p, double deg); // clockwise
+static Pair dpt_to_pt(DPt p);
+static DPt dpt_rotate(DPt p, double deg); // clockwise
+static DPt dpt_add(DPt a, DPt b);
 
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -446,12 +449,11 @@ static struct History history_clone(struct History const* hist);
 static void historyarr_clear(Display* dp, struct History** hist);
 
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
-static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
+static void ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
-static void canvas_rect(XImage* im, Pair c, Pair dims, argb col, u32 w);
-static void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col);
-// line from a to b is a height of equilateral triangle (b is triangle vertex)
-static void canvas_eq_triangle(XImage* im, Pair a, Pair b, argb col, u32 w);
+static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
+// line from `a` to `b` is a polygon height (a is a base);
+static void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w);
 static void canvas_circle(XImage* im, Pair c, u32 d, argb col, circle_get_alpha_fn get_a, u32 w);
 static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerType type, argb col, u32 w);
 static void canvas_apply_drawer(XImage* im, enum DrawerType type, Pair c, argb col, u32 w);
@@ -462,6 +464,7 @@ static void canvas_free(Display* dp, struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 static void overlay_clear(XImage* im);
+static void overlay_dump(struct Ctx* ctx, XImage* overlay);
 
 static u32 statusline_height(struct DrawCtx const* dc);
 // window size - interface parts (e.g. statusline)
@@ -812,11 +815,25 @@ Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-Pair point_rotate(Pair p, double deg) {
-    double rad = deg * PI / 180.0;
+Pair dpt_to_pt(DPt p) {
     return (Pair) {
-        .x = (i32)(cos(rad) * p.x - sin(rad) * p.y),
-        .y = (i32)(sin(rad) * p.x + cos(rad) * p.y),
+        .x = (i32)p.x,
+        .y = (i32)p.y,
+    };
+}
+
+DPt dpt_rotate(DPt p, double deg) {
+    double rad = deg * PI / 180.0;
+    return (DPt) {
+        .x = cos(rad) * p.x - sin(rad) * p.y,
+        .y = sin(rad) * p.x + cos(rad) * p.y,
+    };
+}
+
+DPt dpt_add(DPt a, DPt b) {
+    return (DPt) {
+        .x = a.x + b.x,
+        .y = a.y + b.y,
     };
 }
 
@@ -869,7 +886,7 @@ u8* ximage_to_rgb(XImage const* image, Bool rgba) {
             data[ii + 1] = (pixel & 0xFF00) >> 8U;
             data[ii + 2] = (pixel & 0xFF);
             if (rgba) {
-                data[ii + 3] = (pixel & 0xFF000000) >> 24U;
+                data[ii + 3] = (pixel & ARGB_ALPHA) >> 24U;
             }
             ii += (i32)pixel_size;
         }
@@ -900,7 +917,7 @@ argb argb_blend(argb a, argb b, u8 c) {
 }
 
 static u32 argb_to_abgr(argb v) {
-    u32 const a = v & 0xFF000000;
+    u32 const a = v & ARGB_ALPHA;
     u8 const red = (v & 0x00FF0000) >> (2 * 8);
     u32 const g = v & 0x0000FF00;
     u8 const blue = v & 0x000000FF;
@@ -1304,7 +1321,7 @@ static void cl_compls_update_helper(
         char const* enum_str = enum_to_str(e);
         usize offset = first_dismatch(enum_str, token);
         if (offset == strlen(token)) {
-            arrpush(*result, str_new("%s", enum_str + offset));
+            arrpush(*result, str_new("%s", enum_str + offset));  // NOLINT
         }
     }
 }
@@ -1634,7 +1651,8 @@ void tool_figure_on_release(
     }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, False, pointer, tc->sdata.anchor);
+    canvas_figure(ctx, True, pointer, tc->sdata.anchor);
+    overlay_dump(ctx, ctx->dc.cv.overlay);
 }
 
 void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
@@ -1648,45 +1666,6 @@ void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     canvas_figure(ctx, True, pointer, tc->sdata.anchor);
 }
 
-static void flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
-    assert(im);
-    if (x < 0 || y < 0 || x >= im->width || y >= im->height) {
-        return;
-    }
-
-    static i32 const d_rows[] = {1, 0, 0, -1};
-    static i32 const d_cols[] = {0, 1, -1, 0};
-
-    argb const area_col = XGetPixel(im, x, y);
-    if (area_col == targ_col) {
-        return;
-    }
-
-    Pair* queue_arr = NULL;
-    Pair first = {x, y};
-    arrpush(queue_arr, first);
-
-    while (arrlen(queue_arr)) {
-        Pair curr = arrpop(queue_arr);
-
-        for (i32 dir = 0; dir < 4; ++dir) {
-            Pair d_curr = {curr.x + d_rows[dir], curr.y + d_cols[dir]};
-
-            if (d_curr.x < 0 || d_curr.y < 0 || d_curr.x >= im->width
-                || d_curr.y >= im->height) {
-                continue;
-            }
-
-            if (XGetPixel(im, d_curr.x, d_curr.y) == area_col) {
-                XPutPixel(im, d_curr.x, d_curr.y, targ_col);
-                arrpush(queue_arr, d_curr);
-            }
-        }
-    }
-
-    arrfree(queue_arr);
-}
-
 void tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
@@ -1695,7 +1674,7 @@ void tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     }
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
-    flood_fill(dc->cv.im, *tc_curr_col(tc), pointer.x, pointer.y);
+    ximage_flood_fill(dc->cv.im, *tc_curr_col(tc), pointer.x, pointer.y);
 }
 
 void tool_picker_on_release(
@@ -1773,6 +1752,56 @@ Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
     return True;
 }
 
+void ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
+    assert(im);
+    if (x < 0 || y < 0 || x >= im->width || y >= im->height) {
+        return;
+    }
+
+    static i32 const d_rows[] = {1, 0, 0, -1};
+    static i32 const d_cols[] = {0, 1, -1, 0};
+
+    argb const area_col = XGetPixel(im, x, y);
+    if (area_col == targ_col) {
+        return;
+    }
+
+    Pair* queue_arr = NULL;
+    Pair first = {x, y};
+    arrpush(queue_arr, first);
+
+    while (arrlen(queue_arr)) {
+        Pair curr = arrpop(queue_arr);
+
+        for (i32 dir = 0; dir < 4; ++dir) {
+            Pair d_curr = {curr.x + d_rows[dir], curr.y + d_cols[dir]};
+
+            if (d_curr.x < 0 || d_curr.y < 0 || d_curr.x >= im->width
+                || d_curr.y >= im->height) {
+                continue;
+            }
+
+            if (XGetPixel(im, d_curr.x, d_curr.y) == area_col) {
+                XPutPixel(im, d_curr.x, d_curr.y, targ_col);
+                arrpush(queue_arr, d_curr);
+            }
+        }
+    }
+
+    arrfree(queue_arr);
+}
+
+void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
+    Bool const nx = dims.x < 0;
+    Bool const ny = dims.y < 0;
+    for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
+        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
+             ++y) {
+            ximage_put_checked(im, x, y, col);
+        }
+    }
+}
+
 // FIXME w unused (required because of circle_get_alpha_fn)
 static u8 canvas_brush_get_a(u32 w, double r, Pair p) {
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
@@ -1786,6 +1815,20 @@ static u8 canvas_figure_circle_get_a_fill(u32 w, double r, Pair p) {
 static u8 canvas_figure_circle_get_a(u32 w, double r, Pair p) {
     double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
     return (r - curr_r < w) * 0xFF;
+}
+
+static Pair
+get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
+    switch (type) {
+        case Figure_Circle:
+        case Figure_Rectangle:
+        case Figure_Triangle:
+            return (Pair) {
+                CLAMP((a.x + b.x) / 2, 0, im_dims.x),
+                CLAMP((a.y + b.y) / 2, 0, im_dims.y),
+            };
+    }
+    return (Pair) {-1, -1};  // will not fill anything
 }
 
 void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
@@ -1812,81 +1855,56 @@ void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
                 tc->sdata.line_w
             );
         } break;
-        case Figure_Rectangle: {
-            if (fig->fill) {
-                canvas_fill_rect(im, p2, (Pair) {dx, dy}, col);
-            } else {
-                canvas_rect(im, p2, (Pair) {dx, dy}, col, tc->sdata.line_w);
-            }
-        } break;
-        // FIXME combine with Figure_Rectangle? same signatures
+        case Figure_Rectangle:
         case Figure_Triangle: {
+            u32 sides = fig->curr == Figure_Triangle ? 3 : 4;
+            canvas_regular_poly(im, sides, p2, p1, col, tc->sdata.line_w);
             if (fig->fill) {
-                canvas_fill_triangle(im, p2, (Pair) {dx, dy}, col);
-            } else {
-                canvas_eq_triangle(im, p2, p1, col, tc->sdata.line_w);
+                Pair const im_dims = {im->width, im->height};
+                Pair const fill_pt =
+                    get_fig_fill_pt(fig->curr, p2, p1, im_dims);
+                ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
             }
         } break;
     }
 }
 
-void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
-    Bool const nx = dims.x < 0;
-    Bool const ny = dims.y < 0;
-    for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
-        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
-             ++y) {
-            ximage_put_checked(im, x, y, col);
-        }
+// FIXME runs in runtime
+static DPt get_inr_circmr_cfs(u32 n) {
+    // from https://math.stackexchange.com/a/3504360
+    if (n % 2 == 0) {
+        return (DPt) {0.5, 0.5};
     }
+    double const h = 1;
+    double const side = 2.0 * h * sin(PI / n) / (1 + cos(PI / n));
+    double const inradius = side / 2.0 / tan(PI / n);
+    double const circumradius = side / 2.0 / sin(PI / n);
+    return (DPt) {inradius, circumradius};
 }
 
-void canvas_rect(XImage* im, Pair c, Pair dims, argb col, u32 w) {
-    // draw 4 sides and fill 2 corners (edge case on negative-negative input)
-    Pair const cap = (Pair) {dims.x < 0 ? (i32)w : 0, dims.y < 0 ? (i32)w : 0};
-    Pair const c1 = (Pair) {c.x - cap.x, c.y - cap.y};
-    Pair const c2 = (Pair) {c.x + dims.x + cap.x, c.y + dims.y + cap.y};
-    canvas_fill_rect(im, c1, (Pair) {dims.x + cap.x, (i32)w}, col);
-    canvas_fill_rect(im, c1, (Pair) {(i32)w, dims.y + cap.y}, col);
-    canvas_fill_rect(im, c2, (Pair) {-dims.x - cap.x, -(i32)w}, col);
-    canvas_fill_rect(im, c2, (Pair) {-(i32)w, -dims.y - cap.y}, col);
-    if (dims.x < 0 && dims.y < 0) {
-        canvas_fill_rect(im, c1, (Pair) {(i32)w, (i32)w}, col);
-        canvas_fill_rect(im, c2, (Pair) {-(i32)w, -(i32)w}, col);
-    }
-}
-
-void canvas_fill_triangle(XImage* im, Pair c, Pair dims, argb col) {
-    for (i32 i = 0; i < abs(dims.x); ++i) {
-        i32 const line_w = (i32)(abs(dims.y) * ((double)i / abs(dims.x)));
-        for (i32 j = 0; j < line_w; ++j) {
-            // FIXME fix shape
-            ximage_put_checked(
-                im,
-                c.x + (dims.x > 0 ? i : -i),
-                c.y + (dims.y > 0 ? j : -j),
-                col
-            );
-        }
-    }
-}
-
-void canvas_eq_triangle(XImage* im, Pair a, Pair b, argb col, u32 w) {
-    Pair const h = {a.x - b.x, a.y - b.y};  // triangle height
-    Pair const h_rot = point_rotate(h, 90.0);
-    Pair const side = {
-        .x = (i32)(h_rot.x * 2.0 / sqrt(3.0)),
-        .y = (i32)(h_rot.y * 2.0 / sqrt(3.0))
+void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w) {
+    DPt const inr_circmr = get_inr_circmr_cfs(n);
+    DPt c = {
+        a.x + (b.x - a.x) * inr_circmr.x,
+        a.y + (b.y - a.y) * inr_circmr.x,
     };
-    Pair const edges[3] = {
-        b,
-        (Pair) {a.x + side.x / 2, a.y + side.y / 2},
-        (Pair) {a.x - side.x / 2, a.y - side.y / 2},
+    DPt curr = {
+        (b.x - a.x) * inr_circmr.y,
+        (b.y - a.y) * inr_circmr.y,
     };
-
-    canvas_line(im, edges[0], edges[1], DrawerType_Pencil, col, w);
-    canvas_line(im, edges[1], edges[2], DrawerType_Pencil, col, w);
-    canvas_line(im, edges[0], edges[2], DrawerType_Pencil, col, w);
+    DPt prev = curr;
+    for (u32 i = 0; i < n; ++i) {
+        curr = dpt_rotate(curr, 360.0 / n);
+        canvas_line(
+            im,
+            dpt_to_pt(dpt_add(c, prev)),
+            dpt_to_pt(dpt_add(c, curr)),
+            DrawerType_Pencil,
+            col,
+            w
+        );
+        prev = curr;
+    }
 }
 
 void canvas_line(
@@ -1897,15 +1915,16 @@ void canvas_line(
     argb col,
     u32 w
 ) {
+    u32 const CANVAS_LINE_MAX_STEPS = 1000000;
+
     i32 dx = abs(to.x - from.x);
     i32 sx = from.x < to.x ? 1 : -1;
     i32 dy = -abs(to.y - from.y);
     i32 sy = from.y < to.y ? 1 : -1;
     i32 error = dx + dy;
 
-    // FIXME don't work if start point out of canvas
-    while (from.x >= 0 && from.y >= 0 && from.x < im->width
-           && from.y < im->height) {
+    u32 steps = 0;  // prevent infinite loops
+    while (++steps < CANVAS_LINE_MAX_STEPS) {
         canvas_apply_drawer(im, type, from, col, w);
         if (from.x == to.x && from.y == to.y) {
             break;
@@ -2100,6 +2119,22 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
 
 void overlay_clear(XImage* im) {
     canvas_fill(im, 0x00000000);
+}
+
+void overlay_dump(struct Ctx* ctx, XImage* overlay) {
+    XImage* cv = ctx->dc.cv.im;
+    assert(cv->width == overlay->width);
+    assert(cv->height == overlay->height);
+
+    for (i32 x = 0; x < overlay->width; ++x) {
+        for (i32 y = 0; y < overlay->height; ++y) {
+            argb ovr = XGetPixel(overlay, x, y);
+            if (ovr & ARGB_ALPHA) {
+                argb bg = XGetPixel(cv, x, y);
+                XPutPixel(cv, x, y, argb_blend(ovr, bg, 0xFF));
+            }
+        }
+    }
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
