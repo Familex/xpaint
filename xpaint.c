@@ -202,10 +202,11 @@ struct Ctx {
     } input;
 
     struct ToolCtx {
-        void (*on_press)(struct Ctx*, XButtonPressedEvent const*);
-        void (*on_release)(struct Ctx*, XButtonReleasedEvent const*);
-        void (*on_drag)(struct Ctx*, XMotionEvent const*);
-        void (*on_move)(struct Ctx*, XMotionEvent const*);
+        // returns False, if returned early
+        Bool (*on_press)(struct Ctx*, XButtonPressedEvent const*);
+        Bool (*on_release)(struct Ctx*, XButtonReleasedEvent const*);
+        Bool (*on_drag)(struct Ctx*, XMotionEvent const*);
+        Bool (*on_move)(struct Ctx*, XMotionEvent const*);
 
         struct ToolSharedData {
             argb* colarr;
@@ -430,16 +431,16 @@ static void sel_circ_free(struct SelectionCircle* sel_circ);
 static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
 
 // separate functions, because they are callbacks
-static void tool_selection_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
-static void tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
-static void tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event);
-static void tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
-static void tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
-static void tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event);
-static void tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
-static void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
-static void tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
-static void tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
+static Bool tool_selection_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
+static Bool tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
+static Bool tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event);
+static Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
+static Bool tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
+static Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event);
+static Bool tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
+static Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
+static Bool tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
+static Bool tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 
 static Bool history_move(struct Ctx* ctx, Bool forward);
 static void history_push(struct History** hist, struct Ctx* ctx);
@@ -1498,38 +1499,50 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     return (i32)(angle / segment_deg);
 }
 
-void tool_selection_on_press(
+Bool tool_selection_on_press(
     struct Ctx* ctx,
     XButtonPressedEvent const* event
 ) {
+    if (event->button != XLeftMouseBtn) {
+        return False;
+    }
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     assert(tc->t == Tool_Selection);
-    if (event->button == XLeftMouseBtn) {
-        struct SelectionData* sd = &tc->d.sel;
-        Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-        if (HAS_SELECTION(tc) && point_in_rect(pointer, sd->begin, sd->end)) {
-            sd->drag_from = pointer;
-            sd->drag_to = pointer;
-        } else {
-            sd->begin.x = CLAMP(pointer.x, 0, dc->cv.im->width);
-            sd->begin.y = CLAMP(pointer.y, 0, dc->cv.im->height);
-            sd->end = PNIL;
-        }
+
+    struct SelectionData* sd = &tc->d.sel;
+    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+
+    if (HAS_SELECTION(tc) && point_in_rect(pointer, sd->begin, sd->end)) {
+        sd->drag_from = pointer;
+        sd->drag_to = pointer;
+    } else {
+        sd->begin.x = CLAMP(pointer.x, 0, dc->cv.im->width);
+        sd->begin.y = CLAMP(pointer.y, 0, dc->cv.im->height);
+        sd->end = PNIL;
     }
+    return True;
 }
 
-void tool_selection_on_release(
+Bool tool_selection_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
+    if (event->button != XLeftMouseBtn) {
+        return False;
+    }
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     assert(tc->t == Tool_Selection);
-    if (event->button != XLeftMouseBtn) {
-        return;
-    }
+
     struct SelectionData* sd = &tc->d.sel;
+
+    if (ctx->input.is_dragging) {
+        // select area
+        XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
+        trace("clipboard owned");
+        return True;
+    }
 
     if (SELECTION_DRAGGING(tc)) {
         // finish drag selection
@@ -1548,25 +1561,23 @@ void tool_selection_on_release(
             (Pair) {area.x + move_vec.x, area.y + move_vec.y},
             !(event->state & ShiftMask)
         );
-    } else if (ctx->input.is_dragging) {
-        // select area
-        XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
-        trace("clipboard owned");
-        return;
     }
     // unselect area
     sd->begin = sd->end = sd->drag_from = sd->drag_to = PNIL;
     XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
     trace("clipboard released");
+
+    return True;
 }
 
-void tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
+Bool tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
+    if (ctx->input.holding_button != XLeftMouseBtn) {
+        return False;
+    }
+
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     assert(tc->t == Tool_Selection);
-    if (ctx->input.holding_button != XLeftMouseBtn) {
-        return;
-    }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (SELECTION_DRAGGING(tc)) {
@@ -1575,28 +1586,31 @@ void tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         tc->d.sel.end.x = CLAMP(pointer.x, 0, dc->cv.im->width);
         tc->d.sel.end.y = CLAMP(pointer.y, 0, dc->cv.im->height);
     }
+    return True;
 }
 
-void tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
+Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     if (event->button != XLeftMouseBtn) {
-        return;
+        return False;
     }
 
     if (!(event->state & ShiftMask)) {
         CURR_TC(ctx).sdata.anchor =
             point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
     }
+    return True;
 }
 
-void tool_drawer_on_release(
+Bool tool_drawer_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
+    if (event->button != XLeftMouseBtn || ctx->input.is_dragging) {
+        return False;
+    }
+
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    if (event->button != XLeftMouseBtn || ctx->input.is_dragging) {
-        return;
-    }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     if (event->state & ShiftMask) {
@@ -1618,14 +1632,17 @@ void tool_drawer_on_release(
         );
     }
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
+
+    return True;
 }
 
-void tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
+Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
+    if (ctx->input.holding_button != XLeftMouseBtn) {
+        return False;
+    }
+
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    if (ctx->input.holding_button != XLeftMouseBtn) {
-        return;
-    }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     canvas_line(
@@ -1637,47 +1654,58 @@ void tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         tc->sdata.line_w
     );
     tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
+
+    return True;
 }
 
-void tool_figure_on_release(
+Bool tool_figure_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
-    struct ToolCtx* tc = &CURR_TC(ctx);
-    struct DrawCtx* dc = &ctx->dc;
     if (event->button != XLeftMouseBtn
         || (!ctx->input.is_dragging && !(event->state & ShiftMask))) {
-        return;
+        return False;
     }
+
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     canvas_figure(ctx, True, pointer, tc->sdata.anchor);
     overlay_dump(ctx, ctx->dc.cv.overlay);
+
+    return True;
 }
 
-void tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
+Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
+    if (ctx->input.holding_button != XLeftMouseBtn) {
+        return False;
+    }
+
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    if (ctx->input.holding_button != XLeftMouseBtn) {
-        return;
-    }
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     canvas_figure(ctx, True, pointer, tc->sdata.anchor);
+
+    return True;
 }
 
-void tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
+Bool tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
+    if (ctx->input.holding_button != XLeftMouseBtn) {
+        return False;
+    }
+
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    if (ctx->input.holding_button != XLeftMouseBtn) {
-        return;
-    }
-    Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
+    Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     ximage_flood_fill(dc->cv.im, *tc_curr_col(tc), pointer.x, pointer.y);
+
+    return True;
 }
 
-void tool_picker_on_release(
+Bool tool_picker_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
@@ -1685,13 +1713,16 @@ void tool_picker_on_release(
     struct DrawCtx* dc = &ctx->dc;
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
-    if (point_in_rect(
+    if (!point_in_rect(
             pointer,
             (Pair) {0, 0},
             (Pair) {(i32)dc->cv.im->width, (i32)dc->cv.im->height}
         )) {
-        *tc_curr_col(tc) = XGetPixel(dc->cv.im, pointer.x, pointer.y);
+        return False;
     }
+
+    *tc_curr_col(tc) = XGetPixel(dc->cv.im, pointer.x, pointer.y);
+    return True;
 }
 
 Bool history_move(struct Ctx* ctx, Bool forward) {
@@ -3007,7 +3038,6 @@ void setup(Display* dp, struct Ctx* ctx) {
     for (i32 i = 0; i < TCS_NUM; ++i) {
         tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
     }
-    history_push(&ctx->hist_prevarr, ctx);
 
     /* show up window */
     XMapRaised(dp, ctx->dc.window);
@@ -3044,12 +3074,15 @@ void run(struct Ctx* ctx) {
 
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
+
     if (e->button == XLeftMouseBtn) {
         history_forward(ctx);
     }
+
     if (CURR_TC(ctx).on_press) {
-        CURR_TC(ctx).on_press(ctx, e);
-        update_screen(ctx);
+        if (CURR_TC(ctx).on_press(ctx, e)) {
+            update_screen(ctx);
+        }
     }
     if (e->button == XRightMouseBtn) {
         sel_circ_init(ctx, e->x, e->y);
@@ -3064,6 +3097,9 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
 Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
+
+    overlay_clear(ctx->dc.cv.overlay);
+
     if (e->button == XRightMouseBtn) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
@@ -3088,10 +3124,10 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         update_screen(ctx);
     }
 
-    overlay_clear(ctx->dc.cv.overlay);
     if (CURR_TC(ctx).on_release) {
-        CURR_TC(ctx).on_release(ctx, e);
-        update_screen(ctx);
+        if (CURR_TC(ctx).on_release(ctx, e)) {
+            update_screen(ctx);
+        }
     }
 
     ctx->input.is_holding = False;
@@ -3140,6 +3176,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (e.type == KeyRelease) {
         return True;
     }
+
+    overlay_clear(ctx->dc.cv.overlay);
 
     Status lookup_status;
     KeySym key_sym = NoSymbol;
@@ -3428,21 +3466,23 @@ Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
 
+    overlay_clear(ctx->dc.cv.overlay);
+
     if (ctx->input.is_holding) {
         if (!ctx->input.is_dragging) {
             ctx->input.is_dragging = True;
             ctx->input.drag_from =
                 point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
         }
-        overlay_clear(ctx->dc.cv.overlay);
         if (CURR_TC(ctx).on_drag) {
             struct timeval current_time;
             gettimeofday(&current_time, 0x0);
             if (current_time.tv_usec - ctx->input.last_proc_drag_ev_us
                 >= DRAG_PERIOD_US) {
-                CURR_TC(ctx).on_drag(ctx, e);
-                ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
-                update_screen(ctx);
+                if (CURR_TC(ctx).on_drag(ctx, e)) {
+                    ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
+                    update_screen(ctx);
+                }
             }
         }
         if (ctx->input.holding_button == XMiddleMouseBtn) {
