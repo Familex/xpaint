@@ -1855,8 +1855,8 @@ get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
         case Figure_Rectangle:
         case Figure_Triangle:
             return (Pair) {
-                CLAMP((a.x + b.x) / 2, 0, im_dims.x),
-                CLAMP((a.y + b.y) / 2, 0, im_dims.y),
+                CLAMP((a.x + b.x) / 2, 0, im_dims.x - 1),
+                CLAMP((a.y + b.y) / 2, 0, im_dims.y - 1),
             };
     }
     return (Pair) {-1, -1};  // will not fill anything
