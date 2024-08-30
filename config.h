@@ -33,6 +33,78 @@ struct {
 };
 
 struct {
+    Button btn_main;
+    Button btn_sel_circ;
+    Button btn_scroll_drag;
+    Button btn_scroll_up;
+    Button btn_scroll_down;
+    Button btn_scroll_left;
+    Button btn_scroll_right;
+    Button btn_zoom_in;
+    Button btn_zoom_out;
+    Button btn_copy_selection;  // area moves by default
+    // keys
+    Key undo;
+    Key copy_area;  // to clipboard
+    Key swap_color;
+    Key zoom_in;
+    Key zoom_out;
+    Key next_color;
+    Key prev_color;
+    Key save_to_file;
+    Key exit;
+    // modes
+    Key mode_color;
+    Key mode_console;
+    Key mode_interact;
+    // color mode
+    Key add_color;
+    Key to_right_col_digit;
+    Key to_left_col_digit;
+    // console mode
+    Key request_completions;
+    Key next_completion;
+    Key apply_completion;
+    Key erase_char;
+    Key run;
+} const KEYS = {
+    .btn_main = {Button1},  // LMB
+    .btn_sel_circ = {Button3},  // RMB
+    .btn_scroll_drag = {Button2},  // MMB
+    .btn_scroll_up = {Button4},  // Mouse scroll up
+    .btn_scroll_down = {Button5},  // Mouse scroll down
+    .btn_scroll_left = {Button4, ShiftMask},  // Mouse scroll up
+    .btn_scroll_right = {Button5, ShiftMask},  // Mouse scroll down
+    .btn_zoom_in = {Button4, ControlMask},
+    .btn_zoom_out = {Button5, ControlMask},
+    .btn_copy_selection = {Button1, ShiftMask},
+    // keys
+    .undo = {XK_z, ControlMask},
+    .copy_area = {XK_c, ControlMask},
+    .swap_color = {XK_x},
+    .zoom_in = {XK_equal, ControlMask},
+    .zoom_out = {XK_minus, ControlMask},
+    .next_color = {XK_Up},
+    .prev_color = {XK_Down},
+    .save_to_file = {XK_s, ControlMask},
+    .exit = {XK_q},
+    // modes
+    .mode_color = {XK_c},
+    .mode_console = {XK_colon, ShiftMask},
+    .mode_interact = {XK_Escape},
+    // color mode
+    .add_color = {XK_Up, ControlMask},
+    .to_right_col_digit = {XK_Right},
+    .to_left_col_digit = {XK_Left},
+    // console mode
+    .request_completions = {XK_Tab},
+    .next_completion = {XK_Tab},
+    .apply_completion = {XK_Return},
+    .erase_char = {XK_BackSpace},
+    .run = {XK_Return},
+};
+
+struct {
     u32 padding_bottom;
 } const STATUSLINE = {
     .padding_bottom = 4,

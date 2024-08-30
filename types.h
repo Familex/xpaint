@@ -1,6 +1,7 @@
 #ifndef XPAINT_TYPES_H__
 #define XPAINT_TYPES_H__
 
+#include <X11/X.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +26,16 @@ typedef struct {
     double x;
     double y;
 } DPt;
+
+typedef struct {
+    KeySym sym;
+    u32 mask;
+} Key;
+
+typedef struct {
+    u32 button;
+    u32 mask;
+} Button;
 
 enum Schm {
     SchmNorm,
