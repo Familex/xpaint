@@ -43,4 +43,13 @@ enum Schm {
     SchmLast,
 };
 
+typedef struct {
+    enum {
+        MF_Int = 0x1,  // interact
+        MF_Color = 0x2,  // color
+        // MF_Term managed manually because can use any key
+    } mode;
+    Key key;
+} Action;
+
 #endif  // XPAINT_TYPES_H__

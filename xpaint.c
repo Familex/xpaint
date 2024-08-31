@@ -381,6 +381,7 @@ static double brush_ease(double v);
 static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
+static Bool can_action(struct Input const* input, Key curr_key, Action act);
 
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
@@ -679,6 +680,18 @@ Bool btn_eq(Button a, Button b) {
 
 Bool key_eq(Key a, Key b) {
     return CLEANMASK(a.mask) == CLEANMASK(b.mask) && a.sym == b.sym;
+}
+
+static Bool can_action(struct Input const* input, Key curr_key, Action act) {
+    if (!key_eq(curr_key, act.key)) {
+        return False;
+    }
+    switch (input->t) {
+        case InputT_Interact: return (i32)act.mode & MF_Int;
+        case InputT_Color: return (i32)act.mode & MF_Color;
+        case InputT_Console: return False;  // managed manually
+    }
+    UNREACHABLE();
 }
 
 char* str_new(char const* fmt, ...) {
@@ -1520,8 +1533,8 @@ Bool tool_selection_on_press(
     struct Ctx* ctx,
     XButtonPressedEvent const* event
 ) {
-    if (!btn_eq(get_btn(event), KEYS.btn_main)
-        && !(btn_eq(get_btn(event), KEYS.btn_copy_selection))) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)
+        && !(btn_eq(get_btn(event), BTN_COPY_SELECTION))) {
         return False;
     }
     struct ToolCtx* tc = &CURR_TC(ctx);
@@ -1546,8 +1559,8 @@ Bool tool_selection_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
-    if (!btn_eq(get_btn(event), KEYS.btn_main)
-        && !(btn_eq(get_btn(event), KEYS.btn_copy_selection))) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)
+        && !(btn_eq(get_btn(event), BTN_COPY_SELECTION))) {
         return False;
     }
     struct ToolCtx* tc = &CURR_TC(ctx);
@@ -1571,7 +1584,7 @@ Bool tool_selection_on_release(
             ) {MAX(sd->begin.x, sd->end.x) - area.x,
                MAX(sd->begin.y, sd->end.y) - area.y},
             (Pair) {area.x + move_vec.x, area.y + move_vec.y},
-            btn_eq(get_btn(event), KEYS.btn_main)  // move by default
+            btn_eq(get_btn(event), BTN_MAIN)  // move by default
         );
 
         // unselect area
@@ -1588,8 +1601,8 @@ Bool tool_selection_on_release(
 }
 
 Bool tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, KEYS.btn_main)
-        && !btn_eq(ctx->input.holding_button, KEYS.btn_copy_selection)) {
+    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)
+        && !btn_eq(ctx->input.holding_button, BTN_COPY_SELECTION)) {
         return False;
     }
 
@@ -1608,7 +1621,7 @@ Bool tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 }
 
 Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
-    if (!btn_eq(get_btn(event), KEYS.btn_main)) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)) {
         return False;
     }
 
@@ -1623,7 +1636,7 @@ Bool tool_drawer_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
-    if (!btn_eq(get_btn(event), KEYS.btn_main) || ctx->input.is_dragging) {
+    if (!btn_eq(get_btn(event), BTN_MAIN) || ctx->input.is_dragging) {
         return False;
     }
 
@@ -1655,7 +1668,7 @@ Bool tool_drawer_on_release(
 }
 
 Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, KEYS.btn_main)) {
+    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)) {
         return False;
     }
 
@@ -1680,7 +1693,7 @@ Bool tool_figure_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
-    if (!btn_eq(get_btn(event), KEYS.btn_main)
+    if (!btn_eq(get_btn(event), BTN_MAIN)
         || (!ctx->input.is_dragging && !(event->state & ShiftMask))) {
         return False;
     }
@@ -1696,7 +1709,7 @@ Bool tool_figure_on_release(
 }
 
 Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, KEYS.btn_main)) {
+    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)) {
         return False;
     }
 
@@ -1710,7 +1723,7 @@ Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 }
 
 Bool tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, KEYS.btn_main)) {
+    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)) {
         return False;
     }
 
@@ -1745,9 +1758,9 @@ Bool tool_picker_on_release(
 
 Bool history_move(struct Ctx* ctx, Bool forward) {
     struct History** hist_pop =
-        forward ? &ctx->hist_prevarr : &ctx->hist_nextarr;
-    struct History** hist_save =
         forward ? &ctx->hist_nextarr : &ctx->hist_prevarr;
+    struct History** hist_save =
+        forward ? &ctx->hist_prevarr : &ctx->hist_nextarr;
 
     if (!arrlenu(*hist_pop)) {
         return False;
@@ -3094,7 +3107,7 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
 
     // XXX hacky
-    if (btn_eq(get_btn(e), KEYS.btn_main)) {
+    if (btn_eq(get_btn(e), BTN_MAIN)) {
         history_forward(ctx);
     }
 
@@ -3103,7 +3116,7 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
             update_screen(ctx);
         }
     }
-    if (btn_eq(get_btn(e), KEYS.btn_sel_circ)) {
+    if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
         sel_circ_show(ctx, e->x, e->y);
         draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
     }
@@ -3120,7 +3133,7 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
 
     overlay_clear(ctx->dc.cv.overlay);
 
-    if (btn_eq(e_btn, KEYS.btn_sel_circ)) {
+    if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
             ctx->sc.items[selected_item].on_select(ctx);
@@ -3133,12 +3146,12 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     // clang-format off
-    if (btn_eq(e_btn, KEYS.btn_scroll_up)) { ctx->dc.cv.scroll.y += 10; }
-    if (btn_eq(e_btn, KEYS.btn_scroll_down)) { ctx->dc.cv.scroll.y -= 10; }
-    if (btn_eq(e_btn, KEYS.btn_scroll_left)) { ctx->dc.cv.scroll.x -= 10; }
-    if (btn_eq(e_btn, KEYS.btn_scroll_right)) { ctx->dc.cv.scroll.x += 10; }
-    if (btn_eq(e_btn, KEYS.btn_zoom_in)) { canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1); }
-    if (btn_eq(e_btn, KEYS.btn_zoom_out)) { canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1); }
+    if (btn_eq(e_btn, BTN_SCROLL_UP)) { ctx->dc.cv.scroll.y += 10; }
+    if (btn_eq(e_btn, BTN_SCROLL_DOWN)) { ctx->dc.cv.scroll.y -= 10; }
+    if (btn_eq(e_btn, BTN_SCROLL_LEFT)) { ctx->dc.cv.scroll.x -= 10; }
+    if (btn_eq(e_btn, BTN_SCROLL_RIGHT)) { ctx->dc.cv.scroll.x += 10; }
+    if (btn_eq(e_btn, BTN_ZOOM_IN)) { canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1); }
+    if (btn_eq(e_btn, BTN_ZOOM_OUT)) { canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1); }
     // clang-format on
     update_screen(ctx);
 
@@ -3176,6 +3189,7 @@ static void to_next_input_digit(struct Input* input, Bool is_increment) {
 }
 
 Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
+    struct Input const* inp = &ctx->input;
     XKeyPressedEvent e = event->xkey;
     if (e.type == KeyRelease) {
         return True;
@@ -3204,256 +3218,257 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         e.state
     };
 
-    switch (ctx->input.t) {
-        case InputT_Interact: {
-            if (key_eq(curr, KEYS.undo)) {
-                if (!history_move(ctx, !(e.state & ShiftMask))) {
-                    trace("xpaint: can't undo/revert history");
-                }
-                update_screen(ctx);
-            }
-            if (key_eq(curr, KEYS.copy_area)) {
-                if (HAS_SELECTION(&CURR_TC(ctx))) {
-                    struct SelectionData* sd = &CURR_TC(ctx).d.sel;
-                    XSetSelectionOwner(
-                        ctx->dc.dp,
-                        atoms[A_Clipboard],
-                        ctx->dc.window,
-                        CurrentTime
-                    );
-                    i32 x = MIN(sd->begin.x, sd->end.x);
-                    i32 y = MIN(sd->begin.y, sd->end.y);
-                    u32 width = MAX(sd->end.x, sd->begin.x) - x;
-                    u32 height = MAX(sd->end.y, sd->begin.y) - y;
-                    if (ctx->sel_buf.im != NULL) {
-                        XDestroyImage(ctx->sel_buf.im);
-                    }
-                    ctx->sel_buf.im =
-                        XSubImage(ctx->dc.cv.im, x, y, width, height);
-                    assert(ctx->sel_buf.im != NULL);
-                    assert(
-                        ctx->sel_buf.im->width == width
-                        && ctx->sel_buf.im->height == height
-                    );
-                    if (ctx->sel_buf.im->red_mask == 0
-                        && ctx->sel_buf.im->green_mask == 0
-                        && ctx->sel_buf.im->blue_mask == 0) {
-                        puts("ximage: XGetImage returned empty masks");
-                        ctx->sel_buf.im->red_mask = 0xFF0000;
-                        ctx->sel_buf.im->green_mask = 0xFF00;
-                        ctx->sel_buf.im->blue_mask = 0xFF;
-                    }
-                    if (is_verbose_output) {
-                        u32 const image_size = ctx->sel_buf.im->bits_per_pixel
-                            * ctx->sel_buf.im->height;
-                        trace(
-                            "\nsize: %d\nwidth: %d\nheight: %d\nbpp: %d\nbbo: %d\n"
-                            "format: %d\nred: %lX\nblue: %lX\ngreen %lX\n",
-                            image_size,
-                            ctx->sel_buf.im->width,
-                            ctx->sel_buf.im->height,
-                            ctx->sel_buf.im->bits_per_pixel,
-                            ctx->sel_buf.im->bitmap_bit_order,
-                            ctx->sel_buf.im->format,
-                            ctx->sel_buf.im->red_mask,
-                            ctx->sel_buf.im->blue_mask,
-                            ctx->sel_buf.im->green_mask
-                        );
-                    }
-                } else {
-                    trace("^c without selection");
-                }
-            }
-            if (key_eq(curr, KEYS.swap_color)) {
-                tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).sdata.prev_col);
-                update_statusline(ctx);
-            }
-            // FIXME check is numpad works
-            if (BETWEEN(curr.sym, XK_1, XK_9)) {
-                u32 val = key_sym - XK_1;
-                if (val < TCS_NUM) {
-                    ctx->curr_tc = val;
-                    update_statusline(ctx);
-                }
-            }
-            if (BETWEEN(curr.sym, XK_Left, XK_Down)
-                && CLEANMASK(curr.mask) == ControlMask) {
-                u32 const value = e.state & ShiftMask ? 25 : 5;
-                canvas_resize(
-                    ctx,
-                    (i32)(ctx->dc.cv.im->width
-                          + (key_sym == XK_Left        ? -value
-                                 : key_sym == XK_Right ? value
-                                                       : 0)),
-                    (i32)(ctx->dc.cv.im->height
-                          + (key_sym == XK_Down     ? -value
-                                 : key_sym == XK_Up ? value
-                                                    : 0))
-                );
-                update_screen(ctx);
-            }
-            if (key_eq(curr, KEYS.zoom_in)) {
-                canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1);
-                update_screen(ctx);
-            }
-            if (key_eq(curr, KEYS.zoom_out)) {
-                canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
-                update_screen(ctx);
-            }
-            if (key_eq(curr, KEYS.mode_color)) {
-                input_state_set(&ctx->input, InputT_Color);
-                update_statusline(ctx);
-            }
-            if (key_eq(curr, KEYS.mode_console)) {
-                input_state_set(&ctx->input, InputT_Console);
-                update_statusline(ctx);
-            }
-        } break;
-
-        case InputT_Color: {
-            if (key_eq(curr, KEYS.add_color)) {
-                u32 const len = arrlen(CURR_TC(ctx).sdata.colarr);
-                if (len != MAX_COLORS) {
-                    tc_set_curr_col_num(&CURR_TC(ctx), len);
-                    arrpush(CURR_TC(ctx).sdata.colarr, 0xFF000000);
-                    update_statusline(ctx);
-                }
-            }
-            if (key_eq(curr, KEYS.to_right_col_digit)) {
-                to_next_input_digit(&ctx->input, True);
-                update_statusline(ctx);
-            }
-            if (key_eq(curr, KEYS.to_left_col_digit)) {
-                to_next_input_digit(&ctx->input, False);
-                update_statusline(ctx);
-            }
-            // change selected color digit with pressed key
-            if (strlen(lookup_buf) == 1) {
-                u32 val = lookup_buf[0]
-                    - (BETWEEN(lookup_buf[0], '0', '9')       ? '0'
-                           : BETWEEN(lookup_buf[0], 'a', 'f') ? ('a' - 10)
-                           : BETWEEN(lookup_buf[0], 'A', 'F') ? ('A' - 10)
-                                                              : 0);
-                if (val != lookup_buf[0]) {  // if assigned
-                    // selected digit counts from left to
-                    // right except alpha (aarrggbb <=> --012345)
-                    u32 shift = (5 - ctx->input.d.col.current_digit) * 4;
-                    *tc_curr_col(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
-                    *tc_curr_col(&CURR_TC(ctx)) |= val << shift;  // set
-                    to_next_input_digit(&ctx->input, True);
-                    update_statusline(ctx);
-                }
-            }
-        } break;
-
-        case InputT_Console: {
-            struct InputConsoleData* cl = &ctx->input.d.cl;
-            if (key_eq(curr, KEYS.apply_completion) && cl->compls_arr) {
-                char* complt = cl->compls_arr[cl->compls_curr];
-                while (*complt) {
-                    arrpush(cl->cmdarr, *complt);
-                    complt += 1;
-                }
-                cl_compls_free(cl);
-                update_statusline(ctx);
-            } else if (key_eq(curr, KEYS.run)) {  // run command
-                char* cmd_dyn = cl_cmd_get_str_dyn(cl);
-                input_state_set(&ctx->input, InputT_Interact);
-                ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
-                str_free(&cmd_dyn);
-                Bool is_exit = False;
-                switch (res.t) {
-                    case ClCPrs_Ok: {
-                        struct ClCommand* cmd = &res.d.ok;
-                        ClCPrcResult res = cl_cmd_process(ctx, cmd);
-                        update_screen(ctx);
-                        if (res.bit_status & ClCPrc_Msg) {
-                            show_message(ctx, res.msg_dyn);
-                            str_free(&res.msg_dyn);  // XXX member free
-                        }
-                        is_exit = (Bool)(res.bit_status & ClCPrc_Exit);
-                    } break;
-                    case ClCPrs_ENoArg: {
-                        show_message(ctx, "no command");
-                    } break;
-                    case ClCPrs_EInvArg: {
-                        show_message_va(ctx, "invalid arg '%s'", res.d.invarg);
-                    } break;
-                    case ClCPrs_ENoSubArg: {
-                        show_message_va(
-                            ctx,
-                            "provide value to '%s' cmd",
-                            res.d.nosubarg.arg_dyn
-                        );
-                    } break;
-                    case ClCPrs_EInvSubArg: {
-                        show_message_va(
-                            ctx,
-                            "invalid arg '%s' provided to '%s' cmd",
-                            res.d.invsubarg.inv_val_dyn,
-                            res.d.invsubarg.arg_dyn
-                        );
-                    } break;
-                }
-
-                cl_cmd_parse_res_free(&res);
-                if (is_exit) {
-                    return False;
-                }
-            } else if (key_eq(curr, KEYS.request_completions) && !cl->compls_valid) {
-                cl_compls_update(cl);
-                update_statusline(ctx);
-            } else if (key_eq(curr, KEYS.next_completion)) {
-                usize max = arrlen(cl->compls_arr);
-                if (max) {
-                    cl->compls_curr = (cl->compls_curr + 1) % max;
-                }
-                update_statusline(ctx);
-            } else if (key_eq(curr, KEYS.erase_char)) {
-                cl_pop(cl);
-                update_statusline(ctx);
-            } else if (!key_eq(curr, KEYS.mode_interact)) {
-                if ((lookup_status == XLookupBoth
-                     || lookup_status == XLookupChars)
-                    && !(iscntrl((u32)*lookup_buf))) {
-                    for (i32 i = 0; i < text_len; ++i) {
-                        cl_push(cl, (char)(lookup_buf[i] & 0xFF));
-                    }
-                    update_statusline(ctx);
-                }
-            }
-        } break;
-    }
-
-    // any state except console input FIXME not customisable
-    if (ctx->input.t != InputT_Console) {
-        if (key_eq(curr, KEYS.exit)) {
-            return False;
-        }
-        if (key_eq(curr, KEYS.next_color) || key_eq(curr, KEYS.prev_color)) {
-            u32 const col_num = arrlen(CURR_TC(ctx).sdata.colarr);
-            assert(col_num != 0);
-            i32 const next_col = CURR_TC(ctx).sdata.curr_col
-                + (key_eq(curr, KEYS.next_color) ? 1 : -1);
-            tc_set_curr_col_num(
-                &CURR_TC(ctx),
-                next_col < 0 ? col_num - 1 : next_col % col_num
-            );
+    // custom conditions
+    if (inp->t == InputT_Interact && BETWEEN(curr.sym, XK_1, XK_9)) {
+        u32 val = key_sym - XK_1;
+        if (val < TCS_NUM) {
+            ctx->curr_tc = val;
             update_statusline(ctx);
         }
-        if (key_eq(curr, KEYS.save_to_file)) {  // save to current file
-            if (save_file(&ctx->dc, ctx->dc.cv.type, ctx->fout.path_dyn)) {
-                trace("xpaint: file saved");
-            } else {
-                trace("xpaint: failed to save image");
-            }
+    }
+    if (inp->t == InputT_Interact && CLEANMASK(curr.mask) == ControlMask
+        && BETWEEN(curr.sym, XK_Left, XK_Down)) {
+        u32 const value = e.state & ShiftMask ? 25 : 5;
+        canvas_resize(
+            ctx,
+            (i32)(ctx->dc.cv.im->width
+                  + (key_sym == XK_Left        ? -value
+                         : key_sym == XK_Right ? value
+                                               : 0)),
+            (i32)(ctx->dc.cv.im->height
+                  + (key_sym == XK_Down     ? -value
+                         : key_sym == XK_Up ? value
+                                            : 0))
+        );
+        update_screen(ctx);
+    }
+    // change selected color digit with pressed key
+    if (inp->t == InputT_Color && strlen(lookup_buf) == 1) {
+        u32 val = lookup_buf[0]
+            - (BETWEEN(lookup_buf[0], '0', '9')       ? '0'
+                   : BETWEEN(lookup_buf[0], 'a', 'f') ? ('a' - 10)
+                   : BETWEEN(lookup_buf[0], 'A', 'F') ? ('A' - 10)
+                                                      : 0);
+        if (val != lookup_buf[0]) {  // if assigned
+            // selected digit counts from left to
+            // right except alpha (aarrggbb <=> --012345)
+            u32 shift = (5 - ctx->input.d.col.current_digit) * 4;
+            *tc_curr_col(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
+            *tc_curr_col(&CURR_TC(ctx)) |= val << shift;  // set
+            to_next_input_digit(&ctx->input, True);
+            update_statusline(ctx);
         }
     }
 
-    // any mode
-    if (key_eq(curr, KEYS.mode_interact)) {
+    // else-if chain to filter keys
+    if (inp->t == InputT_Console) {
+        struct InputConsoleData* cl = &ctx->input.d.cl;
+        if (key_eq(curr, KEY_TERM_APPLY_COMPLT) && cl->compls_arr) {
+            char* complt = cl->compls_arr[cl->compls_curr];
+            while (*complt) {
+                arrpush(cl->cmdarr, *complt);
+                complt += 1;
+            }
+            cl_compls_free(cl);
+            update_statusline(ctx);
+        } else if (key_eq(curr, KEY_TERM_RUN)) {  // run command
+            char* cmd_dyn = cl_cmd_get_str_dyn(cl);
+            input_state_set(&ctx->input, InputT_Interact);
+            ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
+            str_free(&cmd_dyn);
+            Bool is_exit = False;
+            switch (res.t) {
+                case ClCPrs_Ok: {
+                    struct ClCommand* cmd = &res.d.ok;
+                    ClCPrcResult res = cl_cmd_process(ctx, cmd);
+                    update_screen(ctx);
+                    if (res.bit_status & ClCPrc_Msg) {
+                        show_message(ctx, res.msg_dyn);
+                        str_free(&res.msg_dyn);  // XXX member free
+                    }
+                    is_exit = (Bool)(res.bit_status & ClCPrc_Exit);
+                } break;
+                case ClCPrs_ENoArg: {
+                    show_message(ctx, "no command");
+                } break;
+                case ClCPrs_EInvArg: {
+                    show_message_va(ctx, "invalid arg '%s'", res.d.invarg);
+                } break;
+                case ClCPrs_ENoSubArg: {
+                    show_message_va(
+                        ctx,
+                        "provide value to '%s' cmd",
+                        res.d.nosubarg.arg_dyn
+                    );
+                } break;
+                case ClCPrs_EInvSubArg: {
+                    show_message_va(
+                        ctx,
+                        "invalid arg '%s' provided to '%s' cmd",
+                        res.d.invsubarg.inv_val_dyn,
+                        res.d.invsubarg.arg_dyn
+                    );
+                } break;
+            }
+
+            cl_cmd_parse_res_free(&res);
+            if (is_exit) {
+                return False;
+            }
+        } else if (key_eq(curr, KEY_TERM_REQUEST_COMPLT) && !cl->compls_valid) {
+            cl_compls_update(cl);
+            update_statusline(ctx);
+        } else if (key_eq(curr, KEY_TERM_NEXT_COMPLT)) {
+            usize max = arrlen(cl->compls_arr);
+            if (max) {
+                cl->compls_curr = (cl->compls_curr + 1) % max;
+            }
+            update_statusline(ctx);
+        } else if (key_eq(curr, KEY_TERM_ERASE_CHAR)) {
+            cl_pop(cl);
+            update_statusline(ctx);
+        } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
+            for (i32 i = 0; i < text_len; ++i) {
+                cl_push(cl, (char)(lookup_buf[i] & 0xFF));
+            }
+            update_statusline(ctx);
+        }
+    }
+
+    // actions (FIXME update_screen always?)
+    if (can_action(inp, curr, ACT_UNDO)) {
+        if (!history_move(ctx, False)) {
+            trace("xpaint: can't undo history");
+        }
+        update_screen(ctx);
+    }
+    if (can_action(inp, curr, ACT_REVERT)) {
+        if (!history_move(ctx, True)) {
+            trace("xpaint: can't revert history");
+        }
+        update_screen(ctx);
+    }
+    if (can_action(inp, curr, ACT_COPY_AREA)) {
+        if (HAS_SELECTION(&CURR_TC(ctx))) {
+            struct SelectionData* sd = &CURR_TC(ctx).d.sel;
+            XSetSelectionOwner(
+                ctx->dc.dp,
+                atoms[A_Clipboard],
+                ctx->dc.window,
+                CurrentTime
+            );
+            i32 x = MIN(sd->begin.x, sd->end.x);
+            i32 y = MIN(sd->begin.y, sd->end.y);
+            u32 width = MAX(sd->end.x, sd->begin.x) - x;
+            u32 height = MAX(sd->end.y, sd->begin.y) - y;
+            if (ctx->sel_buf.im != NULL) {
+                XDestroyImage(ctx->sel_buf.im);
+            }
+            ctx->sel_buf.im = XSubImage(ctx->dc.cv.im, x, y, width, height);
+            assert(ctx->sel_buf.im != NULL);
+            assert(
+                ctx->sel_buf.im->width == width
+                && ctx->sel_buf.im->height == height
+            );
+            if (ctx->sel_buf.im->red_mask == 0
+                && ctx->sel_buf.im->green_mask == 0
+                && ctx->sel_buf.im->blue_mask == 0) {
+                puts("ximage: XGetImage returned empty masks");
+                ctx->sel_buf.im->red_mask = 0xFF0000;
+                ctx->sel_buf.im->green_mask = 0xFF00;
+                ctx->sel_buf.im->blue_mask = 0xFF;
+            }
+            if (is_verbose_output) {
+                u32 const image_size =
+                    ctx->sel_buf.im->bits_per_pixel * ctx->sel_buf.im->height;
+                trace(
+                    "\nsize: %d\nwidth: %d\nheight: %d\nbpp: %d\nbbo: %d\n"
+                    "format: %d\nred: %lX\nblue: %lX\ngreen %lX\n",
+                    image_size,
+                    ctx->sel_buf.im->width,
+                    ctx->sel_buf.im->height,
+                    ctx->sel_buf.im->bits_per_pixel,
+                    ctx->sel_buf.im->bitmap_bit_order,
+                    ctx->sel_buf.im->format,
+                    ctx->sel_buf.im->red_mask,
+                    ctx->sel_buf.im->blue_mask,
+                    ctx->sel_buf.im->green_mask
+                );
+            }
+        } else {
+            trace("^c without selection");
+        }
+    }
+    if (can_action(inp, curr, ACT_SWAP_COLOR)) {
+        tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).sdata.prev_col);
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_ZOOM_IN)) {
+        canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1);
+        update_screen(ctx);
+    }
+    if (can_action(inp, curr, ACT_ZOOM_OUT)) {
+        canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
+        update_screen(ctx);
+    }
+    if (can_action(inp, curr, ACT_MODE_INTERACT)
+        // XXX direct action key access
+        || (inp->t == InputT_Console && key_eq(curr, ACT_MODE_INTERACT.key))) {
         input_state_set(&ctx->input, InputT_Interact);
         update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_MODE_COLOR)) {
+        input_state_set(&ctx->input, InputT_Color);
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_MODE_CONSOLE)) {
+        input_state_set(&ctx->input, InputT_Console);
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_ADD_COLOR)) {
+        u32 const len = arrlen(CURR_TC(ctx).sdata.colarr);
+        if (len != MAX_COLORS) {
+            tc_set_curr_col_num(&CURR_TC(ctx), len);
+            arrpush(CURR_TC(ctx).sdata.colarr, 0xFF000000);
+            update_statusline(ctx);
+        }
+    }
+    if (can_action(inp, curr, ACT_TO_RIGHT_COL_DIGIT)) {
+        to_next_input_digit(&ctx->input, True);
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_TO_LEFT_COL_DIGIT)) {
+        to_next_input_digit(&ctx->input, False);
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_EXIT)) {
+        return False;
+    }
+    if (can_action(inp, curr, ACT_NEXT_COLOR)) {
+        u32 const curr_col = CURR_TC(ctx).sdata.curr_col;
+        u32 const col_num = arrlen(CURR_TC(ctx).sdata.colarr);
+        tc_set_curr_col_num(
+            &CURR_TC(ctx),
+            curr_col + 1 == col_num ? 0 : curr_col + 1
+        );
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_PREV_COLOR)) {
+        u32 const curr_col = CURR_TC(ctx).sdata.curr_col;
+        u32 const col_num = arrlen(CURR_TC(ctx).sdata.colarr);
+        assert(col_num != 0);
+        tc_set_curr_col_num(
+            &CURR_TC(ctx),
+            curr_col == 0 ? col_num - 1 : curr_col - 1
+        );
+        update_statusline(ctx);
+    }
+    if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
+        if (save_file(&ctx->dc, ctx->dc.cv.type, ctx->fout.path_dyn)) {
+            trace("xpaint: file saved");
+        } else {
+            trace("xpaint: failed to save image");
+        }
     }
 
     return True;
@@ -3486,7 +3501,7 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
             }
         }
-        if (btn_eq(ctx->input.holding_button, KEYS.btn_scroll_drag)) {
+        if (btn_eq(ctx->input.holding_button, BTN_SCROLL_DRAG)) {
             ctx->dc.cv.scroll.x += e->x - ctx->input.prev_c.x;
             ctx->dc.cv.scroll.y += e->y - ctx->input.prev_c.y;
             update_screen(ctx);

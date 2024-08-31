@@ -20,6 +20,45 @@ XRenderColor const SCHEMES[SchmLast][2] = {
     [SchmFocus] = {{0xFFFF, 0, 0, 0xFFFF}, {0x9999, 0x1818, 0x1818, 0xFFFF}},
 };
 
+// keymap
+Button BTN_MAIN = {Button1};
+Button BTN_SEL_CIRC = {Button3};
+Button BTN_SCROLL_DRAG = {Button2};
+Button BTN_SCROLL_UP = {Button4};
+Button BTN_SCROLL_DOWN = {Button5};
+Button BTN_SCROLL_LEFT = {Button4, ShiftMask};
+Button BTN_SCROLL_RIGHT = {Button5, ShiftMask};
+Button BTN_ZOOM_IN = {Button4, ControlMask};
+Button BTN_ZOOM_OUT = {Button5, ControlMask};
+Button BTN_COPY_SELECTION = {Button1, ShiftMask};  // by default area moves
+// actions {allowed modes, {key, modifier mask}}
+Action ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
+Action ACT_REVERT = {MF_Int, {XK_Z, ShiftMask | ControlMask}};
+Action ACT_COPY_AREA = {MF_Int, {XK_c, ControlMask}};  // to clipboard
+Action ACT_SWAP_COLOR = {MF_Int, {XK_x}};
+Action ACT_ZOOM_IN = {MF_Int, {XK_equal, ControlMask}};
+Action ACT_ZOOM_OUT = {MF_Int, {XK_minus, ControlMask}};
+Action ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up}};
+Action ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down}};
+Action ACT_SAVE_TO_FILE = {MF_Int | MF_Color, {XK_s, ControlMask}};
+Action ACT_EXIT = {MF_Int | MF_Color, {XK_q}};
+Action ACT_ADD_COLOR = {MF_Color, {XK_Up, ControlMask}};
+Action ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right}};
+Action ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left}};
+// mode switch
+Action ACT_MODE_INTERACT = {
+    MF_Color,  // XXX list all modes
+    {XK_Escape}
+};  // return to interact
+Action ACT_MODE_COLOR = {MF_Int, {XK_c}};
+Action ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
+// only in terminal mode
+Key KEY_TERM_REQUEST_COMPLT = {XK_Tab};
+Key KEY_TERM_NEXT_COMPLT = {XK_Tab};
+Key KEY_TERM_APPLY_COMPLT = {XK_Return};
+Key KEY_TERM_ERASE_CHAR = {XK_BackSpace};
+Key KEY_TERM_RUN = {XK_Return};
+
 struct {
     u32 background_argb;
     Pair min_launch_size;
@@ -30,78 +69,6 @@ struct {
     .min_launch_size = {350, 300},
     .max_launch_size = {1000, 1000},
     .anchor_size = 8
-};
-
-struct {
-    Button btn_main;
-    Button btn_sel_circ;
-    Button btn_scroll_drag;
-    Button btn_scroll_up;
-    Button btn_scroll_down;
-    Button btn_scroll_left;
-    Button btn_scroll_right;
-    Button btn_zoom_in;
-    Button btn_zoom_out;
-    Button btn_copy_selection;  // area moves by default
-    // keys
-    Key undo;
-    Key copy_area;  // to clipboard
-    Key swap_color;
-    Key zoom_in;
-    Key zoom_out;
-    Key next_color;
-    Key prev_color;
-    Key save_to_file;
-    Key exit;
-    // modes
-    Key mode_color;
-    Key mode_console;
-    Key mode_interact;
-    // color mode
-    Key add_color;
-    Key to_right_col_digit;
-    Key to_left_col_digit;
-    // console mode
-    Key request_completions;
-    Key next_completion;
-    Key apply_completion;
-    Key erase_char;
-    Key run;
-} const KEYS = {
-    .btn_main = {Button1},  // LMB
-    .btn_sel_circ = {Button3},  // RMB
-    .btn_scroll_drag = {Button2},  // MMB
-    .btn_scroll_up = {Button4},  // Mouse scroll up
-    .btn_scroll_down = {Button5},  // Mouse scroll down
-    .btn_scroll_left = {Button4, ShiftMask},  // Mouse scroll up
-    .btn_scroll_right = {Button5, ShiftMask},  // Mouse scroll down
-    .btn_zoom_in = {Button4, ControlMask},
-    .btn_zoom_out = {Button5, ControlMask},
-    .btn_copy_selection = {Button1, ShiftMask},
-    // keys
-    .undo = {XK_z, ControlMask},
-    .copy_area = {XK_c, ControlMask},
-    .swap_color = {XK_x},
-    .zoom_in = {XK_equal, ControlMask},
-    .zoom_out = {XK_minus, ControlMask},
-    .next_color = {XK_Up},
-    .prev_color = {XK_Down},
-    .save_to_file = {XK_s, ControlMask},
-    .exit = {XK_q},
-    // modes
-    .mode_color = {XK_c},
-    .mode_console = {XK_colon, ShiftMask},
-    .mode_interact = {XK_Escape},
-    // color mode
-    .add_color = {XK_Up, ControlMask},
-    .to_right_col_digit = {XK_Right},
-    .to_left_col_digit = {XK_Left},
-    // console mode
-    .request_completions = {XK_Tab},
-    .next_completion = {XK_Tab},
-    .apply_completion = {XK_Return},
-    .erase_char = {XK_BackSpace},
-    .run = {XK_Return},
 };
 
 struct {
