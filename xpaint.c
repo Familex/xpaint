@@ -64,11 +64,12 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
 #define BETWEEN(X, A, B) ((A) <= (X) && (X) <= (B))
 #define COALESCE(A, B)   ((A) ? (A) : (B))
-// remove button masks (Button1Mask)
+// remove button masks (Button1Mask) and ignored masks
 #define CLEANMASK(p_mask) \
     ((p_mask) \
      & (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask \
-        | Mod5Mask))
+        | Mod5Mask) \
+     & ~IGNOREMOD)
 #define PI         (3.141)
 // default value for signed integers
 #define NIL        (-1)

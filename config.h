@@ -20,6 +20,10 @@ XRenderColor const SCHEMES[SchmLast][2] = {
     [SchmFocus] = {{0xFFFF, 0, 0, 0xFFFF}, {0x9999, 0x1818, 0x1818, 0xFFFF}},
 };
 
+// state bits to ignore when matching key or button events.
+// use `xmodmap` to check your keyboard modifier map.
+u32 IGNOREMOD = Mod2Mask;
+
 // keymap
 Button BTN_MAIN = {Button1};
 Button BTN_SEL_CIRC = {Button3};
