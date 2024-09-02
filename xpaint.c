@@ -473,6 +473,7 @@ static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 static void overlay_clear(XImage* im);
 static void overlay_dump(struct Ctx* ctx, XImage* overlay);
+static void canvas_scroll(struct Canvas* cv, Pair delta);
 
 static u32 statusline_height(struct DrawCtx const* dc);
 // window size - interface parts (e.g. statusline)
@@ -2136,10 +2137,13 @@ void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
     double old_zoom = ZOOM_C(dc);
     dc->cv.zoom = CLAMP(dc->cv.zoom + delta, CANVAS.min_zoom, CANVAS.max_zoom);
     // keep cursor at same position
-    dc->cv.scroll.x +=
-        (i32)((dc->cv.scroll.x - cursor.x) * (ZOOM_C(dc) / old_zoom - 1));
-    dc->cv.scroll.y +=
-        (i32)((dc->cv.scroll.y - cursor.y) * (ZOOM_C(dc) / old_zoom - 1));
+    canvas_scroll(
+        &dc->cv,
+        (Pair) {
+            (i32)((dc->cv.scroll.x - cursor.x) * (ZOOM_C(dc) / old_zoom - 1)),
+            (i32)((dc->cv.scroll.y - cursor.y) * (ZOOM_C(dc) / old_zoom - 1)),
+        }
+    );
 }
 
 void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
@@ -2198,6 +2202,11 @@ void overlay_dump(struct Ctx* ctx, XImage* overlay) {
             }
         }
     }
+}
+
+void canvas_scroll(struct Canvas* cv, Pair delta) {
+    cv->scroll.x += delta.x;
+    cv->scroll.y += delta.y;
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
@@ -3147,10 +3156,10 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     // clang-format off
-    if (btn_eq(e_btn, BTN_SCROLL_UP)) { ctx->dc.cv.scroll.y += 10; }
-    if (btn_eq(e_btn, BTN_SCROLL_DOWN)) { ctx->dc.cv.scroll.y -= 10; }
-    if (btn_eq(e_btn, BTN_SCROLL_LEFT)) { ctx->dc.cv.scroll.x -= 10; }
-    if (btn_eq(e_btn, BTN_SCROLL_RIGHT)) { ctx->dc.cv.scroll.x += 10; }
+    if (btn_eq(e_btn, BTN_SCROLL_UP)) { canvas_scroll(&ctx->dc.cv, (Pair) {0, 10}); }
+    if (btn_eq(e_btn, BTN_SCROLL_DOWN)) { canvas_scroll(&ctx->dc.cv, (Pair) {0, -10}); }
+    if (btn_eq(e_btn, BTN_SCROLL_LEFT)) { canvas_scroll(&ctx->dc.cv, (Pair) {-10, 0}); }
+    if (btn_eq(e_btn, BTN_SCROLL_RIGHT)) { canvas_scroll(&ctx->dc.cv, (Pair) {10, 0}); }
     if (btn_eq(e_btn, BTN_ZOOM_IN)) { canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1); }
     if (btn_eq(e_btn, BTN_ZOOM_OUT)) { canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1); }
     // clang-format on
@@ -3503,8 +3512,10 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         }
         if (btn_eq(ctx->input.holding_button, BTN_SCROLL_DRAG)) {
-            ctx->dc.cv.scroll.x += e->x - ctx->input.prev_c.x;
-            ctx->dc.cv.scroll.y += e->y - ctx->input.prev_c.y;
+            canvas_scroll(
+                &ctx->dc.cv,
+                (Pair) {e->x - ctx->input.prev_c.x, e->y - ctx->input.prev_c.y}
+            );
             update_screen(ctx);
         }
     } else {
