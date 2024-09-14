@@ -64,10 +64,10 @@ Use \fI<Tab>\fP again to cycle completions,
 use \fI<Enter>\fP to apply suggested completion.
 Unicode are supported.
 .TP
-.B echo [\fIMESSAGE\fP]
+.B echo \fIMESSAGE\fP
 Display message in statusline.
 .TP
-.B set [\fIPROPERTY\fP] [\fIVALUE\fP]
+.B set \fIPROPERTY\fP \fIVALUE\fP
 Set value to property.
 Avaliable properties:
 line_w (tools line width),
@@ -81,14 +81,24 @@ jpg_qlty (JPG save file quality level).
 .B q
 Exit program. No progress is saved.
 .TP
-.B save [\fITYPE\fP] [\fIFILE\fP]
+.B save \fITYPE\fP [\fIFILE\fP]
 Save canvas contents to file as png or jpg (\fITYPE\fP). fout will be used if \fIFILE\fP not specified.
 .TP
 .B load [\fIFILE\fP]
 Load png file to canvas. finp will be used if not specified.
 
+.SS TOOL CONTEXT
+
+Tool context holds tool and color list.
+Avaliable tool contexts are in left
+corner of status line.
+Change current tool context with number keys.
+One tool context holds only one tool (default is pencil).
+Color list can be modified in color mode.
+
 .SS TOOLS
-One tool context holds one tool (default is pencil).
+Tools used to manipulate canvas.
+All actions can be undone/redone.
 To change current tool hold right mouse and select needed tool in selection circle.
 
 .TP
@@ -109,79 +119,108 @@ Fill closed regions on canvas with current color.
 .TP
 .B PICKER
 Copy selected color from canvas.
-
-.SS KEYBOARD COMMANDS
 .TP
-.B <Esc>
+.B FIGURE
+Draw circle, square or triangle.
+Current figure can be changed in selection circle.
+To change figure tool to another select pencil tool in selection circle.
+
+.SS KEYBOARD COMMANDS (ACTIONS AND KEYS)
+Actions are keybinds for which the modes in which they can be triggered can be customized.
+All keybinds can be changed in \fIconfig.h\fP file (ACT_* and KEY_* variables).
+Below are the default keys.
+
+.TP
+.B ACT_MODE_INTERACT <Esc>
 Enter interact mode.
 .TP
-.B q
+.B ACT_EXIT q
 Exit program.
 .TP
-.B <C-s>
+.B ACT_SAVE_TO_FILE <C-s>
 Save canvas to output path.
 Output path can be passed via \-\-output argument,
 FILE positional argument, or via console.
 Saved image type same as currently loaded file (PNG if no file loaded).
 .TP
-.B <C-z>
+.B ACT_UNDO <C-z>
 Undo action.
 .TP
-.B <C-Z>
+.B ACT_REVERT <C-Z>
 Redo action.
 .TP
-.B <C-c>
+.B ACT_COPY_AREA <C-c>
 Own selection with contents of selection tool. Selection MIME is image/png.
 .TP
-.B x
+.B ACT_SWAP_COLOR x
 Swap current color with last used.
 .TP
-.B NUMBER
+.B (no action) NUMBER FROM 0 TO 9
 Change current tool context.
 .TP
-.B <C-Left>, <C-Right>, <C-Down>, <C-Up>
+.B (no action) <C-Left>, <C-Right>, <C-Down>, <C-Up>
 Resize canvas.
 Use shift modifier to increase step.
 .TP
-.B <C-+>, <C-->
-Zoom canvas in and out.
+.B ACT_ZOOM_IN(OUT) <C-+>(<C-->)
+Zoom canvas in (out).
 
 .TP
-.B c
+.B ACT_MODE_COLOR c
 Enter color mode.
 .TP
-.B <C-Up>
+.B ACT_ADD_COLOR <C-Up>
 In color mode. Increase color list length for current tool context.
 .TP
-.B <Right>, <Left>
+.B ACT_TO_RIGHT(LEFT)_COL_DIGIT <Right>(<Left>)
 In color mode. Move cursor to next (previous) digit in modified color.
 .TP
-.B HEXADECIMAL
+.B (no action) NUMBER FROM 0 to F
 In color mode. Change selected digit to typed.
 
 .TP
-.B :
+.B ACT_MODE_CONSOLE :
 Enter console mode.
 .TP
-.B LETTER
+.B (no action) LETTER (except ACT_MODE_INTERACT)
 In console mode. Append letter to command.
 .TP
-.B <Tab>
-In console mode. Display completions and cycle them.
+.B KEY_CL_REQUEST_COMPLT <Tab>
+In console mode. Display completions.
 .TP
-.B <BS>
+.B KEY_CL_NEXT_COMPLT <Tab>
+In console mode. Cycle completions.
+.TP
+.B KEY_CL_APPLY_COMPLT <Return>
+In console mode. Apply completions.
+.TP
+.B KEY_CL_RUN <Return>
+In console mode. Run command.
+.TP
+.B KEY_CL_ERASE_CHAR <BS>
 In console mode. Clear letter from command.
 
 .SS MOUSE COMMANDS
+Mouse buttons also can be changed in \fIconfig.h\fP file (BTN_* variables).
+
 .TP
-.B <MiddleMouse>
-Move canvas around on drag.
+.B BTN_MAIN <LeftMouse>
+Use current tool.
 .TP
-.B <RightMouse>
+.B BTN_SEL_CIRC <RightMouse>
 Show tool selection circle. Hover tool icon and release button to select.
 .TP
-.B <LeftMouse>
-Use current tool.
+.B BTN_SCROLL_DRAG <MiddleMouse>
+Move canvas around on drag.
+.TP
+.B BTN_SCROLL_UP(DOWN, LEFT, RIGHT) <Up>(<Down>, <S-Up>, <S-Down>)
+Scroll canvas around.
+.TP
+.B BTN_ZOOM_IN(OUT) <C-Up>(<C-Down>)
+Zoom canvas in (out).
+.TP
+.B BTN_COPY_SELECITON <S-LeftMouse>
+Make selection with selection tool and drag it with this button to copy area (instead of move).
 
 .SH NOTE
 All listed keys are in vim notation.

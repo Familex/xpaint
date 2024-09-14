@@ -56,12 +56,12 @@ Action ACT_MODE_INTERACT = {
 };  // return to interact
 Action ACT_MODE_COLOR = {MF_Int, {XK_c}};
 Action ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
-// only in terminal mode
-Key KEY_TERM_REQUEST_COMPLT = {XK_Tab};
-Key KEY_TERM_NEXT_COMPLT = {XK_Tab};
-Key KEY_TERM_APPLY_COMPLT = {XK_Return};
-Key KEY_TERM_ERASE_CHAR = {XK_BackSpace};
-Key KEY_TERM_RUN = {XK_Return};
+// only in console mode
+Key KEY_CL_REQ_COMPLT = {XK_Tab};
+Key KEY_CL_NEXT_COMPLT = {XK_Tab};
+Key KEY_CL_APPLY_COMPLT = {XK_Return};
+Key KEY_CL_ERASE_CHAR = {XK_BackSpace};
+Key KEY_CL_RUN = {XK_Return};
 
 struct {
     u32 background_argb;

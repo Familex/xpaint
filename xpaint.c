@@ -3273,7 +3273,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // else-if chain to filter keys
     if (inp->t == InputT_Console) {
         struct InputConsoleData* cl = &ctx->input.d.cl;
-        if (key_eq(curr, KEY_TERM_APPLY_COMPLT) && cl->compls_arr) {
+        if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
             char* complt = cl->compls_arr[cl->compls_curr];
             while (*complt) {
                 arrpush(cl->cmdarr, *complt);
@@ -3281,7 +3281,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             cl_compls_free(cl);
             update_statusline(ctx);
-        } else if (key_eq(curr, KEY_TERM_RUN)) {  // run command
+        } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
             input_state_set(&ctx->input, InputT_Interact);
             ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
@@ -3325,16 +3325,16 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             if (is_exit) {
                 return False;
             }
-        } else if (key_eq(curr, KEY_TERM_REQUEST_COMPLT) && !cl->compls_valid) {
+        } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_valid) {
             cl_compls_update(cl);
             update_statusline(ctx);
-        } else if (key_eq(curr, KEY_TERM_NEXT_COMPLT)) {
+        } else if (key_eq(curr, KEY_CL_NEXT_COMPLT)) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
                 cl->compls_curr = (cl->compls_curr + 1) % max;
             }
             update_statusline(ctx);
-        } else if (key_eq(curr, KEY_TERM_ERASE_CHAR)) {
+        } else if (key_eq(curr, KEY_CL_ERASE_CHAR)) {
             cl_pop(cl);
             update_statusline(ctx);
         } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
