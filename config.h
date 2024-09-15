@@ -24,8 +24,8 @@ XRenderColor const SCHEMES[SchmLast][2] = {
 // use `xmodmap` to check your keyboard modifier map.
 u32 IGNOREMOD = Mod2Mask;
 
-// keymap
-Button BTN_MAIN = {Button1};
+// keymap. use ANY_MOD to ignore modifier
+Button BTN_MAIN = {Button1, ANY_MOD};
 Button BTN_SEL_CIRC = {Button3};
 Button BTN_SCROLL_DRAG = {Button2};
 Button BTN_SCROLL_UP = {Button4};

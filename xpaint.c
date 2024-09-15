@@ -64,18 +64,12 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
 #define BETWEEN(X, A, B) ((A) <= (X) && (X) <= (B))
 #define COALESCE(A, B)   ((A) ? (A) : (B))
-// remove button masks (Button1Mask) and ignored masks
-#define CLEANMASK(p_mask) \
-    ((p_mask) \
-     & (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask \
-        | Mod5Mask) \
-     & ~IGNOREMOD)
-#define PI         (3.141)
+#define PI               (3.141)
 // default value for signed integers
-#define NIL        (-1)
-#define PNIL       ((Pair) {NIL, NIL})
-#define ZOOM_SPEED (1.2)
-#define ARGB_ALPHA (0xFF000000)
+#define NIL              (-1)
+#define PNIL             ((Pair) {NIL, NIL})
+#define ZOOM_SPEED       (1.2)
+#define ARGB_ALPHA       (0xFF000000)
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -379,6 +373,7 @@ static void arrpoputf8(char const* strarr);
 static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 static struct IconData get_icon_data(enum Icon icon);
 static double brush_ease(double v);
+static Bool state_match(u32 a, u32 b);
 static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
@@ -672,16 +667,29 @@ double brush_ease(double v) {
     return (v == 1.0) ? v : 1 - pow(2, -10 * v);
 }
 
+Bool state_match(u32 a, u32 b) {
+// remove button masks (Button1Mask) and ignored masks
+#define CLEANMASK(p_mask) \
+    ((p_mask) \
+     & (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask \
+        | Mod5Mask) \
+     & ~IGNOREMOD)
+
+    return (a == ANY_MOD || b == ANY_MOD || CLEANMASK(a) == CLEANMASK(b));
+
+#undef CLEANMASK
+}
+
 Button get_btn(XButtonEvent const* e) {
     return (Button) {e->button, e->state};
 }
 
 Bool btn_eq(Button a, Button b) {
-    return CLEANMASK(a.mask) == CLEANMASK(b.mask) && a.button == b.button;
+    return state_match(a.mask, b.mask) && a.button == b.button;
 }
 
 Bool key_eq(Key a, Key b) {
-    return CLEANMASK(a.mask) == CLEANMASK(b.mask) && a.sym == b.sym;
+    return state_match(a.mask, b.mask) && a.sym == b.sym;
 }
 
 static Bool can_action(struct Input const* input, Key curr_key, Action act) {
@@ -1627,7 +1635,7 @@ Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
         return False;
     }
 
-    if (!(event->state & ShiftMask)) {
+    if (!state_match(event->state, ShiftMask)) {
         CURR_TC(ctx).sdata.anchor =
             point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
     }
@@ -1646,7 +1654,7 @@ Bool tool_drawer_on_release(
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    if (event->state & ShiftMask) {
+    if (state_match(event->state, ShiftMask)) {
         canvas_line(
             dc->cv.im,
             tc->sdata.anchor,
@@ -1696,7 +1704,8 @@ Bool tool_figure_on_release(
     XButtonReleasedEvent const* event
 ) {
     if (!btn_eq(get_btn(event), BTN_MAIN)
-        || (!ctx->input.is_dragging && !(event->state & ShiftMask))) {
+        || (!ctx->input.is_dragging && !(state_match(event->state, ShiftMask))
+        )) {
         return False;
     }
 
@@ -3236,8 +3245,9 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             update_statusline(ctx);
         }
     }
-    if (inp->t == InputT_Interact && CLEANMASK(curr.mask) == ControlMask
-        && BETWEEN(curr.sym, XK_Left, XK_Down)) {
+    if (inp->t == InputT_Interact && BETWEEN(curr.sym, XK_Left, XK_Down)
+        && (state_match(curr.mask, ControlMask)
+            || state_match(curr.mask, ControlMask | ShiftMask))) {
         u32 const value = e.state & ShiftMask ? 25 : 5;
         canvas_resize(
             ctx,

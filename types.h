@@ -2,8 +2,11 @@
 #define XPAINT_TYPES_H__
 
 #include <X11/X.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#define ANY_MOD UINT_MAX
 
 typedef int8_t i8;
 typedef uint8_t u8;
