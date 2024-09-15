@@ -743,7 +743,6 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
         .t = type,
         .sdata = tc->sdata,
     };
-    tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
     switch (type) {
         case Tool_Selection:
             new_tc.on_press = &tool_selection_on_press;
@@ -776,6 +775,8 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_drag = &tool_figure_on_drag;
             break;
     }
+
+    tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
     tc_free(tc);
     *tc = new_tc;
 }
@@ -1694,7 +1695,8 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         *tc_curr_col(tc),
         tc->sdata.line_w
     );
-    tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
+
+    tc->sdata.anchor = pointer;
 
     return True;
 }
@@ -1905,6 +1907,9 @@ get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
 }
 
 void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
+    if (p1.x == NIL || p1.y == NIL || p2.x == NIL || p2.y == NIL) {
+        return;
+    }
     struct ToolCtx* tc = &CURR_TC(ctx);
     if (tc->t != Tool_Figure) {
         return;
@@ -1988,6 +1993,9 @@ void canvas_line(
     argb col,
     u32 w
 ) {
+    if (from.x == NIL || from.y == NIL || to.x == NIL || to.y == NIL) {
+        return;
+    }
     u32 const CANVAS_LINE_MAX_STEPS = 1000000;
 
     i32 dx = abs(to.x - from.x);
@@ -2889,6 +2897,7 @@ void setup(Display* dp, struct Ctx* ctx) {
                 .sdata.curr_col = 0,
                 .sdata.prev_col = 0,
                 .sdata.line_w = TOOLS.default_line_w,
+                .sdata.anchor = PNIL,
             };
             arrpush(ctx->tcarr, tc);
             arrpush(ctx->tcarr[i].sdata.colarr, 0xFF000000);
