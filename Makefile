@@ -53,7 +53,7 @@ check: ## check code with clang-tidy
 	$(CLANGTIDY) $(SRC)
 
 dev: clean ## generate dev files
-	bear -- make xpaint-d
+	bear -- $(MAKE) xpaint-d
 
 .PHONY: all help run clean install uninstall check dev
 
