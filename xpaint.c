@@ -1138,13 +1138,27 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             return cl_prs_noarg(str_new("prop to set"), NULL);
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
-            char const* args = strtok(NULL, "");
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_LineW,
-               .d.ok.d.set.d.line_w.value =
-                   args ? MAX(0, strtol(args, NULL, 0)) : TOOLS.default_line_w};
+            static const u32 MIN_LW = 1;
+            static const u32 MAX_LW = 5000;  // extremely large values may lag
+
+            char const* arg = strtok(NULL, "");
+            if (!arg) {
+                return cl_prs_noarg(str_new("line width"), NULL);
+            }
+            u32 const line_w = strtol(arg, NULL, 0);
+            if (!BETWEEN(line_w, MIN_LW, MAX_LW)) {
+                return cl_prs_invarg(
+                    str_new("%s", arg),
+                    str_new("value must be in [%d .. %d]", MIN_LW, MAX_LW),
+                    NULL
+                );
+            }
+            return (ClCPrsResult) {
+                .t = ClCPrs_Ok,
+                .d.ok.t = ClC_Set,
+                .d.ok.d.set.t = ClCDS_LineW,
+                .d.ok.d.set.d.line_w.value = line_w,
+            };
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
             char const* arg = strtok(NULL, " ");
