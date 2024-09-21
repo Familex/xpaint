@@ -51,6 +51,7 @@ INCBIN(u8, pic_fig_tri, "res/figure-triangle.png");
 INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
+ * -opt vars are nullable (optional)
  * free -dyn vars with 'free' function
  * free -arr vars with 'arrfree' function
  * free -imdyn vars with 'stbi_image_free' function
@@ -346,21 +347,18 @@ typedef struct {
         ClCPrs_Ok,
         ClCPrs_ENoArg,
         ClCPrs_EInvArg,  // invalid
-        ClCPrs_ENoSubArg,
-        ClCPrs_EInvSubArg,
     } t;
     union {
         struct ClCommand ok;
         struct {
+            char* arg_desc_dyn;
+            char* context_optdyn;
+        } noarg;
+        struct {
             char* arg_dyn;
+            char* error_dyn;
+            char* context_optdyn;
         } invarg;
-        struct {
-            char* arg_dyn;
-        } nosubarg;
-        struct {
-            char* arg_dyn;
-            char* inv_val_dyn;
-        } invsubarg;
     } d;
 } ClCPrsResult;
 
@@ -1123,7 +1121,8 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     // naive split by spaces (0x20) works on utf8
     char const* cmd = strtok(cl, " ");
     if (!cmd) {
-        return (ClCPrsResult) {.t = ClCPrs_ENoArg};
+        return (ClCPrsResult
+        ) {.t = ClCPrs_ENoArg, .d.noarg.arg_desc_dyn = str_new("command")};
     }
     if (!strcmp(cmd, "echo")) {
         char const* user_msg = strtok(NULL, "");
@@ -1136,8 +1135,9 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         char const* prop = strtok(NULL, " ");
         if (!prop) {
             return (ClCPrsResult
-            ) {.t = ClCPrs_ENoSubArg,
-               .d.nosubarg.arg_dyn = str_new(cl_cmd_from_enum(ClC_Set))};
+            ) {.t = ClCPrs_ENoArg,
+               .d.noarg.arg_desc_dyn = str_new("prop to set"),
+               .d.noarg.context_optdyn = str_new(cl_cmd_from_enum(ClC_Set))};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
             char const* args = strtok(NULL, "");
@@ -1161,8 +1161,9 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             char const* font = strtok(NULL, " ");
             if (!font) {
                 return (ClCPrsResult
-                ) {.t = ClCPrs_ENoSubArg,
-                   .d.nosubarg.arg_dyn =
+                ) {.t = ClCPrs_ENoArg,
+                   .d.noarg.arg_desc_dyn = str_new("font"),
+                   .d.noarg.context_optdyn =
                        str_new("%s", cl_set_prop_from_enum(ClCDS_Font))};
             }
             return (ClCPrsResult
@@ -1188,25 +1189,39 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                .d.ok.d.set.d.fout.path_dyn = path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
+            char const* compression = strtok(NULL, " ");
+            if (!compression) {
+                return (ClCPrsResult
+                ) {.t = ClCPrs_ENoArg,
+                   .d.noarg.arg_desc_dyn = str_new("compression value"),
+                   .d.noarg.context_optdyn = NULL};
+            }
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
                .d.ok.d.set.t = ClCDS_PngCompression,
                .d.ok.d.set.d.png_cpr.compression =
-                   (i32)strtol(strtok(NULL, " "), NULL, 0)};
+                   (i32)strtol(compression, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
+            char const* quality = strtok(NULL, " ");
+            if (!quality) {
+                return (ClCPrsResult
+                ) {.t = ClCPrs_ENoArg,
+                   .d.noarg.arg_desc_dyn = str_new("image quality"),
+                   .d.noarg.context_optdyn = NULL};
+            }
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
                .d.ok.d.set.t = ClCDS_JpgQuality,
-               .d.ok.d.set.d.jpg_qlt.quality =
-                   (i32)strtol(strtok(NULL, ""), NULL, 0)};
+               .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
         }
         return (ClCPrsResult
-        ) {.t = ClCPrs_EInvSubArg,
-           .d.invsubarg.arg_dyn = str_new("%s", cl_cmd_from_enum(ClC_Set)),
-           .d.invsubarg.inv_val_dyn = str_new("%s", prop)};
+        ) {.t = ClCPrs_EInvArg,
+           .d.invarg.arg_dyn = str_new("%s", prop),
+           .d.invarg.error_dyn = str_new("unknown prop"),
+           .d.invarg.context_optdyn = str_new("%s", cl_cmd_from_enum(ClC_Set))};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
         return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
@@ -1215,8 +1230,10 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         char const* type_str = strtok(NULL, " ");
         if (!type_str) {
             return (ClCPrsResult
-            ) {.t = ClCPrs_ENoSubArg,
-               .d.nosubarg.arg_dyn = str_new("%s", cl_cmd_from_enum(ClC_Save))};
+            ) {.t = ClCPrs_ENoArg,
+               .d.noarg.arg_desc_dyn = str_new("file type"),
+               .d.noarg.context_optdyn =
+                   str_new("%s", cl_cmd_from_enum(ClC_Save))};
         }
         enum ClCDSv type = 0;
         for (; type < ClCDSv_Last; ++type) {
@@ -1225,10 +1242,13 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             }
         }
         if (type == ClCDSv_Last) {
-            return (ClCPrsResult
-            ) {.t = ClCPrs_EInvSubArg,
-               .d.invsubarg.arg_dyn = str_new("%s", cl_cmd_from_enum(ClC_Save)),
-               .d.invsubarg.inv_val_dyn = str_new("%s", type_str)};
+            return (ClCPrsResult) {
+                .t = ClCPrs_EInvArg,
+                .d.invarg.arg_dyn = str_new("%s", type_str),
+                .d.invarg.error_dyn = str_new("unknown type"),
+                .d.invarg.context_optdyn =
+                    str_new("%s", cl_cmd_from_enum(ClC_Save)),
+            };
         }
         char const* path = strtok(NULL, "");  // include spaces
         return (ClCPrsResult
@@ -1245,7 +1265,9 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
            .d.ok.d.load.path_dyn = str_new("%s", path)};
     }
     return (ClCPrsResult
-    ) {.t = ClCPrs_EInvArg, .d.invarg.arg_dyn = str_new("%s", cmd)};
+    ) {.t = ClCPrs_EInvArg,
+       .d.invarg.arg_dyn = str_new("%s", cmd),
+       .d.invarg.error_dyn = str_new("unknown command")};
 }
 
 ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
@@ -1289,15 +1311,13 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
         } break;
         case ClCPrs_EInvArg: {
             str_free(&res->d.invarg.arg_dyn);
+            str_free(&res->d.invarg.error_dyn);
+            str_free(&res->d.invarg.context_optdyn);
         } break;
-        case ClCPrs_EInvSubArg: {
-            str_free(&res->d.invsubarg.arg_dyn);
-            str_free(&res->d.invsubarg.inv_val_dyn);
+        case ClCPrs_ENoArg: {
+            str_free(&res->d.noarg.arg_desc_dyn);
+            str_free(&res->d.noarg.context_optdyn);
         } break;
-        case ClCPrs_ENoSubArg: {
-            str_free(&res->d.nosubarg.arg_dyn);
-        } break;
-        case ClCPrs_ENoArg: break;
     }
 }
 
@@ -3318,25 +3338,38 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                     is_exit = (Bool)(res.bit_status & ClCPrc_Exit);
                 } break;
                 case ClCPrs_ENoArg: {
-                    show_message(ctx, "no command");
+                    if (res.d.noarg.context_optdyn) {
+                        show_message_va(
+                            ctx,
+                            "provide %s to '%s' command",
+                            res.d.noarg.arg_desc_dyn,
+                            res.d.noarg.context_optdyn
+                        );
+                    } else {
+                        show_message_va(
+                            ctx,
+                            "provide %s",
+                            res.d.noarg.arg_desc_dyn
+                        );
+                    }
                 } break;
                 case ClCPrs_EInvArg: {
-                    show_message_va(ctx, "invalid arg '%s'", res.d.invarg);
-                } break;
-                case ClCPrs_ENoSubArg: {
-                    show_message_va(
-                        ctx,
-                        "provide value to '%s' cmd",
-                        res.d.nosubarg.arg_dyn
-                    );
-                } break;
-                case ClCPrs_EInvSubArg: {
-                    show_message_va(
-                        ctx,
-                        "invalid arg '%s' provided to '%s' cmd",
-                        res.d.invsubarg.inv_val_dyn,
-                        res.d.invsubarg.arg_dyn
-                    );
+                    if (res.d.invarg.context_optdyn) {
+                        show_message_va(
+                            ctx,
+                            "%s: invalid arg '%s': %s",
+                            res.d.invarg.context_optdyn,
+                            res.d.invarg.arg_dyn,
+                            res.d.invarg.error_dyn
+                        );
+                    } else {
+                        show_message_va(
+                            ctx,
+                            "invalid arg '%s': %s",
+                            res.d.invarg.arg_dyn,
+                            res.d.invarg.error_dyn
+                        );
+                    }
                 } break;
             }
 
