@@ -412,6 +412,8 @@ static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
+static ClCPrsResult cl_prs_noarg(char* arg_desc_dyn, char* context_optdyn);
+static ClCPrsResult cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_optdyn);
 static void cl_cmd_parse_res_free(ClCPrsResult* res);
 static char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl);
 static char const* cl_cmd_from_enum(enum ClCTag t);
@@ -1121,8 +1123,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     // naive split by spaces (0x20) works on utf8
     char const* cmd = strtok(cl, " ");
     if (!cmd) {
-        return (ClCPrsResult
-        ) {.t = ClCPrs_ENoArg, .d.noarg.arg_desc_dyn = str_new("command")};
+        return cl_prs_noarg(str_new("command"), NULL);
     }
     if (!strcmp(cmd, "echo")) {
         char const* user_msg = strtok(NULL, "");
@@ -1134,10 +1135,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
         char const* prop = strtok(NULL, " ");
         if (!prop) {
-            return (ClCPrsResult
-            ) {.t = ClCPrs_ENoArg,
-               .d.noarg.arg_desc_dyn = str_new("prop to set"),
-               .d.noarg.context_optdyn = str_new(cl_cmd_from_enum(ClC_Set))};
+            return cl_prs_noarg(str_new("prop to set"), NULL);
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
             char const* args = strtok(NULL, "");
@@ -1160,11 +1158,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
             char const* font = strtok(NULL, " ");
             if (!font) {
-                return (ClCPrsResult
-                ) {.t = ClCPrs_ENoArg,
-                   .d.noarg.arg_desc_dyn = str_new("font"),
-                   .d.noarg.context_optdyn =
-                       str_new("%s", cl_set_prop_from_enum(ClCDS_Font))};
+                return cl_prs_noarg(str_new("font"), NULL);
             }
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
@@ -1191,10 +1185,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
             char const* compression = strtok(NULL, " ");
             if (!compression) {
-                return (ClCPrsResult
-                ) {.t = ClCPrs_ENoArg,
-                   .d.noarg.arg_desc_dyn = str_new("compression value"),
-                   .d.noarg.context_optdyn = NULL};
+                return cl_prs_noarg(str_new("compression value"), NULL);
             }
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
@@ -1206,10 +1197,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
             char const* quality = strtok(NULL, " ");
             if (!quality) {
-                return (ClCPrsResult
-                ) {.t = ClCPrs_ENoArg,
-                   .d.noarg.arg_desc_dyn = str_new("image quality"),
-                   .d.noarg.context_optdyn = NULL};
+                return cl_prs_noarg(str_new("image quality"), NULL);
             }
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
@@ -1217,11 +1205,11 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                .d.ok.d.set.t = ClCDS_JpgQuality,
                .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
         }
-        return (ClCPrsResult
-        ) {.t = ClCPrs_EInvArg,
-           .d.invarg.arg_dyn = str_new("%s", prop),
-           .d.invarg.error_dyn = str_new("unknown prop"),
-           .d.invarg.context_optdyn = str_new("%s", cl_cmd_from_enum(ClC_Set))};
+        return cl_prs_invarg(
+            str_new("%s", prop),
+            str_new("unknown prop"),
+            str_new("%s", cl_cmd_from_enum(ClC_Set))
+        );
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
         return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
@@ -1229,11 +1217,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
         char const* type_str = strtok(NULL, " ");
         if (!type_str) {
-            return (ClCPrsResult
-            ) {.t = ClCPrs_ENoArg,
-               .d.noarg.arg_desc_dyn = str_new("file type"),
-               .d.noarg.context_optdyn =
-                   str_new("%s", cl_cmd_from_enum(ClC_Save))};
+            return cl_prs_noarg(str_new("file type"), NULL);
         }
         enum ClCDSv type = 0;
         for (; type < ClCDSv_Last; ++type) {
@@ -1242,13 +1226,11 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             }
         }
         if (type == ClCDSv_Last) {
-            return (ClCPrsResult) {
-                .t = ClCPrs_EInvArg,
-                .d.invarg.arg_dyn = str_new("%s", type_str),
-                .d.invarg.error_dyn = str_new("unknown type"),
-                .d.invarg.context_optdyn =
-                    str_new("%s", cl_cmd_from_enum(ClC_Save)),
-            };
+            return cl_prs_invarg(
+                str_new("%s", type_str),
+                str_new("unknown type"),
+                NULL
+            );
         }
         char const* path = strtok(NULL, "");  // include spaces
         return (ClCPrsResult
@@ -1264,10 +1246,8 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
            .d.ok.t = ClC_Load,
            .d.ok.d.load.path_dyn = str_new("%s", path)};
     }
-    return (ClCPrsResult
-    ) {.t = ClCPrs_EInvArg,
-       .d.invarg.arg_dyn = str_new("%s", cmd),
-       .d.invarg.error_dyn = str_new("unknown command")};
+
+    return cl_prs_invarg(str_new("%s", cmd), str_new("unknown command"), NULL);
 }
 
 ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
@@ -1276,6 +1256,22 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
     ClCPrsResult result = cl_cmd_parse_helper(ctx, cl_bufdyn);
     str_free(&cl_bufdyn);
     return result;
+}
+
+ClCPrsResult cl_prs_noarg(char* arg_desc_dyn, char* context_optdyn) {
+    return (ClCPrsResult
+    ) {.t = ClCPrs_ENoArg,
+       .d.noarg.arg_desc_dyn = arg_desc_dyn,
+       .d.noarg.context_optdyn = context_optdyn};
+}
+
+ClCPrsResult
+cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_optdyn) {
+    return (ClCPrsResult
+    ) {.t = ClCPrs_EInvArg,
+       .d.invarg.arg_dyn = arg_dyn,
+       .d.invarg.error_dyn = error_dyn,
+       .d.invarg.context_optdyn = context_optdyn};
 }
 
 void cl_cmd_parse_res_free(ClCPrsResult* res) {
