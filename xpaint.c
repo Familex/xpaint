@@ -71,6 +71,8 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define PNIL             ((Pair) {NIL, NIL})
 #define ZOOM_SPEED       (1.2)
 #define ARGB_ALPHA       (0xFF000000)
+// only one one-byte symbol allowed
+#define CL_DELIM         " "
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -420,7 +422,8 @@ static char const* cl_cmd_from_enum(enum ClCTag t);
 static char const* cl_set_prop_from_enum(enum ClCDSTag t);
 static char const* cl_save_type_from_enum(enum ClCDSv t);
 static enum ImageType cl_save_type_to_image_type(enum ClCDSv t);
-static void cl_compls_update(struct InputConsoleData* cl);
+// returns number of completions
+static usize cl_compls_new(struct InputConsoleData* cl);
 static void cl_free(struct InputConsoleData* cl);
 static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
@@ -1120,8 +1123,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
 }
 
 static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
-    // naive split by spaces (0x20) works on utf8
-    char const* cmd = strtok(cl, " ");
+    char const* cmd = strtok(cl, CL_DELIM);
     if (!cmd) {
         return cl_prs_noarg(str_new("command"), NULL);
     }
@@ -1133,7 +1135,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
            .d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""))};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
-        char const* prop = strtok(NULL, " ");
+        char const* prop = strtok(NULL, CL_DELIM);
         if (!prop) {
             return cl_prs_noarg(str_new("prop to set"), NULL);
         }
@@ -1161,7 +1163,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             };
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
-            char const* arg = strtok(NULL, " ");
+            char const* arg = strtok(NULL, CL_DELIM);
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
@@ -1170,7 +1172,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                    arg ? (strtol(arg, NULL, 16) & 0xFFFFFF) | 0xFF000000 : 0};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
-            char const* font = strtok(NULL, " ");
+            char const* font = strtok(NULL, CL_DELIM);
             if (!font) {
                 return cl_prs_noarg(str_new("font"), NULL);
             }
@@ -1197,7 +1199,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                .d.ok.d.set.d.fout.path_dyn = path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
-            char const* compression = strtok(NULL, " ");
+            char const* compression = strtok(NULL, CL_DELIM);
             if (!compression) {
                 return cl_prs_noarg(str_new("compression value"), NULL);
             }
@@ -1209,7 +1211,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                    (i32)strtol(compression, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
-            char const* quality = strtok(NULL, " ");
+            char const* quality = strtok(NULL, CL_DELIM);
             if (!quality) {
                 return cl_prs_noarg(str_new("image quality"), NULL);
             }
@@ -1229,7 +1231,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
-        char const* type_str = strtok(NULL, " ");
+        char const* type_str = strtok(NULL, CL_DELIM);
         if (!type_str) {
             return cl_prs_noarg(str_new("file type"), NULL);
         }
@@ -1387,26 +1389,41 @@ static void cl_compls_update_helper(
     char*** result,
     char const* token,
     char const* (*enum_to_str)(usize),
-    usize enum_last
+    usize enum_last,
+    Bool add_delim
 ) {
+    if (!token || !enum_to_str || !result) {
+        return;
+    }
     for (u32 e = 0; e < enum_last; ++e) {
         char const* enum_str = enum_to_str(e);
         usize offset = first_dismatch(enum_str, token);
         if (offset == strlen(token)) {
-            arrpush(*result, str_new("%s", enum_str + offset));  // NOLINT
+            // don't let completions stick with commands
+            char const* prefix =
+                add_delim && strlen(token) == 0 ? CL_DELIM : "";
+            char* complt = str_new("%s%s", prefix, enum_str + offset);
+            arrpush(*result, complt);  // NOLINT
         }
     }
 }
 
-void cl_compls_update(struct InputConsoleData* cl) {
+usize cl_compls_new(struct InputConsoleData* cl) {
     char* cl_buf_dyn = cl_cmd_get_str_dyn(cl);
     char** result = NULL;
 
-    // XXX separator hardcoded
-    char const* tok1 = strtok(cl_buf_dyn, " ");
-    char const* tok2 = strtok(NULL, " ");  // can be NULL
+    usize const cl_buf_len = strlen(cl_buf_dyn);
+    Bool const last_char_is_space =
+        cl_buf_len != 0 && cl_buf_dyn[cl_buf_len - 1] == CL_DELIM[0];
+    // prepend delim to completions if not provided
+    Bool const add_delim = cl_buf_len != 0 && !last_char_is_space;
+
+    char const* tok1 = strtok(cl_buf_dyn, CL_DELIM);
+    char const* tok2 = strtok(NULL, "");
     tok1 = COALESCE(tok1, "");  // don't do strtok in macro
     tok2 = COALESCE(tok2, "");
+
+    cl_compls_free(cl);
 
     typedef char const* (*cast)(usize);
     // subcommands with own completions
@@ -1415,30 +1432,38 @@ void cl_compls_update(struct InputConsoleData* cl) {
             &result,
             tok2,
             (cast)&cl_set_prop_from_enum,
-            ClCDS_Last
+            ClCDS_Last,
+            add_delim
         );
     } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
         cl_compls_update_helper(
             &result,
             tok2,
             (cast)&cl_save_type_from_enum,
-            ClCDSv_Last
+            ClCDSv_Last,
+            add_delim
         );
-    } else {  // first token comletion
+    } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token comletion
         cl_compls_update_helper(
             &result,
             tok1,
             (cast)&cl_cmd_from_enum,
-            ClC_Last
+            ClC_Last,
+            add_delim
         );
+    } else {
+        free(cl_buf_dyn);
+        return 0;
     }
 
     free(cl_buf_dyn);
 
-    cl_compls_free(cl);
     cl->compls_arr = result;
-    cl->compls_valid = True;
-    cl->compls_curr = 0;  // prevent out-of-range errors
+    if (cl->compls_arr) {
+        cl->compls_valid = True;
+    }
+
+    return arrlen(cl->compls_arr);
 }
 
 void cl_free(struct InputConsoleData* cl) {
@@ -1453,12 +1478,13 @@ void cl_compls_free(struct InputConsoleData* cl) {
         }
         arrfree(cl->compls_arr);
         cl->compls_arr = NULL;
+        cl->compls_valid = False;
+        cl->compls_curr = 0;
     }
 }
 
 void cl_push(struct InputConsoleData* cl, char c) {
     arrpush(cl->cmdarr, c);
-    cl->compls_valid = False;
     cl_compls_free(cl);
 }
 
@@ -1470,7 +1496,6 @@ void cl_pop(struct InputConsoleData* cl) {
     if (size) {
         arrpoputf8(cl->cmdarr);
     }
-    cl->compls_valid = False;
     cl_compls_free(cl);
 }
 
@@ -3329,6 +3354,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 complt += 1;
             }
             cl_compls_free(cl);
+            cl_push(cl, CL_DELIM[0]);
             update_statusline(ctx);
         } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
@@ -3388,9 +3414,9 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 return False;
             }
         } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_valid) {
-            cl_compls_update(cl);
+            cl_compls_new(cl);
             update_statusline(ctx);
-        } else if (key_eq(curr, KEY_CL_NEXT_COMPLT)) {
+        } else if (key_eq(curr, KEY_CL_NEXT_COMPLT) && cl->compls_valid) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
                 cl->compls_curr = (cl->compls_curr + 1) % max;
