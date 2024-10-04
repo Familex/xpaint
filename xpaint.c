@@ -2432,8 +2432,8 @@ void draw_selection_circle(
         dc->screen_gc,
         SEL_CIRC_LINE_W,
         SEL_CIRC_LINE_STYLE,
-        SEL_CIRC_CAP_STYLE,
-        SEL_CIRC_JOIN_STYLE
+        CapNotLast,
+        JoinMiter
     );
 
     XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
@@ -2659,8 +2659,8 @@ void update_screen(struct Ctx* ctx) {
                     SEL_TOOL_SELECTION_FG,
                     SEL_TOOL_LINE_W,
                     SEL_TOOL_LINE_STYLE,
-                    SEL_TOOL_CAP_STYLE,
-                    SEL_TOOL_JOIN_STYLE
+                    CapNotLast,
+                    JoinMiter
                 );
             }
             if (SELECTION_DRAGGING(tc)) {
@@ -2673,8 +2673,8 @@ void update_screen(struct Ctx* ctx) {
                     SEL_TOOL_DRAG_FG,
                     SEL_TOOL_LINE_W,
                     SEL_TOOL_LINE_STYLE,
-                    SEL_TOOL_CAP_STYLE,
-                    SEL_TOOL_JOIN_STYLE
+                    CapNotLast,
+                    JoinMiter
                 );
             }
         }

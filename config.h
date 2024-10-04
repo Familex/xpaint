@@ -36,14 +36,10 @@ u32 const SEL_CIRC_OUTER_R_PX = 225;
 u32 const SEL_CIRC_INNER_R_PX = 40;
 u32 const SEL_CIRC_LINE_W = 2;
 i32 const SEL_CIRC_LINE_STYLE = LineSolid;
-i32 const SEL_CIRC_CAP_STYLE = CapNotLast;
-i32 const SEL_CIRC_JOIN_STYLE = JoinMiter;
 
 // selection tool
 u32 const SEL_TOOL_LINE_W = 2;
 i32 const SEL_TOOL_LINE_STYLE = LineOnOffDash;
-i32 const SEL_TOOL_CAP_STYLE = CapNotLast;
-i32 const SEL_TOOL_JOIN_STYLE = JoinMiter;
 Bool const SEL_TOOL_DRAW_WHILE_DRAG = False;
 argb const SEL_TOOL_SELECTION_FG = 0xFF181818;
 argb const SEL_TOOL_DRAG_FG = 0xFFE01818;
