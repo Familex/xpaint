@@ -136,20 +136,22 @@ typedef u8 (*circle_get_alpha_fn)(
 
 struct Ctx {
     struct DrawCtx {
+        // readonly outside setup and cleanup functions
+        struct System {
+            XRenderPictFormat* xrnd_pic_format;
+            XVisualInfo vinfo;
+            XIM xim;
+            XIC xic;
+            Colormap colmap;
+        } sys;
+
         Display* dp;
-        XVisualInfo vinfo;
-        XIM xim;
-        XIC xic;
-        XRenderPictFormat* xrnd_pic_format;
-        Colormap colmap;
         GC gc;
         GC screen_gc;
         Window window;
         u32 width;
         u32 height;
         XdbeBackBuffer back_buffer;  // double buffering
-        i32 png_compression_level;  // FIXME find better place
-        i32 jpg_quality_level;  // FIXME find better place
         struct Canvas {
             XImage* im;
             XImage* overlay;  // drawn on top of canvas
@@ -182,6 +184,9 @@ struct Ctx {
 
         Bool is_dragging;
         Pair drag_from;
+
+        i32 png_compression_level;  // FIXME find better place
+        i32 jpg_quality_level;  // FIXME find better place
 
         enum InputTag {
             InputT_Interact,
@@ -410,7 +415,7 @@ static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 static argb argb_blend(argb a, argb b, u8 c);
 static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg);
-static Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path);
+static Bool save_file(struct DrawCtx* dc, struct Input const* input, enum ImageType type, char const* file_path);
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
@@ -994,8 +999,8 @@ static XImage* read_file_from_memory(
     }
     XImage* result = XCreateImage(
         dc->dp,
-        dc->vinfo.visual,
-        dc->vinfo.depth,
+        dc->sys.vinfo.visual,
+        dc->sys.vinfo.depth,
         ZPixmap,
         0,
         (char*)image_data,
@@ -1021,7 +1026,12 @@ read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg) {
     return result;
 }
 
-Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
+Bool save_file(
+    struct DrawCtx* dc,
+    struct Input const* input,
+    enum ImageType type,
+    char const* file_path
+) {
     if (type == IMT_Unknown) {
         return False;
     }
@@ -1032,11 +1042,11 @@ Bool save_file(struct DrawCtx* dc, enum ImageType type, char const* file_path) {
     u8* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
     switch (type) {
         case IMT_Png: {
-            stbi_write_png_compression_level = dc->png_compression_level;
+            stbi_write_png_compression_level = input->png_compression_level;
             result = stbi_write_png(file_path, w, h, 4, rgba_dyn, 0);
         } break;
         case IMT_Jpg: {
-            i32 quality = dc->jpg_quality_level;
+            i32 quality = input->jpg_quality_level;
             result = stbi_write_jpg(file_path, w, h, 4, rgba_dyn, quality);
         } break;
         case IMT_Unknown: UNREACHABLE();
@@ -1075,11 +1085,12 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     msg_to_show = str_new("fout set to '%s'", path);
                 } break;
                 case ClCDS_PngCompression: {
-                    ctx->dc.png_compression_level =
+                    ctx->input.png_compression_level =
                         cl_cmd->d.set.d.png_cpr.compression;
                 } break;
                 case ClCDS_JpgQuality: {
-                    ctx->dc.jpg_quality_level = cl_cmd->d.set.d.jpg_qlt.quality;
+                    ctx->input.jpg_quality_level =
+                        cl_cmd->d.set.d.jpg_qlt.quality;
                 } break;
                 case ClCDS_Last: assert(!"invalid tag");
             }
@@ -1096,6 +1107,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             msg_to_show = str_new(
                 save_file(
                     &ctx->dc,
+                    &ctx->input,
                     cl_save_type_to_image_type(cl_cmd->d.save.im_type),
                     path
                 )
@@ -2306,8 +2318,12 @@ void draw_string(
     enum Schm sc,
     Bool invert
 ) {
-    XftDraw* d =
-        XftDrawCreate(dc->dp, dc->back_buffer, dc->vinfo.visual, dc->colmap);
+    XftDraw* d = XftDrawCreate(
+        dc->dp,
+        dc->back_buffer,
+        dc->sys.vinfo.visual,
+        dc->sys.colmap
+    );
     XftDrawStringUtf8(
         d,
         invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
@@ -2562,21 +2578,21 @@ void update_screen(struct Ctx* ctx) {
             Picture cv_pict = XRenderCreatePicture(
                 dc->dp,
                 dc->cache.pm,
-                dc->xrnd_pic_format,
+                dc->sys.xrnd_pic_format,
                 0,
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
             Picture overlay_pict = XRenderCreatePicture(
                 dc->dp,
                 dc->cache.overlay,
-                dc->xrnd_pic_format,
+                dc->sys.xrnd_pic_format,
                 0,
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
             Picture bb_pict = XRenderCreatePicture(
                 dc->dp,
                 dc->back_buffer,
-                dc->xrnd_pic_format,
+                dc->sys.xrnd_pic_format,
                 0,
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
@@ -2875,14 +2891,14 @@ void dc_cache_init(struct DrawCtx* dc) {
         dc->window,
         dc->cv.im->width,
         dc->cv.im->height,
-        dc->vinfo.depth
+        dc->sys.vinfo.depth
     );
     dc->cache.overlay = XCreatePixmap(
         dc->dp,
         dc->window,
         dc->cv.im->width,
         dc->cv.im->height,
-        dc->vinfo.depth
+        dc->sys.vinfo.depth
     );
     dc->cache.pm_w = dc->cv.im->width;
     dc->cache.pm_h = dc->cv.im->height;
@@ -2929,10 +2945,13 @@ struct Ctx ctx_init(Display* dp) {
                         .scroll = {0, 0},
                     },
                 .cache = (struct Cache) {.pm = 0},
+            },
+        .input =
+            (struct Input) {
+                .t = InputT_Interact,
                 .png_compression_level = PNG_DEFAULT_COMPRESSION,
                 .jpg_quality_level = JPG_DEFAULT_QUALITY,
             },
-        .input = (struct Input) {.t = InputT_Interact},
         .sel_buf.im = NULL,
         .tcarr = NULL,
         .curr_tc = 0,
@@ -2968,18 +2987,20 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     /* xrender */ {
-        ctx->dc.xrnd_pic_format =
+        ctx->dc.sys.xrnd_pic_format =
             XRenderFindStandardFormat(ctx->dc.dp, PictStandardARGB32);
-        assert(ctx->dc.xrnd_pic_format);
+        assert(ctx->dc.sys.xrnd_pic_format);
     }
 
     i32 screen = DefaultScreen(dp);
     Window root = DefaultRootWindow(dp);
 
-    i32 result = XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx->dc.vinfo);
+    i32 result =
+        XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx->dc.sys.vinfo);
     assert(result != 0);
 
-    ctx->dc.colmap = XCreateColormap(dp, root, ctx->dc.vinfo.visual, AllocNone);
+    ctx->dc.sys.colmap =
+        XCreateColormap(dp, root, ctx->dc.sys.vinfo.visual, AllocNone);
 
     /* create window */
     ctx->dc.window = XCreateWindow(
@@ -2990,12 +3011,12 @@ void setup(Display* dp, struct Ctx* ctx) {
         ctx->dc.width,
         ctx->dc.height,
         0,  // border width
-        ctx->dc.vinfo.depth,
+        ctx->dc.sys.vinfo.depth,
         InputOutput,
-        ctx->dc.vinfo.visual,
+        ctx->dc.sys.vinfo.visual,
         CWColormap | CWBorderPixel | CWBackPixel | CWEventMask,
         &(XSetWindowAttributes
-        ) {.colormap = ctx->dc.colmap,
+        ) {.colormap = ctx->dc.sys.colmap,
            .border_pixel = 0,
            .background_pixel = WINDOW.background_argb,
            .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
@@ -3017,15 +3038,15 @@ void setup(Display* dp, struct Ctx* ctx) {
         // from https://gist.github.com/baines/5a49f1334281b2685af5dcae81a6fa8a
         XSetLocaleModifiers("");
 
-        ctx->dc.xim = XOpenIM(dp, 0, 0, 0);
-        if (!ctx->dc.xim) {
+        ctx->dc.sys.xim = XOpenIM(dp, 0, 0, 0);
+        if (!ctx->dc.sys.xim) {
             // fallback to internal input method
             XSetLocaleModifiers("@im=none");
-            ctx->dc.xim = XOpenIM(dp, 0, 0, 0);
+            ctx->dc.sys.xim = XOpenIM(dp, 0, 0, 0);
         }
 
-        ctx->dc.xic = XCreateIC(
-            ctx->dc.xim,
+        ctx->dc.sys.xic = XCreateIC(
+            ctx->dc.sys.xim,
             XNInputStyle,
             XIMPreeditNothing | XIMStatusNothing,
             XNClientWindow,
@@ -3034,7 +3055,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             ctx->dc.window,
             NULL
         );
-        XSetICFocus(ctx->dc.xic);
+        XSetICFocus(ctx->dc.sys.xic);
     }
 
     ctx->dc.back_buffer = XdbeAllocateBackBufferName(dp, ctx->dc.window, 0);
@@ -3054,8 +3075,8 @@ void setup(Display* dp, struct Ctx* ctx) {
             for (i32 j = 0; j < 2; ++j) {
                 if (!XftColorAllocValue(
                         dp,
-                        ctx->dc.vinfo.visual,
-                        ctx->dc.colmap,
+                        ctx->dc.sys.vinfo.visual,
+                        ctx->dc.sys.colmap,
                         &SCHEMES[i][j],
                         j ? &ctx->dc.schemes_dyn[i].bg
                           : &ctx->dc.schemes_dyn[i].fg
@@ -3106,7 +3127,7 @@ void setup(Display* dp, struct Ctx* ctx) {
                 ctx->dc.window,
                 ctx->dc.width,
                 ctx->dc.height,
-                ctx->dc.vinfo.depth
+                ctx->dc.sys.vinfo.depth
             );
             ctx->dc.cv.im = XGetImage(
                 dp,
@@ -3284,7 +3305,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     KeySym key_sym = NoSymbol;
     char lookup_buf[32] = {0};
     i32 const text_len = Xutf8LookupString(
-        ctx->dc.xic,
+        ctx->dc.sys.xic,
         &e,
         lookup_buf,
         sizeof(lookup_buf) - 1,
@@ -3562,7 +3583,12 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
-        if (save_file(&ctx->dc, ctx->dc.cv.type, ctx->fout.path_dyn)) {
+        if (save_file(
+                &ctx->dc,
+                &ctx->input,
+                ctx->dc.cv.type,
+                ctx->fout.path_dyn
+            )) {
             trace("xpaint: file saved");
         } else {
             trace("xpaint: failed to save image");
@@ -3821,8 +3847,8 @@ void cleanup(struct Ctx* ctx) {
                 for (i32 j = 0; j < 2; ++j) {
                     XftColorFree(
                         ctx->dc.dp,
-                        ctx->dc.vinfo.visual,
-                        ctx->dc.colmap,
+                        ctx->dc.sys.vinfo.visual,
+                        ctx->dc.sys.colmap,
                         j ? &ctx->dc.schemes_dyn[i].bg
                           : &ctx->dc.schemes_dyn[i].fg
                     );
@@ -3835,7 +3861,7 @@ void cleanup(struct Ctx* ctx) {
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
         XFreeGC(ctx->dc.dp, ctx->dc.gc);
         XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
-        XFreeColormap(ctx->dc.dp, ctx->dc.colmap);
+        XFreeColormap(ctx->dc.dp, ctx->dc.sys.colmap);
         XDestroyWindow(ctx->dc.dp, ctx->dc.window);
     }
 }
