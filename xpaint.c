@@ -65,14 +65,15 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
 #define BETWEEN(X, A, B) ((A) <= (X) && (X) <= (B))
 #define COALESCE(A, B)   ((A) ? (A) : (B))
-#define PI               (3.141)
+#define UNREACHABLE()    __builtin_unreachable()
+
+#define PI         (3.141)
 // default value for signed integers
-#define NIL              (-1)
-#define PNIL             ((Pair) {NIL, NIL})
-#define ZOOM_SPEED       (1.2)
-#define ARGB_ALPHA       (0xFF000000)
+#define NIL        (-1)
+#define PNIL       ((Pair) {NIL, NIL})
+#define ARGB_ALPHA (0xFF000000)
 // only one one-byte symbol allowed
-#define CL_DELIM         " "
+#define CL_DELIM   " "
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -87,8 +88,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define SELECTION_DRAGGING(p_tc) \
     ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
      && (p_tc)->d.sel.drag_from.y != NIL)
-#define UNREACHABLE() __builtin_unreachable()
-#define ZOOM_C(p_dc)  (pow(ZOOM_SPEED, (double)(p_dc)->cv.zoom))
+#define ZOOM_C(p_dc) (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 
 enum {
     A_Clipboard,
