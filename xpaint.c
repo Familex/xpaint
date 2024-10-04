@@ -1592,8 +1592,7 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     double const pointer_r =
         sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
 
-    if (pointer_r > SELECTION_CIRCLE.outer_r_px
-        || pointer_r < SELECTION_CIRCLE.inner_r_px) {
+    if (pointer_r > SEL_CIRC_OUTER_R_PX || pointer_r < SEL_CIRC_INNER_R_PX) {
         return NIL;
     }
     // FIXME do it right
@@ -2174,7 +2173,7 @@ void canvas_copy_region(
                             dc->cv.im,
                             from.x + x,
                             from.y + y,
-                            CANVAS.background_argb
+                            CANVAS_BACKGROUND
                         );
                     }
                 } else {
@@ -2219,7 +2218,7 @@ void canvas_free(Display* dp, struct Canvas* cv) {
 
 void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
     double old_zoom = ZOOM_C(dc);
-    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, CANVAS.min_zoom, CANVAS.max_zoom);
+    dc->cv.zoom = CLAMP(dc->cv.zoom + delta, CANVAS_MIN_ZOOM, CANVAS_MAX_ZOOM);
     // keep cursor at same position
     canvas_scroll(
         &dc->cv,
@@ -2255,7 +2254,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
             dc->cv.im,
             (Pair) {(i32)old_width, 0},
             (Pair) {(i32)(new_width - old_width), new_height},
-            CANVAS.background_argb
+            CANVAS_BACKGROUND
         );
     }
     if (old_height < new_height) {
@@ -2263,7 +2262,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
             dc->cv.im,
             (Pair) {0, (i32)old_height},
             (Pair) {new_width, (i32)(new_height - old_height)},
-            CANVAS.background_argb
+            CANVAS_BACKGROUND
         );
     }
 }
@@ -2294,7 +2293,7 @@ void canvas_scroll(struct Canvas* cv, Pair delta) {
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
-    return dc->fnt.xfont->ascent + STATUSLINE.padding_bottom;
+    return dc->fnt.xfont->ascent + STATUSLINE_PADDING_BOTTOM;
 }
 
 Pair clientarea_size(struct DrawCtx const* dc) {
@@ -2425,16 +2424,16 @@ void draw_selection_circle(
         return;
     }
 
-    i32 const outer_r = (i32)SELECTION_CIRCLE.outer_r_px;
-    i32 const inner_r = (i32)SELECTION_CIRCLE.inner_r_px;
+    i32 const outer_r = (i32)SEL_CIRC_OUTER_R_PX;
+    i32 const inner_r = (i32)SEL_CIRC_INNER_R_PX;
 
     XSetLineAttributes(
         dc->dp,
         dc->screen_gc,
-        SELECTION_CIRCLE.line_w,
-        SELECTION_CIRCLE.line_style,
-        SELECTION_CIRCLE.cap_style,
-        SELECTION_CIRCLE.join_style
+        SEL_CIRC_LINE_W,
+        SEL_CIRC_LINE_STYLE,
+        SEL_CIRC_CAP_STYLE,
+        SEL_CIRC_JOIN_STYLE
     );
 
     XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
@@ -2560,7 +2559,7 @@ void update_screen(struct Ctx* ctx) {
             dc,
             (Pair) {0, 0},
             (Pair) {(i32)dc->width, (i32)dc->height},
-            WINDOW.background_argb
+            WND_BACKGROUND
         );
         /* put scaled image */ {
             //  https://stackoverflow.com/a/66896097
@@ -2652,16 +2651,16 @@ void update_screen(struct Ctx* ctx) {
                 MAX(sd.begin.x, sd.end.x) - p.x,
                 MAX(sd.begin.y, sd.end.y) - p.y
             };
-            if (!SELECTION_DRAGGING(tc) || SELECTION_TOOL.draw_while_drag) {
+            if (!SELECTION_DRAGGING(tc) || SEL_TOOL_DRAW_WHILE_DRAG) {
                 draw_rect(
                     dc,
                     point_from_cv_to_scr(dc, p),
                     point_from_cv_to_scr_no_move(dc, dim),
-                    SELECTION_TOOL.rect_argb,
-                    SELECTION_TOOL.line_w,
-                    SELECTION_TOOL.line_style,
-                    SELECTION_TOOL.cap_style,
-                    SELECTION_TOOL.join_style
+                    SEL_TOOL_SELECTION_FG,
+                    SEL_TOOL_LINE_W,
+                    SEL_TOOL_LINE_STYLE,
+                    SEL_TOOL_CAP_STYLE,
+                    SEL_TOOL_JOIN_STYLE
                 );
             }
             if (SELECTION_DRAGGING(tc)) {
@@ -2671,18 +2670,18 @@ void update_screen(struct Ctx* ctx) {
                     dc,
                     point_from_cv_to_scr_xy(dc, p.x + dx, p.y + dy),
                     point_from_cv_to_scr_no_move(dc, dim),
-                    SELECTION_TOOL.drag_argb,
-                    SELECTION_TOOL.line_w,
-                    SELECTION_TOOL.line_style,
-                    SELECTION_TOOL.cap_style,
-                    SELECTION_TOOL.join_style
+                    SEL_TOOL_DRAG_FG,
+                    SEL_TOOL_LINE_W,
+                    SEL_TOOL_LINE_STYLE,
+                    SEL_TOOL_CAP_STYLE,
+                    SEL_TOOL_JOIN_STYLE
                 );
             }
         }
     }
-    if (WINDOW.anchor_size && tc->sdata.anchor.x != NIL
+    if (WND_ANCHOR_CROSS_SIZE && tc->sdata.anchor.x != NIL
         && !ctx->input.is_dragging) {
-        i32 const size = WINDOW.anchor_size;
+        i32 const size = WND_ANCHOR_CROSS_SIZE;
         Pair center = point_from_cv_to_scr(dc, tc->sdata.anchor);
         Pair lt = (Pair) {center.x - size, center.y - size};
         Pair lb = (Pair) {center.x - size, center.y + size};
@@ -2717,7 +2716,7 @@ void update_statusline(struct Ctx* ctx) {
         memcpy(cl_str_dyn + 1, command, command_len);
         i32 const user_cmd_w =
             (i32)get_string_width(&ctx->dc, cl_str_dyn, command_len + 1);
-        i32 const cmd_y = (i32)(ctx->dc.height - STATUSLINE.padding_bottom);
+        i32 const cmd_y = (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM);
         draw_string(&ctx->dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
         if (ctx->input.d.cl.compls_arr) {
             draw_string(
@@ -2748,7 +2747,7 @@ void update_statusline(struct Ctx* ctx) {
         u32 const input_state_w = get_string_width(dc, "FFF", 3) + gap;
         u32 const tool_name_w = get_string_width(dc, "FFFFFFF", 7) + gap;
         // left **bottom** corners of captions
-        Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE.padding_bottom)};
+        Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE_PADDING_BOTTOM)};
         Pair const input_state_c = {(i32)(tcs_c.x + tcs_w), tcs_c.y};
         Pair const tool_name_c = {
             (i32)(input_state_c.x + input_state_w),
@@ -2849,7 +2848,7 @@ void update_statusline(struct Ctx* ctx) {
 // FIXME DRY
 void show_message(struct Ctx* ctx, char const* msg) {
     u32 const statusline_h =
-        ctx->dc.fnt.xfont->ascent + STATUSLINE.padding_bottom;
+        ctx->dc.fnt.xfont->ascent + STATUSLINE_PADDING_BOTTOM;
     fill_rect(
         &ctx->dc,
         (Pair) {0, (i32)(ctx->dc.height - statusline_h)},
@@ -2859,7 +2858,7 @@ void show_message(struct Ctx* ctx, char const* msg) {
     draw_string(
         &ctx->dc,
         msg,
-        (Pair) {0, (i32)(ctx->dc.height - STATUSLINE.padding_bottom)},
+        (Pair) {0, (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM)},
         SchmNorm,
         False
     );
@@ -2935,8 +2934,8 @@ struct Ctx ctx_init(Display* dp) {
         .dc =
             (struct DrawCtx) {
                 .dp = dp,
-                .width = CANVAS.default_width,
-                .height = CANVAS.default_height,
+                .width = CANVAS_DEFAULT_WIDTH,
+                .height = CANVAS_DEFAULT_HEIGHT,
                 .cv =
                     (struct Canvas) {
                         .im = NULL,
@@ -2970,7 +2969,7 @@ void setup(Display* dp, struct Ctx* ctx) {
                 .sdata.colarr = NULL,
                 .sdata.curr_col = 0,
                 .sdata.prev_col = 0,
-                .sdata.line_w = TOOLS.default_line_w,
+                .sdata.line_w = TOOLS_DEFAULT_LINE_W,
                 .sdata.anchor = PNIL,
             };
             arrpush(ctx->tcarr, tc);
@@ -3018,7 +3017,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         &(XSetWindowAttributes
         ) {.colormap = ctx->dc.sys.colmap,
            .border_pixel = 0,
-           .background_pixel = WINDOW.background_argb,
+           .background_pixel = WND_BACKGROUND,
            .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
                | ExposureMask | PointerMotionMask | StructureNotifyMask}
     );
@@ -3141,7 +3140,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             );
             XFreePixmap(dp, data);
             // initial canvas color
-            canvas_fill(ctx->dc.cv.im, CANVAS.background_argb);
+            canvas_fill(ctx->dc.cv.im, CANVAS_BACKGROUND);
         }
         /* overlay */ {
             ctx->dc.cv.overlay = XSubImage(
@@ -3156,13 +3155,13 @@ void setup(Display* dp, struct Ctx* ctx) {
 
         ctx->dc.width = CLAMP(
             ctx->dc.cv.im->width,
-            WINDOW.min_launch_size.x,
-            WINDOW.max_launch_size.x
+            WND_LAUNCH_MIN_SIZE.x,
+            WND_LAUNCH_MAX_SIZE.x
         );
         ctx->dc.height = CLAMP(
             ctx->dc.cv.im->height + statusline_height(&ctx->dc),
-            WINDOW.min_launch_size.y,
-            WINDOW.max_launch_size.y
+            WND_LAUNCH_MIN_SIZE.y,
+            WND_LAUNCH_MAX_SIZE.y
         );
         XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }

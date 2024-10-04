@@ -13,6 +13,9 @@ u32 const DRAG_PERIOD_US = 10000;
 i32 const PNG_DEFAULT_COMPRESSION = 8;
 i32 const JPG_DEFAULT_QUALITY = 80;
 double const CANVAS_ZOOM_SPEED = 1.2;  // must be > 1.0
+// state bits to ignore when matching key or button events.
+// use `xmodmap` to check your keyboard modifier map.
+u32 const IGNOREMOD = Mod2Mask;
 
 XRenderColor const SCHEMES[SchmLast][2] = {
     // fg, bg (rgba premultiplied)
@@ -21,117 +24,78 @@ XRenderColor const SCHEMES[SchmLast][2] = {
     [SchmFocus] = {{0xFFFF, 0, 0, 0xFFFF}, {0x9999, 0x1818, 0x1818, 0xFFFF}},
 };
 
-// state bits to ignore when matching key or button events.
-// use `xmodmap` to check your keyboard modifier map.
-u32 IGNOREMOD = Mod2Mask;
+argb const WND_BACKGROUND = 0xFF181818;
+Pair const WND_LAUNCH_MIN_SIZE = {350, 300};
+Pair const WND_LAUNCH_MAX_SIZE = {1000, 1000};
+i32 const WND_ANCHOR_CROSS_SIZE = 8;  // 0 to disable
 
-// keymap. use ANY_MOD to ignore modifier
-Button BTN_MAIN = {Button1, ANY_MOD};
-Button BTN_SEL_CIRC = {Button3};
-Button BTN_SCROLL_DRAG = {Button2};
-Button BTN_SCROLL_UP = {Button4};
-Button BTN_SCROLL_DOWN = {Button5};
-Button BTN_SCROLL_LEFT = {Button4, ShiftMask};
-Button BTN_SCROLL_RIGHT = {Button5, ShiftMask};
-Button BTN_ZOOM_IN = {Button4, ControlMask};
-Button BTN_ZOOM_OUT = {Button5, ControlMask};
-Button BTN_COPY_SELECTION = {Button1, ShiftMask};  // by default area moves
+u32 const STATUSLINE_PADDING_BOTTOM = 4;
+
+// selection circle
+u32 const SEL_CIRC_OUTER_R_PX = 225;
+u32 const SEL_CIRC_INNER_R_PX = 40;
+u32 const SEL_CIRC_LINE_W = 2;
+i32 const SEL_CIRC_LINE_STYLE = LineSolid;
+i32 const SEL_CIRC_CAP_STYLE = CapNotLast;
+i32 const SEL_CIRC_JOIN_STYLE = JoinMiter;
+
+// selection tool
+u32 const SEL_TOOL_LINE_W = 2;
+i32 const SEL_TOOL_LINE_STYLE = LineOnOffDash;
+i32 const SEL_TOOL_CAP_STYLE = CapNotLast;
+i32 const SEL_TOOL_JOIN_STYLE = JoinMiter;
+Bool const SEL_TOOL_DRAW_WHILE_DRAG = False;
+argb const SEL_TOOL_SELECTION_FG = 0xFF181818;
+argb const SEL_TOOL_DRAG_FG = 0xFFE01818;
+
+u32 const TOOLS_DEFAULT_LINE_W = 5;
+
+argb const CANVAS_BACKGROUND = 0xFFAA0000;
+u32 const CANVAS_DEFAULT_WIDTH = 1000;
+u32 const CANVAS_DEFAULT_HEIGHT = 700;
+i32 const CANVAS_MIN_ZOOM = -10;
+i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
+
+// --------- keymap. use ANY_MOD to ignore modifier ------------
+
+Button const BTN_MAIN = {Button1, ANY_MOD};
+Button const BTN_SEL_CIRC = {Button3};
+Button const BTN_SCROLL_DRAG = {Button2};
+Button const BTN_SCROLL_UP = {Button4};
+Button const BTN_SCROLL_DOWN = {Button5};
+Button const BTN_SCROLL_LEFT = {Button4, ShiftMask};
+Button const BTN_SCROLL_RIGHT = {Button5, ShiftMask};
+Button const BTN_ZOOM_IN = {Button4, ControlMask};
+Button const BTN_ZOOM_OUT = {Button5, ControlMask};
+// by default area moves
+Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
+
 // actions {allowed modes, {key, modifier mask}}
-Action ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
-Action ACT_REVERT = {MF_Int, {XK_Z, ShiftMask | ControlMask}};
-Action ACT_COPY_AREA = {MF_Int, {XK_c, ControlMask}};  // to clipboard
-Action ACT_SWAP_COLOR = {MF_Int, {XK_x}};
-Action ACT_ZOOM_IN = {MF_Int, {XK_equal, ControlMask}};
-Action ACT_ZOOM_OUT = {MF_Int, {XK_minus, ControlMask}};
-Action ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up}};
-Action ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down}};
-Action ACT_SAVE_TO_FILE = {MF_Int | MF_Color, {XK_s, ControlMask}};
-Action ACT_EXIT = {MF_Int | MF_Color, {XK_q}};
-Action ACT_ADD_COLOR = {MF_Color, {XK_Up, ControlMask}};
-Action ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right}};
-Action ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left}};
+Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
+Action const ACT_REVERT = {MF_Int, {XK_Z, ShiftMask | ControlMask}};
+Action const ACT_COPY_AREA = {MF_Int, {XK_c, ControlMask}};  // to clipboard
+Action const ACT_SWAP_COLOR = {MF_Int, {XK_x}};
+Action const ACT_ZOOM_IN = {MF_Int, {XK_equal, ControlMask}};
+Action const ACT_ZOOM_OUT = {MF_Int, {XK_minus, ControlMask}};
+Action const ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up}};
+Action const ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down}};
+Action const ACT_SAVE_TO_FILE = {MF_Int | MF_Color, {XK_s, ControlMask}};
+Action const ACT_EXIT = {MF_Int | MF_Color, {XK_q}};
+Action const ACT_ADD_COLOR = {MF_Color, {XK_Up, ControlMask}};
+Action const ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right}};
+Action const ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left}};
+
 // mode switch
-Action ACT_MODE_INTERACT = {
+Action const ACT_MODE_INTERACT = {
     MF_Color,  // XXX list all modes
     {XK_Escape}
 };  // return to interact
-Action ACT_MODE_COLOR = {MF_Int, {XK_c}};
-Action ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
+Action const ACT_MODE_COLOR = {MF_Int, {XK_c}};
+Action const ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
+
 // only in console mode
-Key KEY_CL_REQ_COMPLT = {XK_Tab};
-Key KEY_CL_NEXT_COMPLT = {XK_Tab};
-Key KEY_CL_APPLY_COMPLT = {XK_Return};
-Key KEY_CL_ERASE_CHAR = {XK_BackSpace};
-Key KEY_CL_RUN = {XK_Return};
-
-struct {
-    u32 background_argb;
-    Pair min_launch_size;
-    Pair max_launch_size;
-    i32 anchor_size;  // 0 to disable
-} const WINDOW = {
-    .background_argb = 0xFF181818,
-    .min_launch_size = {350, 300},
-    .max_launch_size = {1000, 1000},
-    .anchor_size = 8
-};
-
-struct {
-    u32 padding_bottom;
-} const STATUSLINE = {
-    .padding_bottom = 4,
-};
-
-struct {
-    u32 outer_r_px;
-    u32 inner_r_px;
-    u32 line_w;
-    i32 line_style;
-    i32 cap_style;
-    i32 join_style;
-} const SELECTION_CIRCLE = {
-    .outer_r_px = 225,
-    .inner_r_px = 40,
-    .line_w = 2,
-    .line_style = LineSolid,
-    .cap_style = CapNotLast,
-    .join_style = JoinMiter,
-};
-
-struct {
-    u32 line_w;
-    i32 line_style;
-    i32 cap_style;
-    i32 join_style;
-    Bool draw_while_drag;
-    u32 rect_argb;
-    u32 drag_argb;
-} const SELECTION_TOOL = {
-    .line_w = 2,
-    .line_style = LineOnOffDash,
-    .cap_style = CapNotLast,
-    .join_style = JoinMiter,
-    .draw_while_drag = False,
-    .rect_argb = 0xFF181818,
-    .drag_argb = 0xFFE01818,
-};
-
-struct {
-    u32 default_line_w;
-} const TOOLS = {
-    .default_line_w = 5,
-};
-
-struct {
-    u32 background_argb;
-    u32 default_width;
-    u32 default_height;
-    i32 min_zoom;
-    i32 max_zoom;
-} const CANVAS = {
-    .background_argb = 0xFFAA0000,
-    .default_width = 1000,
-    .default_height = 700,
-    .min_zoom = -10,
-    .max_zoom = 30,  // at high values visual glitches appear
-};
+Key const KEY_CL_REQ_COMPLT = {XK_Tab};
+Key const KEY_CL_NEXT_COMPLT = {XK_Tab};
+Key const KEY_CL_APPLY_COMPLT = {XK_Return};
+Key const KEY_CL_ERASE_CHAR = {XK_BackSpace};
+Key const KEY_CL_RUN = {XK_Return};
