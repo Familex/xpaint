@@ -1626,7 +1626,7 @@ Bool tool_selection_on_release(
     XButtonReleasedEvent const* event
 ) {
     if (!btn_eq(get_btn(event), BTN_MAIN)
-        && !(btn_eq(get_btn(event), BTN_COPY_SELECTION))) {
+        && !btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
         return False;
     }
     struct ToolCtx* tc = &CURR_TC(ctx);
@@ -1650,7 +1650,7 @@ Bool tool_selection_on_release(
             ) {MAX(sd->begin.x, sd->end.x) - area.x,
                MAX(sd->begin.y, sd->end.y) - area.y},
             (Pair) {area.x + move_vec.x, area.y + move_vec.y},
-            btn_eq(get_btn(event), BTN_MAIN)  // move by default
+            !btn_eq(get_btn(event), BTN_COPY_SELECTION)  // move on BTN_MAIN
         );
 
         // unselect area
