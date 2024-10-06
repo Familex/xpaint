@@ -1644,14 +1644,12 @@ Bool tool_selection_on_release(
     struct DrawCtx* dc = &ctx->dc;
     assert(tc->t == Tool_Selection);
 
-    struct SelectionData* sd = &tc->d.sel;
-
-    if (SELECTION_DRAGGING(tc)) {
-        // finish drag selection
-        Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    if (SELECTION_DRAGGING(tc)) {  // finish drag selection
+        struct SelectionData* sd = &tc->d.sel;
+        // use last drawn coordinates to match visual destination (pointer and sd->drag_to may be different)
         Pair move_vec = {
-            pointer.x - sd->drag_from.x,
-            pointer.y - sd->drag_from.y
+            sd->drag_to.x - sd->drag_from.x,
+            sd->drag_to.y - sd->drag_from.y
         };
         Pair area = {MIN(sd->begin.x, sd->end.x), MIN(sd->begin.y, sd->end.y)};
         canvas_copy_region(
@@ -1668,8 +1666,10 @@ Bool tool_selection_on_release(
         sd->begin = sd->end = sd->drag_from = sd->drag_to = PNIL;
         XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
         trace("clipboard released");
-    } else if (ctx->input.is_dragging) {
-        // select area
+    } else if (ctx->input.is_dragging) {  // select area
+        Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+        tc->d.sel.end.x = CLAMP(pointer.x, 0, dc->cv.im->width);
+        tc->d.sel.end.y = CLAMP(pointer.y, 0, dc->cv.im->height);
         XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
         trace("clipboard owned");
     }
@@ -1713,7 +1713,7 @@ Bool tool_drawer_on_release(
     struct Ctx* ctx,
     XButtonReleasedEvent const* event
 ) {
-    if (!btn_eq(get_btn(event), BTN_MAIN) || ctx->input.is_dragging) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)) {
         return False;
     }
 
@@ -1721,7 +1721,7 @@ Bool tool_drawer_on_release(
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    if (state_match(event->state, ShiftMask)) {
+    if (state_match(event->state, ShiftMask) || ctx->input.is_dragging) {
         canvas_line(
             dc->cv.im,
             tc->sdata.anchor,
