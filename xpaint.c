@@ -526,7 +526,7 @@ main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos);
 i32 main(i32 argc, char** argv) {
     Display* display = XOpenDisplay(NULL);
     if (!display) {
-        die("xpaint: cannot open X display");
+        die("cannot open X display");
     }
 
     struct Ctx ctx = ctx_init(display);
@@ -536,7 +536,8 @@ i32 main(i32 argc, char** argv) {
             file_ctx_set(&ctx.finp, argv[i]);
             file_ctx_set(&ctx.fout, argv[i]);
         } else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
-            die("xpaint " VERSION);
+            printf("xpaint " VERSION "\n");
+            exit(0);
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
             is_verbose_output = True;
         } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--input")) {
@@ -550,17 +551,18 @@ i32 main(i32 argc, char** argv) {
             // ctx.dc.width == ctx.dc.cv.im->width at program start
             ctx.dc.width = strtol(argv[++i], NULL, 0);
             if (!ctx.dc.width) {
-                die("xpaint: canvas width must be positive number");
+                die("canvas width must be positive number");
             }
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--height")) {
             main_arg_bound_check("-h or --height", argc, argv, i);
             // ctx.dc.height == ctx.dc.cv.im->height at program start
             ctx.dc.height = strtol(argv[++i], NULL, 0);
             if (!ctx.dc.height) {
-                die("xpaint: canvas height must be positive number");
+                die("canvas height must be positive number");
             }
         } else {
-            die("Usage: xpaint [OPTIONS] [FILE]\n"
+            printf(
+                "Usage: xpaint [OPTIONS] [FILE]\n"
                 "\n"
                 "Options:\n"
                 "      --help                   Print help message\n"
@@ -569,7 +571,9 @@ i32 main(i32 argc, char** argv) {
                 "  -w, --width <canvas width>   Set canvas width\n"
                 "  -h, --height <canvas height> Set canvas height\n"
                 "  -i, --input <file path>      Set load file\n"
-                "  -o, --output <file path>     Set save file");
+                "  -o, --output <file path>     Set save file\n"
+            );
+            exit(0);
         }
     }
 
@@ -596,13 +600,14 @@ void main_arg_bound_check(
     u32 pos
 ) {
     if (pos + 1 == argc || argv[pos + 1][0] == '-') {
-        die("xpaint: supply argument for %s", cmd_name);
+        die("supply argument for %s", cmd_name);
     }
 }
 
 void die(char const* errstr, ...) {
     va_list ap;
 
+    fprintf(stderr, "xpaint: ");
     va_start(ap, errstr);
     vfprintf(stderr, errstr, ap);
     va_end(ap);
@@ -2994,9 +2999,9 @@ void setup(Display* dp, struct Ctx* ctx) {
     i32 screen = DefaultScreen(dp);
     Window root = DefaultRootWindow(dp);
 
-    i32 result =
-        XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx->dc.sys.vinfo);
-    assert(result != 0);
+    if (!XMatchVisualInfo(dp, screen, 32, TrueColor, &ctx->dc.sys.vinfo)) {
+        die("can't get visual information for screen");
+    }
 
     ctx->dc.sys.colmap =
         XCreateColormap(dp, root, ctx->dc.sys.vinfo.visual, AllocNone);
@@ -3118,7 +3123,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             if (im) {
                 canvas_load(&ctx->dc, im, ctx->finp.path_dyn);
             } else {
-                die("xpaint: failed to read input file");
+                die("failed to read input file");
             }
         } else {
             Pixmap data = XCreatePixmap(
