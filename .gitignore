@@ -14,3 +14,8 @@
 /.envrc
 /.direnv/
 
+# analyzers
+/flamegraph.svg
+/heaptrack.*.zst
+/perf.data
+/gdb.txt

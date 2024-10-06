@@ -45,6 +45,16 @@
               bear
             ];
           };
+
+          debug = pkgs.mkShell.override {} {
+            inputsFrom = [self'.packages.default self'.devShells.default];
+            packages = with pkgs; [
+              cargo-flamegraph
+              heaptrack
+              valgrind
+              gdb
+            ];
+          };
         };
 
         formatter = pkgs.alejandra;
