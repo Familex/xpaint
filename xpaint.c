@@ -3221,21 +3221,21 @@ void run(struct Ctx* ctx) {
 
 Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
+    struct ToolCtx* tc = &CURR_TC(ctx);
 
     // XXX hacky
     if (btn_eq(get_btn(e), BTN_MAIN)) {
         history_forward(ctx);
     }
 
-    if (CURR_TC(ctx).on_press) {
-        if (CURR_TC(ctx).on_press(ctx, e)) {
-            update_screen(ctx);
-        }
-    }
     if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
         sel_circ_show(ctx, e->x, e->y);
-        draw_selection_circle(&ctx->dc, &ctx->sc, NIL, NIL);
+    } else if (tc->on_press) {
+        tc->on_press(ctx, e);
     }
+
+    update_screen(ctx);
+    draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
     ctx->input.holding_button = get_btn(e);
     ctx->input.is_holding = True;
@@ -3247,8 +3247,6 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
     Button e_btn = get_btn(e);
-
-    Bool do_screen_update = True;
 
     if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
@@ -3272,17 +3270,13 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         if (tc->use_overlay) {
             overlay_clear(ctx->dc.cv.overlay);
         }
-        do_screen_update = tc->on_release(ctx, e);
+        tc->on_release(ctx, e);
         if (tc->use_overlay) {
             overlay_clear(ctx->dc.cv.overlay);
         }
-    } else {
-        do_screen_update = False;
     }
 
-    if (do_screen_update) {
-        update_screen(ctx);
-    }
+    update_screen(ctx);
 
     ctx->input.is_holding = False;
     ctx->input.is_dragging = False;
@@ -3631,34 +3625,35 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
         }
 
+        struct timeval current_time;
+        gettimeofday(&current_time, 0x0);
+        // XXX mouse scroll and drag event are shared
+        u64 const elapsed_from_last =
+            current_time.tv_usec - ctx->input.last_proc_drag_ev_us;
+
         if (btn_eq(ctx->input.holding_button, BTN_SCROLL_DRAG)) {
             canvas_scroll(
                 &ctx->dc.cv,
                 (Pair) {e->x - ctx->input.prev_c.x, e->y - ctx->input.prev_c.y}
             );
-            update_screen(ctx);
-        } else {
-            // overlay_clear is CPU intensive
-            // XXX expression chain looks hacky
+            // last update will be in button_release_hdlr
+            if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
+                ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
+                update_screen(ctx);
+            }
+        } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
             if (!ctx->sc.is_active && tc->use_overlay) {
+                // overlay_clear is CPU intensive
                 overlay_clear(ctx->dc.cv.overlay);
             }
-            if (tc->on_drag) {
-                struct timeval current_time;
-                gettimeofday(&current_time, 0x0);
-                if (current_time.tv_usec - ctx->input.last_proc_drag_ev_us
-                    >= DRAG_PERIOD_US) {
-                    if (tc->on_drag(ctx, e)) {
-                        ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
-                        update_screen(ctx);
-                    }
-                }
+            if (tc->on_drag && tc->on_drag(ctx, e)) {
+                ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
+                update_screen(ctx);
             }
         }
     } else {
         // FIXME unused
-        if (tc->on_move) {
-            tc->on_move(ctx, e);
+        if (tc->on_move && tc->on_move(ctx, e)) {
             ctx->input.last_proc_drag_ev_us = 0;
             update_screen(ctx);
         }

@@ -5,11 +5,15 @@
 
 char const title[] = "xpaint";
 
+// lag prevention
+// only one drag event per period will be processed
+u32 const DRAG_EVENT_PROC_PERIOD_US = 10000;
+// update rate on screen scroll with mouse drag
+u32 const MOUSE_SCROLL_UPDATE_PERIOD_US = 16000;
+
 u32 const MAX_COLORS = 9;
 u32 const TCS_NUM = 3;
 char const FONT_NAME[] = "monospace:size=10";
-// lag prevention. only one drag event per period will be done
-u32 const DRAG_PERIOD_US = 10000;
 i32 const PNG_DEFAULT_COMPRESSION = 8;
 i32 const JPG_DEFAULT_QUALITY = 80;
 double const CANVAS_ZOOM_SPEED = 1.2;  // must be > 1.0
