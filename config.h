@@ -56,7 +56,7 @@ u32 const CANVAS_DEFAULT_HEIGHT = 700;
 i32 const CANVAS_MIN_ZOOM = -10;
 i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
 
-// --------- keymap. use ANY_MOD to ignore modifier ------------
+// ----- keymap. use ANY_MOD to ignore modifier, ANY_KEY to ignore key -----
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
 Button const BTN_SEL_CIRC = {Button3};

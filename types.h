@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #define ANY_MOD UINT_MAX
+#define ANY_KEY UINT_MAX
 
 typedef int8_t i8;
 typedef uint8_t u8;

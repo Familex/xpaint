@@ -699,11 +699,13 @@ Button get_btn(XButtonEvent const* e) {
 }
 
 Bool btn_eq(Button a, Button b) {
-    return state_match(a.mask, b.mask) && a.button == b.button;
+    return state_match(a.mask, b.mask)
+        && (a.button == ANY_KEY || b.button == ANY_KEY || a.button == b.button);
 }
 
 Bool key_eq(Key a, Key b) {
-    return state_match(a.mask, b.mask) && a.sym == b.sym;
+    return state_match(a.mask, b.mask)
+        && (a.sym == ANY_KEY || b.sym == ANY_KEY || a.sym == b.sym);
 }
 
 static Bool can_action(struct Input const* input, Key curr_key, Action act) {
