@@ -68,11 +68,8 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define UNREACHABLE()    __builtin_unreachable()
 
 #define PI         (3.141)
-// default value for signed integers
-#define NIL        (-1)
-#define PNIL       ((Pair) {NIL, NIL})
-#define ARGB_ALPHA (0xFF000000)
 // only one one-byte symbol allowed
+#define ARGB_ALPHA (0xFF000000)
 #define CL_DELIM   " "
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
@@ -88,7 +85,8 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define SELECTION_DRAGGING(p_tc) \
     ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
      && (p_tc)->d.sel.drag_from.y != NIL)
-#define ZOOM_C(p_dc) (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
+#define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
+#define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 
 enum {
     A_Clipboard,
@@ -239,10 +237,11 @@ struct Ctx {
             } sel;
             // Tool_Pencil | Tool_Brush
             struct DrawerData {
-                enum DrawerType {
-                    DrawerType_Brush,
-                    DrawerType_Pencil,
-                } type;
+                enum DrawerShape {
+                    DS_Circle,
+                    DS_Square,
+                } shape;
+                i32 spacing;
             } drawer;
             struct FigureData {
                 enum FigureType {
@@ -299,6 +298,7 @@ struct ClCommand {
                 ClCDS_FOut,
                 ClCDS_PngCompression,
                 ClCDS_JpgQuality,
+                ClCDS_Spacing,
                 ClCDS_Last,
             } t;
             union ClCDSData {
@@ -323,6 +323,9 @@ struct ClCommand {
                 struct ClCDSDJpgQlt {
                     i32 quality;
                 } jpg_qlt;
+                struct ClCDSDSpacing {
+                    u32 val;
+                } spacing;
             } d;
         } set;
         struct ClCDEcho {
@@ -406,9 +409,11 @@ static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
+static DPt pt_to_dpt(Pair p);
 static Pair dpt_to_pt(DPt p);
 static DPt dpt_rotate(DPt p, double deg); // clockwise
 static DPt dpt_add(DPt a, DPt b);
+static double dpt_distance(DPt a, DPt b);
 
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -467,8 +472,8 @@ static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
 // line from `a` to `b` is a polygon height (a is a base);
 static void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w);
 static void canvas_circle(XImage* im, Pair c, u32 d, argb col, circle_get_alpha_fn get_a, u32 w);
-static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerType type, argb col, u32 w);
-static void canvas_apply_drawer(XImage* im, enum DrawerType type, Pair c, argb col, u32 w);
+static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerShape shape, argb col, u32 w, u32 spacing);
+static void canvas_apply_drawer(XImage* im, enum DrawerShape shape, Pair c, argb col, u32 w);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill(XImage* im, argb col);
 static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
@@ -775,13 +780,15 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.type = DrawerType_Brush;
+            new_tc.d.drawer.shape = DS_Circle;
+            new_tc.d.drawer.spacing = TOOLS_BRUSH_DEFAULT_SPACING;
             break;
         case Tool_Pencil:
             new_tc.on_press = &tool_drawer_on_press;
             new_tc.on_release = &tool_drawer_on_release;
             new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.type = DrawerType_Pencil;
+            new_tc.d.drawer.shape = DS_Square;
+            new_tc.d.drawer.spacing = NIL;
             break;
         case Tool_Fill: new_tc.on_release = &tool_fill_on_release; break;
         case Tool_Picker: new_tc.on_release = &tool_picker_on_release; break;
@@ -874,11 +881,12 @@ Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
+DPt pt_to_dpt(Pair p) {
+    return (DPt) {.x = p.x, .y = p.y};
+}
+
 Pair dpt_to_pt(DPt p) {
-    return (Pair) {
-        .x = (i32)p.x,
-        .y = (i32)p.y,
-    };
+    return (Pair) {.x = (i32)p.x, .y = (i32)p.y};
 }
 
 DPt dpt_rotate(DPt p, double deg) {
@@ -894,6 +902,10 @@ DPt dpt_add(DPt a, DPt b) {
         .x = a.x + b.x,
         .y = a.y + b.y,
     };
+}
+
+double dpt_distance(DPt a, DPt b) {
+    return sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
 }
 
 enum ImageType file_type(char const* file_path) {
@@ -1068,6 +1080,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
     assert(cl_cmd);
     char* msg_to_show = NULL;  // counts as PCCR_Msg at func end
     usize bit_status = 0;
+
     switch (cl_cmd->t) {
         case ClC_Set: {
             switch (cl_cmd->d.set.t) {
@@ -1100,6 +1113,14 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 case ClCDS_JpgQuality: {
                     ctx->input.jpg_quality_level =
                         cl_cmd->d.set.d.jpg_qlt.quality;
+                } break;
+                case ClCDS_Spacing: {
+                    if (TC_IS_DRAWER(&CURR_TC(ctx))) {
+                        CURR_TC(ctx).d.drawer.spacing =
+                            (i32)cl_cmd->d.set.d.spacing.val;
+                    } else {
+                        msg_to_show = str_new("wrong tool to set spacing");
+                    }
                 } break;
                 case ClCDS_Last: assert(!"invalid tag");
             }
@@ -1242,6 +1263,17 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                .d.ok.d.set.t = ClCDS_JpgQuality,
                .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
         }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Spacing))) {
+            char const* spacing = strtok(NULL, CL_DELIM);
+            if (!spacing) {
+                return cl_prs_noarg(str_new("spacing"), NULL);
+            }
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok,
+               .d.ok.t = ClC_Set,
+               .d.ok.d.set.t = ClCDS_Spacing,
+               .d.ok.d.set.d.spacing.val = strtol(spacing, NULL, 0)};
+        }
         return cl_prs_invarg(
             str_new("%s", prop),
             str_new("unknown prop"),
@@ -1331,6 +1363,7 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
                         case ClCDS_Col:
                         case ClCDS_PngCompression:
                         case ClCDS_JpgQuality:
+                        case ClCDS_Spacing:
                         case ClCDS_Last:
                             break;  // no default branch to enable warnings
                     }
@@ -1383,6 +1416,7 @@ static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
         case ClCDS_LineW: return "line_w";
         case ClCDS_PngCompression: return "png_cmpr";
         case ClCDS_JpgQuality: return "jpg_qlty";
+        case ClCDS_Spacing: return "spacing";
         case ClCDS_Last: return "last";
     }
     UNREACHABLE();
@@ -1711,9 +1745,21 @@ Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
         return False;
     }
 
+    struct DrawCtx* dc = &ctx->dc;
+    struct ToolCtx* tc = &CURR_TC(ctx);
+
+    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+
     if (!state_match(event->state, ShiftMask)) {
         CURR_TC(ctx).sdata.anchor =
             point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
+        canvas_apply_drawer(
+            dc->cv.im,
+            tc->d.drawer.shape,
+            pointer,
+            *tc_curr_col(tc),
+            tc->sdata.line_w
+        );
     }
     return True;
 }
@@ -1728,27 +1774,21 @@ Bool tool_drawer_on_release(
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
+    struct DrawerData* drawer = &tc->d.drawer;
 
-    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    if (state_match(event->state, ShiftMask) || ctx->input.is_dragging) {
-        canvas_line(
-            dc->cv.im,
-            tc->sdata.anchor,
-            pointer,
-            tc->d.drawer.type,
-            *tc_curr_col(tc),
-            tc->sdata.line_w
-        );
-    } else {
-        canvas_apply_drawer(
-            dc->cv.im,
-            tc->d.drawer.type,
-            pointer,
-            *tc_curr_col(tc),
-            tc->sdata.line_w
-        );
-    }
-    tc->sdata.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    Pair end = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    XImage* const im = dc->cv.im;
+    enum DrawerShape ds = drawer->shape;
+    argb const col = *tc_curr_col(tc);
+    u32 const line_w = tc->sdata.line_w;
+    Pair const start =
+        state_match(event->state, ShiftMask) || ctx->input.is_dragging
+        ? tc->sdata.anchor
+        : end;
+
+    canvas_line(im, start, end, ds, col, line_w, drawer->spacing);
+
+    tc->sdata.anchor = end;
 
     return True;
 }
@@ -1760,16 +1800,27 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
+    struct DrawerData const* drawer = &tc->d.drawer;
 
-    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_line(
-        dc->cv.im,
-        tc->sdata.anchor,
-        pointer,
-        tc->d.drawer.type,
-        *tc_curr_col(tc),
-        tc->sdata.line_w
-    );
+    Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    Pair const anchor = tc->sdata.anchor;
+    // XXX algorithm different from canvas_line
+    double const distance = dpt_distance(pt_to_dpt(anchor), pt_to_dpt(pointer));
+    if (drawer->spacing != NIL && distance < drawer->spacing) {
+        return False;
+    }
+
+    XImage* const im = dc->cv.im;
+    enum DrawerShape const ds = drawer->shape;
+    argb const col = *tc_curr_col(tc);
+    u32 const line_w = tc->sdata.line_w;
+
+    // XXX can be just canvas_line call?
+    if (drawer->spacing == NIL) {
+        canvas_line(im, anchor, pointer, ds, col, line_w, drawer->spacing);
+    } else {
+        canvas_apply_drawer(im, ds, pointer, col, line_w);
+    }
 
     tc->sdata.anchor = pointer;
 
@@ -2052,9 +2103,10 @@ void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w) {
             im,
             dpt_to_pt(dpt_add(c, prev)),
             dpt_to_pt(dpt_add(c, curr)),
-            DrawerType_Pencil,
+            DS_Square,
             col,
-            w
+            w,
+            NIL
         );
         prev = curr;
     }
@@ -2063,10 +2115,11 @@ void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w) {
 void canvas_line(
     XImage* im,
     Pair from,
-    Pair to,
-    enum DrawerType type,
-    argb col,
-    u32 w
+    Pair const to,
+    enum DrawerShape const shape,
+    argb const col,
+    u32 const w,
+    u32 const spacing
 ) {
     if (from.x == NIL || from.y == NIL || to.x == NIL || to.y == NIL) {
         return;
@@ -2078,10 +2131,13 @@ void canvas_line(
     i32 dy = -abs(to.y - from.y);
     i32 sy = from.y < to.y ? 1 : -1;
     i32 error = dx + dy;
+    i32 spacing_cnt = 0;
 
     u32 steps = 0;  // prevent infinite loops
     while (++steps < CANVAS_LINE_MAX_STEPS) {
-        canvas_apply_drawer(im, type, from, col, w);
+        if (spacing == NIL || spacing_cnt == 0) {
+            canvas_apply_drawer(im, shape, from, col, w);
+        }
         if (from.x == to.x && from.y == to.y) {
             break;
         }
@@ -2100,22 +2156,23 @@ void canvas_line(
             error += dx;
             from.y += sy;
         }
+        spacing_cnt = (spacing_cnt + 1) % (i32)spacing;
     }
 }
 
 void canvas_apply_drawer(
     XImage* im,
-    enum DrawerType type,
+    enum DrawerShape shape,
     Pair c,
     argb col,
     u32 w
 ) {
-    switch (type) {
-        case DrawerType_Brush:
+    switch (shape) {
+        case DS_Circle:
             // FIXME last argument unused (canvas_brush_get_a don't use it)
             canvas_circle(im, c, w, col, &canvas_brush_get_a, w);
             break;
-        case DrawerType_Pencil:
+        case DS_Square:
             canvas_fill_rect(
                 im,
                 (Pair) {c.x - (i32)w / 2, c.y - (i32)w / 2},

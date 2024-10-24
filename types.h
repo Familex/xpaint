@@ -8,6 +8,9 @@
 
 #define ANY_MOD UINT_MAX
 #define ANY_KEY UINT_MAX
+// default value for signed integers
+#define NIL     (-1)
+#define PNIL    ((Pair) {NIL, NIL})
 
 typedef int8_t i8;
 typedef uint8_t u8;
