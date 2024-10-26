@@ -214,12 +214,10 @@ struct Ctx {
         Bool (*on_move)(struct Ctx*, XMotionEvent const*);
         Bool use_overlay;
 
-        struct ToolSharedData {
-            argb* colarr;
-            u32 curr_col;
-            u32 prev_col;
-            u32 line_w;
-        } sdata;
+        argb* colarr;
+        u32 curr_col;
+        u32 prev_col;
+        u32 line_w;
 
         enum ToolTag {
             Tool_Selection,
@@ -752,25 +750,27 @@ void str_free(char** str_dyn) {
 }
 
 void tc_set_curr_col_num(struct ToolCtx* tc, u32 value) {
-    tc->sdata.prev_col = tc->sdata.curr_col;
-    tc->sdata.curr_col = value;
+    tc->prev_col = tc->curr_col;
+    tc->curr_col = value;
 }
 
 argb* tc_curr_col(struct ToolCtx* tc) {
-    return &tc->sdata.colarr[tc->sdata.curr_col];
+    return &tc->colarr[tc->curr_col];
 }
 
 void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
-    struct ToolCtx new_tc = {
-        .t = type,
-        .sdata = tc->sdata,
-    };
+    tc->t = type;
+    tc->on_press = NULL;
+    tc->on_release = NULL;
+    tc->on_drag = NULL;
+    tc->on_move = NULL;
+
     switch (type) {
         case Tool_Selection:
-            new_tc.on_press = &tool_selection_on_press;
-            new_tc.on_release = &tool_selection_on_release;
-            new_tc.on_drag = &tool_selection_on_drag;
-            new_tc.d.sel = (struct SelectionData) {
+            tc->on_press = &tool_selection_on_press;
+            tc->on_release = &tool_selection_on_release;
+            tc->on_drag = &tool_selection_on_drag;
+            tc->d.sel = (struct SelectionData) {
                 .begin = PNIL,
                 .end = PNIL,
                 .drag_from = PNIL,
@@ -778,32 +778,32 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             };
             break;
         case Tool_Brush:
-            new_tc.on_press = &tool_drawer_on_press;
-            new_tc.on_release = &tool_drawer_on_release;
-            new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.shape = DS_Circle;
-            new_tc.d.drawer.spacing = TOOLS_BRUSH_DEFAULT_SPACING;
+            tc->on_press = &tool_drawer_on_press;
+            tc->on_release = &tool_drawer_on_release;
+            tc->on_drag = &tool_drawer_on_drag;
+            tc->d.drawer = (struct DrawerData) {
+                .shape = DS_Circle,
+                .spacing = TOOLS_BRUSH_DEFAULT_SPACING,
+            };
             break;
         case Tool_Pencil:
-            new_tc.on_press = &tool_drawer_on_press;
-            new_tc.on_release = &tool_drawer_on_release;
-            new_tc.on_drag = &tool_drawer_on_drag;
-            new_tc.d.drawer.shape = DS_Square;
-            new_tc.d.drawer.spacing = NIL;
+            tc->on_press = &tool_drawer_on_press;
+            tc->on_release = &tool_drawer_on_release;
+            tc->on_drag = &tool_drawer_on_drag;
+            tc->d.drawer = (struct DrawerData) {
+                .shape = DS_Square,
+                tc->d.drawer.spacing = NIL,
+            };
             break;
-        case Tool_Fill: new_tc.on_release = &tool_fill_on_release; break;
-        case Tool_Picker: new_tc.on_release = &tool_picker_on_release; break;
+        case Tool_Fill: tc->on_release = &tool_fill_on_release; break;
+        case Tool_Picker: tc->on_release = &tool_picker_on_release; break;
         case Tool_Figure:
-            new_tc.on_press = &tool_drawer_on_press;  // same behavior
-            new_tc.on_release = &tool_figure_on_release;
-            new_tc.on_drag = &tool_figure_on_drag;
-            new_tc.use_overlay = True;
+            tc->on_press = &tool_drawer_on_press;  // same behavior
+            tc->on_release = &tool_figure_on_release;
+            tc->on_drag = &tool_figure_on_drag;
+            tc->use_overlay = True;
             break;
     }
-
-    tc->sdata = (struct ToolSharedData) {0};  // don't let sdata be freed
-    tc_free(tc);
-    *tc = new_tc;
 }
 
 char const* tc_get_tool_name(struct ToolCtx const* tc) {
@@ -824,7 +824,7 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
 }
 
 void tc_free(struct ToolCtx* tc) {
-    arrfree(tc->sdata.colarr);
+    arrfree(tc->colarr);
 }
 
 Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
@@ -1086,7 +1086,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
         case ClC_Set: {
             switch (cl_cmd->d.set.t) {
                 case ClCDS_LineW: {
-                    CURR_TC(ctx).sdata.line_w = cl_cmd->d.set.d.line_w.value;
+                    CURR_TC(ctx).line_w = cl_cmd->d.set.d.line_w.value;
                 } break;
                 case ClCDS_Col: {
                     *tc_curr_col(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.v;
@@ -1759,7 +1759,7 @@ Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
             tc->d.drawer.shape,
             pointer,
             *tc_curr_col(tc),
-            tc->sdata.line_w
+            tc->line_w
         );
     }
     return True;
@@ -1781,7 +1781,7 @@ Bool tool_drawer_on_release(
     XImage* const im = dc->cv.im;
     enum DrawerShape ds = drawer->shape;
     argb const col = *tc_curr_col(tc);
-    u32 const line_w = tc->sdata.line_w;
+    u32 const line_w = tc->line_w;
     Pair const start =
         state_match(event->state, ShiftMask) || ctx->input.is_dragging
         ? ctx->input.anchor
@@ -1814,7 +1814,7 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     XImage* const im = dc->cv.im;
     enum DrawerShape const ds = drawer->shape;
     argb const col = *tc_curr_col(tc);
-    u32 const line_w = tc->sdata.line_w;
+    u32 const line_w = tc->line_w;
 
     // XXX can be just canvas_line call?
     if (drawer->spacing == NIL) {
@@ -2055,13 +2055,13 @@ void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
                 col,
                 fig->fill ? &canvas_figure_circle_get_a_fill
                           : &canvas_figure_circle_get_a,
-                tc->sdata.line_w
+                tc->line_w
             );
         } break;
         case Figure_Rectangle:
         case Figure_Triangle: {
             u32 sides = fig->curr == Figure_Triangle ? 3 : 4;
-            canvas_regular_poly(im, sides, p2, p1, col, tc->sdata.line_w);
+            canvas_regular_poly(im, sides, p2, p1, col, tc->line_w);
             if (fig->fill) {
                 Pair const im_dims = {im->width, im->height};
                 Pair const fill_pt =
@@ -2858,7 +2858,7 @@ void update_statusline(struct Ctx* ctx) {
             );
         }
         draw_string(dc, tc_get_tool_name(tc), tool_name_c, SchmNorm, False);
-        draw_int(dc, (i32)tc->sdata.line_w, line_w_c, SchmNorm, False);
+        draw_int(dc, (i32)tc->line_w, line_w_c, SchmNorm, False);
         /* color */ {
             char col_value[col_value_size + 1];
             sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
@@ -2869,8 +2869,8 @@ void update_statusline(struct Ctx* ctx) {
                 sprintf(
                     col_count,
                     "%d/%td",
-                    tc->sdata.curr_col + 1,
-                    arrlen(tc->sdata.colarr)
+                    tc->curr_col + 1,
+                    arrlen(tc->colarr)
                 );
                 draw_string(dc, col_count, col_count_c, SchmNorm, False);
             }
@@ -3034,14 +3034,14 @@ void setup(Display* dp, struct Ctx* ctx) {
     /* init arrays */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
             struct ToolCtx tc = {
-                .sdata.colarr = NULL,
-                .sdata.curr_col = 0,
-                .sdata.prev_col = 0,
-                .sdata.line_w = TOOLS_DEFAULT_LINE_W,
+                .colarr = NULL,
+                .curr_col = 0,
+                .prev_col = 0,
+                .line_w = TOOLS_DEFAULT_LINE_W,
             };
             arrpush(ctx->tcarr, tc);
-            arrpush(ctx->tcarr[i].sdata.colarr, 0xFF000000);
-            arrpush(ctx->tcarr[i].sdata.colarr, 0xFFFFFFFF);
+            arrpush(ctx->tcarr[i].colarr, 0xFF000000);
+            arrpush(ctx->tcarr[i].colarr, 0xFFFFFFFF);
         }
     }
 
@@ -3588,7 +3588,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
     if (can_action(inp, curr, ACT_SWAP_COLOR)) {
-        tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).sdata.prev_col);
+        tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).prev_col);
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_ZOOM_IN)) {
@@ -3614,10 +3614,10 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_ADD_COLOR)) {
-        u32 const len = arrlen(CURR_TC(ctx).sdata.colarr);
+        u32 const len = arrlen(CURR_TC(ctx).colarr);
         if (len != MAX_COLORS) {
             tc_set_curr_col_num(&CURR_TC(ctx), len);
-            arrpush(CURR_TC(ctx).sdata.colarr, 0xFF000000);
+            arrpush(CURR_TC(ctx).colarr, 0xFF000000);
             update_statusline(ctx);
         }
     }
@@ -3633,8 +3633,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         return False;
     }
     if (can_action(inp, curr, ACT_NEXT_COLOR)) {
-        u32 const curr_col = CURR_TC(ctx).sdata.curr_col;
-        u32 const col_num = arrlen(CURR_TC(ctx).sdata.colarr);
+        u32 const curr_col = CURR_TC(ctx).curr_col;
+        u32 const col_num = arrlen(CURR_TC(ctx).colarr);
         tc_set_curr_col_num(
             &CURR_TC(ctx),
             curr_col + 1 == col_num ? 0 : curr_col + 1
@@ -3642,8 +3642,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_PREV_COLOR)) {
-        u32 const curr_col = CURR_TC(ctx).sdata.curr_col;
-        u32 const col_num = arrlen(CURR_TC(ctx).sdata.colarr);
+        u32 const curr_col = CURR_TC(ctx).curr_col;
+        u32 const col_num = arrlen(CURR_TC(ctx).colarr);
         assert(col_num != 0);
         tc_set_curr_col_num(
             &CURR_TC(ctx),
