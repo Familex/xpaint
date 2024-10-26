@@ -469,10 +469,10 @@ static void ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
 // line from `a` to `b` is a polygon height (a is a base);
-static void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w);
-static void canvas_circle(XImage* im, Pair c, u32 d, argb col, circle_get_alpha_fn get_a, u32 w);
-static void canvas_line(XImage* im, Pair from, Pair to, enum DrawerShape shape, argb col, u32 w, u32 spacing);
-static void canvas_apply_drawer(XImage* im, enum DrawerShape shape, Pair c, argb col, u32 w);
+static void canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b);
+static void canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c);
+static void canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to);
+static void canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill(XImage* im, argb col);
 static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
@@ -1754,13 +1754,7 @@ Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     if (!state_match(event->state, ShiftMask)) {
         ctx->input.anchor =
             point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
-        canvas_apply_drawer(
-            dc->cv.im,
-            tc->d.drawer.shape,
-            pointer,
-            *tc_curr_col(tc),
-            tc->line_w
-        );
+        canvas_apply_drawer(dc->cv.im, tc, tc->d.drawer.shape, pointer);
     }
     return True;
 }
@@ -1779,15 +1773,12 @@ Bool tool_drawer_on_release(
 
     Pair end = point_from_scr_to_cv_xy(dc, event->x, event->y);
     XImage* const im = dc->cv.im;
-    enum DrawerShape ds = drawer->shape;
-    argb const col = *tc_curr_col(tc);
-    u32 const line_w = tc->line_w;
     Pair const start =
         state_match(event->state, ShiftMask) || ctx->input.is_dragging
         ? ctx->input.anchor
         : end;
 
-    canvas_line(im, start, end, ds, col, line_w, drawer->spacing);
+    canvas_line(im, tc, drawer->shape, start, end);
 
     ctx->input.anchor = end;
 
@@ -1813,14 +1804,12 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     XImage* const im = dc->cv.im;
     enum DrawerShape const ds = drawer->shape;
-    argb const col = *tc_curr_col(tc);
-    u32 const line_w = tc->line_w;
 
     // XXX can be just canvas_line call?
     if (drawer->spacing == NIL) {
-        canvas_line(im, anchor, pointer, ds, col, line_w, drawer->spacing);
+        canvas_line(im, tc, ds, anchor, pointer);
     } else {
-        canvas_apply_drawer(im, ds, pointer, col, line_w);
+        canvas_apply_drawer(im, tc, ds, pointer);
     }
 
     ctx->input.anchor = pointer;
@@ -2050,18 +2039,17 @@ void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
             double const d = sqrt(dx * dx + dy * dy);
             canvas_circle(
                 im,
-                (Pair) {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2},
-                (u32)d,
-                col,
+                tc,
                 fig->fill ? &canvas_figure_circle_get_a_fill
                           : &canvas_figure_circle_get_a,
-                tc->line_w
+                (u32)d,
+                (Pair) {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2}
             );
         } break;
         case Figure_Rectangle:
         case Figure_Triangle: {
             u32 sides = fig->curr == Figure_Triangle ? 3 : 4;
-            canvas_regular_poly(im, sides, p2, p1, col, tc->line_w);
+            canvas_regular_poly(im, tc, sides, p2, p1);
             if (fig->fill) {
                 Pair const im_dims = {im->width, im->height};
                 Pair const fill_pt =
@@ -2085,7 +2073,13 @@ static DPt get_inr_circmr_cfs(u32 n) {
     return (DPt) {inradius, circumradius};
 }
 
-void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w) {
+void canvas_regular_poly(
+    XImage* im,
+    struct ToolCtx* tc,
+    u32 n,
+    Pair a,
+    Pair b
+) {
     DPt const inr_circmr = get_inr_circmr_cfs(n);
     DPt c = {
         a.x + (b.x - a.x) * inr_circmr.x,
@@ -2100,12 +2094,10 @@ void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w) {
         curr = dpt_rotate(curr, 360.0 / n);
         canvas_line(
             im,
-            dpt_to_pt(dpt_add(c, prev)),
-            dpt_to_pt(dpt_add(c, curr)),
+            tc,
             DS_Square,
-            col,
-            w,
-            NIL
+            dpt_to_pt(dpt_add(c, prev)),
+            dpt_to_pt(dpt_add(c, curr))
         );
         prev = curr;
     }
@@ -2113,17 +2105,17 @@ void canvas_regular_poly(XImage* im, u32 n, Pair a, Pair b, argb col, u32 w) {
 
 void canvas_line(
     XImage* im,
-    Pair from,
-    Pair const to,
+    struct ToolCtx* tc,
     enum DrawerShape const shape,
-    argb const col,
-    u32 const w,
-    u32 const spacing
+    Pair from,
+    Pair const to
 ) {
     if (from.x == NIL || from.y == NIL || to.x == NIL || to.y == NIL) {
         return;
     }
     u32 const CANVAS_LINE_MAX_STEPS = 1000000;
+
+    i32 const spacing = TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : NIL;
 
     i32 dx = abs(to.x - from.x);
     i32 sx = from.x < to.x ? 1 : -1;
@@ -2135,7 +2127,7 @@ void canvas_line(
     u32 steps = 0;  // prevent infinite loops
     while (++steps < CANVAS_LINE_MAX_STEPS) {
         if (spacing == NIL || spacing_cnt == 0) {
-            canvas_apply_drawer(im, shape, from, col, w);
+            canvas_apply_drawer(im, tc, shape, from);
         }
         if (from.x == to.x && from.y == to.y) {
             break;
@@ -2161,22 +2153,19 @@ void canvas_line(
 
 void canvas_apply_drawer(
     XImage* im,
+    struct ToolCtx* tc,
     enum DrawerShape shape,
-    Pair c,
-    argb col,
-    u32 w
+    Pair c
 ) {
+    u32 const w = tc->line_w;
     switch (shape) {
-        case DS_Circle:
-            // FIXME last argument unused (canvas_brush_get_a don't use it)
-            canvas_circle(im, c, w, col, &canvas_brush_get_a, w);
-            break;
+        case DS_Circle: canvas_circle(im, tc, &canvas_brush_get_a, w, c); break;
         case DS_Square:
             canvas_fill_rect(
                 im,
                 (Pair) {c.x - (i32)w / 2, c.y - (i32)w / 2},
                 (Pair) {(i32)w, (i32)w},
-                col
+                *tc_curr_col(tc)
             );
             break;
     }
@@ -2184,12 +2173,14 @@ void canvas_apply_drawer(
 
 void canvas_circle(
     XImage* im,
-    Pair c,
-    u32 d,
-    argb col,
+    struct ToolCtx* tc,
     circle_get_alpha_fn get_a,
-    u32 w
+    u32 d,
+    Pair c
 ) {
+    argb const col = *tc_curr_col(tc);
+    u32 const w = tc->line_w;
+
     if (d == 1) {
         ximage_put_checked(im, c.x, c.y, col);
         return;
