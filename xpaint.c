@@ -177,6 +177,8 @@ struct Ctx {
         Pair prev_c;
         u64 last_proc_drag_ev_us;
 
+        Pair anchor;
+
         Bool is_holding;
         Button holding_button;
 
@@ -217,7 +219,6 @@ struct Ctx {
             u32 curr_col;
             u32 prev_col;
             u32 line_w;
-            Pair anchor;
         } sdata;
 
         enum ToolTag {
@@ -1751,7 +1752,7 @@ Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
     if (!state_match(event->state, ShiftMask)) {
-        CURR_TC(ctx).sdata.anchor =
+        ctx->input.anchor =
             point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
         canvas_apply_drawer(
             dc->cv.im,
@@ -1783,12 +1784,12 @@ Bool tool_drawer_on_release(
     u32 const line_w = tc->sdata.line_w;
     Pair const start =
         state_match(event->state, ShiftMask) || ctx->input.is_dragging
-        ? tc->sdata.anchor
+        ? ctx->input.anchor
         : end;
 
     canvas_line(im, start, end, ds, col, line_w, drawer->spacing);
 
-    tc->sdata.anchor = end;
+    ctx->input.anchor = end;
 
     return True;
 }
@@ -1803,7 +1804,7 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     struct DrawerData const* drawer = &tc->d.drawer;
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    Pair const anchor = tc->sdata.anchor;
+    Pair const anchor = ctx->input.anchor;
     // XXX algorithm different from canvas_line
     double const distance = dpt_distance(pt_to_dpt(anchor), pt_to_dpt(pointer));
     if (drawer->spacing != NIL && distance < drawer->spacing) {
@@ -1822,7 +1823,7 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         canvas_apply_drawer(im, ds, pointer, col, line_w);
     }
 
-    tc->sdata.anchor = pointer;
+    ctx->input.anchor = pointer;
 
     return True;
 }
@@ -1837,11 +1838,10 @@ Bool tool_figure_on_release(
         return False;
     }
 
-    struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, True, pointer, tc->sdata.anchor);
+    canvas_figure(ctx, True, pointer, ctx->input.anchor);
     overlay_dump(ctx, ctx->dc.cv.overlay);
 
     return True;
@@ -1852,11 +1852,10 @@ Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         return False;
     }
 
-    struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, True, pointer, tc->sdata.anchor);
+    canvas_figure(ctx, True, pointer, ctx->input.anchor);
 
     return True;
 }
@@ -2747,10 +2746,10 @@ void update_screen(struct Ctx* ctx) {
             }
         }
     }
-    if (WND_ANCHOR_CROSS_SIZE && tc->sdata.anchor.x != NIL
+    if (WND_ANCHOR_CROSS_SIZE && ctx->input.anchor.x != NIL
         && !ctx->input.is_dragging) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
-        Pair center = point_from_cv_to_scr(dc, tc->sdata.anchor);
+        Pair center = point_from_cv_to_scr(dc, ctx->input.anchor);
         Pair lt = (Pair) {center.x - size, center.y - size};
         Pair lb = (Pair) {center.x - size, center.y + size};
         Pair rt = (Pair) {center.x + size, center.y - size};
@@ -3016,6 +3015,7 @@ struct Ctx ctx_init(Display* dp) {
         .input =
             (struct Input) {
                 .t = InputT_Interact,
+                .anchor = PNIL,
                 .png_compression_level = PNG_DEFAULT_COMPRESSION,
                 .jpg_quality_level = JPG_DEFAULT_QUALITY,
             },
@@ -3038,7 +3038,6 @@ void setup(Display* dp, struct Ctx* ctx) {
                 .sdata.curr_col = 0,
                 .sdata.prev_col = 0,
                 .sdata.line_w = TOOLS_DEFAULT_LINE_W,
-                .sdata.anchor = PNIL,
             };
             arrpush(ctx->tcarr, tc);
             arrpush(ctx->tcarr[i].sdata.colarr, 0xFF000000);
