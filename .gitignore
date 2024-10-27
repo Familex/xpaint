@@ -17,5 +17,5 @@
 # analyzers
 /flamegraph.svg
 /heaptrack.*.zst
-/perf.data
+/perf.data*
 /gdb.txt
