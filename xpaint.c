@@ -1708,14 +1708,10 @@ Bool tool_selection_on_release(
 
         // unselect area
         sd->begin = sd->end = sd->drag_from = sd->drag_to = PNIL;
-        XSetSelectionOwner(dc->dp, XA_PRIMARY, None, CurrentTime);
-        trace("clipboard released");
     } else if (ctx->input.is_dragging) {  // select area
         Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
         tc->d.sel.end.x = CLAMP(pointer.x, 0, dc->cv.im->width);
         tc->d.sel.end.y = CLAMP(pointer.y, 0, dc->cv.im->height);
-        XSetSelectionOwner(dc->dp, XA_PRIMARY, dc->window, CurrentTime);
-        trace("clipboard owned");
     }
 
     return True;
@@ -3545,37 +3541,8 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             ctx->sel_buf.im = XSubImage(ctx->dc.cv.im, x, y, width, height);
             assert(ctx->sel_buf.im != NULL);
-            assert(
-                ctx->sel_buf.im->width == width
-                && ctx->sel_buf.im->height == height
-            );
-            if (ctx->sel_buf.im->red_mask == 0
-                && ctx->sel_buf.im->green_mask == 0
-                && ctx->sel_buf.im->blue_mask == 0) {
-                puts("ximage: XGetImage returned empty masks");
-                ctx->sel_buf.im->red_mask = 0xFF0000;
-                ctx->sel_buf.im->green_mask = 0xFF00;
-                ctx->sel_buf.im->blue_mask = 0xFF;
-            }
-            if (is_verbose_output) {
-                u32 const image_size =
-                    ctx->sel_buf.im->bits_per_pixel * ctx->sel_buf.im->height;
-                trace(
-                    "\nsize: %d\nwidth: %d\nheight: %d\nbpp: %d\nbbo: %d\n"
-                    "format: %d\nred: %lX\nblue: %lX\ngreen %lX\n",
-                    image_size,
-                    ctx->sel_buf.im->width,
-                    ctx->sel_buf.im->height,
-                    ctx->sel_buf.im->bits_per_pixel,
-                    ctx->sel_buf.im->bitmap_bit_order,
-                    ctx->sel_buf.im->format,
-                    ctx->sel_buf.im->red_mask,
-                    ctx->sel_buf.im->blue_mask,
-                    ctx->sel_buf.im->green_mask
-                );
-            }
         } else {
-            trace("^c without selection");
+            trace("ACT_COPY_AREA, but nothing selected");
         }
     }
     if (can_action(inp, curr, ACT_SWAP_COLOR)) {
@@ -3748,37 +3715,36 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     XSelectionRequestEvent request = event->xselectionrequest;
 
-    if (XGetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard]) == ctx->dc.window
-        && request.selection == atoms[A_Clipboard]
-        && request.property != None) {
-        if (request.target == atoms[A_Targets]) {
-            Atom avaliable_targets[] = {atoms[A_ImagePng]};
-            XChangeProperty(
-                request.display,
-                request.requestor,
-                request.property,
-                XA_ATOM,
-                32,
-                PropModeReplace,
-                (unsigned char const*)avaliable_targets,
-                LENGTH(avaliable_targets)
-            );
-        } else if (request.target == atoms[A_ImagePng]) {
-            trace("requested image/png");
-            u8* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
-            i32 png_data_size = NIL;
-            stbi_uc* png_imdyn = stbi_write_png_to_mem(
-                rgb_dyn,
-                0,
-                ctx->sel_buf.im->width,
-                ctx->sel_buf.im->height,
-                3,
-                &png_data_size
-            );
-            if (png_imdyn == NULL) {
-                die("stbi: %s", stbi_failure_reason());
-            }
+    if (XGetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard]) != ctx->dc.window
+        || request.selection != atoms[A_Clipboard]
+        || request.property == None) {
+        return True;
+    }
 
+    if (request.target == atoms[A_Targets]) {
+        Atom avaliable_targets[] = {atoms[A_ImagePng]};
+        XChangeProperty(
+            request.display,
+            request.requestor,
+            request.property,
+            XA_ATOM,
+            32,
+            PropModeReplace,
+            (unsigned char const*)avaliable_targets,
+            LENGTH(avaliable_targets)
+        );
+    } else if (request.target == atoms[A_ImagePng]) {
+        u8* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
+        i32 png_data_size = NIL;
+        stbi_uc* png_imdyn = stbi_write_png_to_mem(
+            rgb_dyn,
+            0,
+            ctx->sel_buf.im->width,
+            ctx->sel_buf.im->height,
+            3,
+            &png_data_size
+        );
+        if (png_imdyn != NULL) {
             XChangeProperty(
                 request.display,
                 request.requestor,
@@ -3789,25 +3755,30 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
                 png_imdyn,
                 png_data_size
             );
-
-            free(rgb_dyn);
-            stbi_image_free(png_imdyn);
+        } else {
+            trace(
+                "selection request handler: stbi error: %s",
+                stbi_failure_reason()
+            );
         }
-        XSelectionEvent sendEvent = {
-            .type = SelectionNotify,
-            .serial = request.serial,
-            .send_event = request.send_event,
-            .display = request.display,
-            .requestor = request.requestor,
-            .selection = request.selection,
-            .target = request.target,
-            .property = request.property,
-            .time = request.time,
-        };
-        XSendEvent(ctx->dc.dp, request.requestor, 0, 0, (XEvent*)&sendEvent);
-    } else {
-        trace("xpaint: invalid selection request event received");
+
+        free(rgb_dyn);
+        stbi_image_free(png_imdyn);
     }
+
+    XSelectionEvent sendEvent = {
+        .type = SelectionNotify,
+        .serial = request.serial,
+        .send_event = request.send_event,
+        .display = request.display,
+        .requestor = request.requestor,
+        .selection = request.selection,
+        .target = request.target,
+        .property = request.property,
+        .time = request.time,
+    };
+    XSendEvent(ctx->dc.dp, request.requestor, 0, 0, (XEvent*)&sendEvent);
+
     return True;
 }
 
