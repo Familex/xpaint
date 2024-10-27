@@ -3293,12 +3293,13 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     Button e_btn = get_btn(e);
 
+    sel_circ_hide(&ctx->sc);
+
     if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
             ctx->sc.items[selected_item].on_select(ctx);
         }
-        sel_circ_hide(&ctx->sc);
     } else if (btn_eq(e_btn, BTN_SCROLL_UP)) {
         canvas_scroll(&ctx->dc.cv, (Pair) {0, 10});
     } else if (btn_eq(e_btn, BTN_SCROLL_DOWN)) {
