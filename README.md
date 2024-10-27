@@ -33,7 +33,7 @@ Edit [Makefile](./Makefile) to match your local setup
 (app is installed into the `/usr/local` namespace by default).
 
 Afterwards execute `make clean install` to build and install app
-(if necessary as root):
+(if necessary as root).
 
 ## Nix
 
