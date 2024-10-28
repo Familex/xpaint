@@ -799,6 +799,7 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             tc->on_press = &tool_drawer_on_press;  // same behavior
             tc->on_release = &tool_figure_on_release;
             tc->on_drag = &tool_figure_on_drag;
+            tc->d.fig = (struct FigureData) {0};
             tc->use_overlay = True;
             break;
     }
