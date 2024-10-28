@@ -408,11 +408,9 @@ static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_cv_to_scr_no_move(struct DrawCtx const* dc, Pair p);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
-static DPt pt_to_dpt(Pair p);
 static Pair dpt_to_pt(DPt p);
 static DPt dpt_rotate(DPt p, double deg); // clockwise
 static DPt dpt_add(DPt a, DPt b);
-static double dpt_distance(DPt a, DPt b);
 
 static enum ImageType file_type(char const* file_path);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
@@ -471,7 +469,7 @@ static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
 // line from `a` to `b` is a polygon height (a is a base);
 static void canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b);
 static void canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c);
-static void canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to);
+static u32 canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to, Bool draw_first_pt);
 static void canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill(XImage* im, argb col);
@@ -882,10 +880,6 @@ Bool point_in_rect(Pair p, Pair a1, Pair a2) {
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
-DPt pt_to_dpt(Pair p) {
-    return (DPt) {.x = p.x, .y = p.y};
-}
-
 Pair dpt_to_pt(DPt p) {
     return (Pair) {.x = (i32)p.x, .y = (i32)p.y};
 }
@@ -903,10 +897,6 @@ DPt dpt_add(DPt a, DPt b) {
         .x = a.x + b.x,
         .y = a.y + b.y,
     };
-}
-
-double dpt_distance(DPt a, DPt b) {
-    return sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
 }
 
 enum ImageType file_type(char const* file_path) {
@@ -1743,14 +1733,9 @@ Bool tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     }
 
     struct DrawCtx* dc = &ctx->dc;
-    struct ToolCtx* tc = &CURR_TC(ctx);
-
-    Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
     if (!state_match(event->state, ShiftMask)) {
-        ctx->input.anchor =
-            point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
-        canvas_apply_drawer(dc->cv.im, tc, tc->d.drawer.shape, pointer);
+        ctx->input.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
     }
     return True;
 }
@@ -1770,11 +1755,12 @@ Bool tool_drawer_on_release(
     Pair end = point_from_scr_to_cv_xy(dc, event->x, event->y);
     XImage* const im = dc->cv.im;
     Pair const start =
-        state_match(event->state, ShiftMask) || ctx->input.is_dragging
-        ? ctx->input.anchor
-        : end;
+        state_match(event->state, ShiftMask) ? ctx->input.anchor : end;
 
-    canvas_line(im, tc, drawer->shape, start, end);
+    // all points with drag motion drawn in on_drag
+    if (!ctx->input.is_dragging) {
+        canvas_line(im, tc, drawer->shape, start, end, True);
+    }
 
     ctx->input.anchor = end;
 
@@ -1792,23 +1778,10 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair const anchor = ctx->input.anchor;
-    // XXX algorithm different from canvas_line
-    double const distance = dpt_distance(pt_to_dpt(anchor), pt_to_dpt(pointer));
-    if (drawer->spacing != NIL && distance < drawer->spacing) {
-        return False;
+
+    if (canvas_line(dc->cv.im, tc, drawer->shape, anchor, pointer, False)) {
+        ctx->input.anchor = pointer;
     }
-
-    XImage* const im = dc->cv.im;
-    enum DrawerShape const ds = drawer->shape;
-
-    // XXX can be just canvas_line call?
-    if (drawer->spacing == NIL) {
-        canvas_line(im, tc, ds, anchor, pointer);
-    } else {
-        canvas_apply_drawer(im, tc, ds, pointer);
-    }
-
-    ctx->input.anchor = pointer;
 
     return True;
 }
@@ -2093,23 +2066,28 @@ void canvas_regular_poly(
             tc,
             DS_Square,
             dpt_to_pt(dpt_add(c, prev)),
-            dpt_to_pt(dpt_add(c, curr))
+            dpt_to_pt(dpt_add(c, curr)),
+            True
         );
         prev = curr;
     }
 }
 
-void canvas_line(
+u32 canvas_line(
     XImage* im,
     struct ToolCtx* tc,
     enum DrawerShape const shape,
     Pair from,
-    Pair const to
+    Pair const to,
+    Bool draw_first_pt
 ) {
-    if (from.x == NIL || from.y == NIL || to.x == NIL || to.y == NIL) {
-        return;
-    }
     u32 const CANVAS_LINE_MAX_STEPS = 1000000;
+
+    u32 pts_drawn = 0;
+
+    if (from.x == NIL || from.y == NIL || to.x == NIL || to.y == NIL) {
+        return pts_drawn;
+    }
 
     i32 const spacing = TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : NIL;
 
@@ -2122,8 +2100,9 @@ void canvas_line(
 
     u32 steps = 0;  // prevent infinite loops
     while (++steps < CANVAS_LINE_MAX_STEPS) {
-        if (spacing == NIL || spacing_cnt == 0) {
+        if (draw_first_pt && (spacing == NIL || spacing_cnt == 0)) {
             canvas_apply_drawer(im, tc, shape, from);
+            pts_drawn += 1;
         }
         if (from.x == to.x && from.y == to.y) {
             break;
@@ -2144,7 +2123,9 @@ void canvas_line(
             from.y += sy;
         }
         spacing_cnt = (spacing_cnt + 1) % (i32)spacing;
+        draw_first_pt = True;
     }
+    return pts_drawn;
 }
 
 void canvas_apply_drawer(
