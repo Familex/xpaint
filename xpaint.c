@@ -67,10 +67,13 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define COALESCE(A, B)   ((A) ? (A) : (B))
 #define UNREACHABLE()    __builtin_unreachable()
 
-#define PI         (3.141)
+#define PI               (3.141)
 // only one one-byte symbol allowed
-#define ARGB_ALPHA (0xFF000000)
-#define CL_DELIM   " "
+#define ARGB_ALPHA       (0xFF000000)
+#define CL_DELIM         " "
+// adjust brush line width to pencil's line width
+// XXX kinda works only for small values of line_w
+#define BRUSH_LINE_W_MOD 4.0
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -2137,7 +2140,10 @@ void canvas_apply_drawer(
 ) {
     u32 const w = tc->line_w;
     switch (shape) {
-        case DS_Circle: canvas_circle(im, tc, &canvas_brush_get_a, w, c); break;
+        case DS_Circle: {
+            u32 stroke_r = (u32)(w * BRUSH_LINE_W_MOD);
+            canvas_circle(im, tc, &canvas_brush_get_a, stroke_r, c);
+        } break;
         case DS_Square:
             canvas_fill_rect(
                 im,
