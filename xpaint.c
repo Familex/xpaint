@@ -243,7 +243,7 @@ struct Ctx {
                     DS_Circle,
                     DS_Square,
                 } shape;
-                i32 spacing;
+                u32 spacing;
             } drawer;
             struct FigureData {
                 enum FigureType {
@@ -793,7 +793,7 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             tc->on_drag = &tool_drawer_on_drag;
             tc->d.drawer = (struct DrawerData) {
                 .shape = DS_Square,
-                tc->d.drawer.spacing = NIL,
+                tc->d.drawer.spacing = 1,
             };
             break;
         case Tool_Fill: tc->on_release = &tool_fill_on_release; break;
@@ -1111,8 +1111,12 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 } break;
                 case ClCDS_Spacing: {
                     if (TC_IS_DRAWER(&CURR_TC(ctx))) {
-                        CURR_TC(ctx).d.drawer.spacing =
-                            (i32)cl_cmd->d.set.d.spacing.val;
+                        if (cl_cmd->d.set.d.spacing.val >= 1) {
+                            CURR_TC(ctx).d.drawer.spacing =
+                                cl_cmd->d.set.d.spacing.val;
+                        } else {
+                            msg_to_show = str_new("spacing must be >= 1");
+                        }
                     } else {
                         msg_to_show = str_new("wrong tool to set spacing");
                     }
@@ -1267,7 +1271,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
                .d.ok.d.set.t = ClCDS_Spacing,
-               .d.ok.d.set.d.spacing.val = strtol(spacing, NULL, 0)};
+               .d.ok.d.set.d.spacing.val = strtoul(spacing, NULL, 0)};
         }
         return cl_prs_invarg(
             str_new("%s", prop),
@@ -2093,7 +2097,7 @@ u32 canvas_line(
         return pts_drawn;
     }
 
-    i32 const spacing = TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : NIL;
+    u32 const spacing = TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 1;
 
     i32 dx = abs(to.x - from.x);
     i32 sx = from.x < to.x ? 1 : -1;
@@ -2104,7 +2108,7 @@ u32 canvas_line(
 
     u32 steps = 0;  // prevent infinite loops
     while (++steps < CANVAS_LINE_MAX_STEPS) {
-        if (draw_first_pt && (spacing == NIL || spacing_cnt == 0)) {
+        if (draw_first_pt && spacing_cnt == 0) {
             canvas_apply_drawer(im, tc, shape, from);
             pts_drawn += 1;
         }
