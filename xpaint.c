@@ -526,8 +526,11 @@ static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
 static XImage* images[I_Last];
 
-static void
-main_arg_bound_check(char const* cmd_name, i32 argc, char** argv, u32 pos);
+// clang-format off
+static void main_die_if_no_val_for_arg(char const* cmd_name, i32 argc, char** argv, u32 pos);
+static Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv);
+static void main_show_help_message(FILE* out);
+// clang-format on
 
 i32 main(i32 argc, char** argv) {
     Display* display = XOpenDisplay(NULL);
@@ -537,50 +540,9 @@ i32 main(i32 argc, char** argv) {
 
     struct Ctx ctx = ctx_init(display);
 
-    for (i32 i = 1; i < argc; ++i) {
-        if (argv[i][0] != '-') {  // main argument
-            file_ctx_set(&ctx.finp, argv[i]);
-            file_ctx_set(&ctx.fout, argv[i]);
-        } else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
-            printf("xpaint " VERSION "\n");
-            exit(0);
-        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
-            is_verbose_output = True;
-        } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--input")) {
-            main_arg_bound_check("-i or --input", argc, argv, i);
-            file_ctx_set(&ctx.finp, argv[++i]);
-        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
-            main_arg_bound_check("-o or --output", argc, argv, i);
-            file_ctx_set(&ctx.fout, argv[++i]);
-        } else if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--width")) {
-            main_arg_bound_check("-w or --width", argc, argv, i);
-            // ctx.dc.width == ctx.dc.cv.im->width at program start
-            ctx.dc.width = strtol(argv[++i], NULL, 0);
-            if (!ctx.dc.width) {
-                die("canvas width must be positive number");
-            }
-        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--height")) {
-            main_arg_bound_check("-h or --height", argc, argv, i);
-            // ctx.dc.height == ctx.dc.cv.im->height at program start
-            ctx.dc.height = strtol(argv[++i], NULL, 0);
-            if (!ctx.dc.height) {
-                die("canvas height must be positive number");
-            }
-        } else {
-            printf(
-                "Usage: xpaint [OPTIONS] [FILE]\n"
-                "\n"
-                "Options:\n"
-                "      --help                   Print help message\n"
-                "  -V, --version                Print version\n"
-                "  -v, --verbose                Use verbose output\n"
-                "  -w, --width <canvas width>   Set canvas width\n"
-                "  -h, --height <canvas height> Set canvas height\n"
-                "  -i, --input <file path>      Set load file\n"
-                "  -o, --output <file path>     Set save file\n"
-            );
-            exit(0);
-        }
+    if (!main_process_args(&ctx, argc, argv)) {
+        main_show_help_message(stderr);
+        exit(1);
     }
 
     /* extentions support */ {
@@ -599,7 +561,7 @@ i32 main(i32 argc, char** argv) {
     return EXIT_SUCCESS;
 }
 
-void main_arg_bound_check(
+void main_die_if_no_val_for_arg(
     char const* cmd_name,
     i32 argc,
     char** argv,
@@ -608,6 +570,66 @@ void main_arg_bound_check(
     if (pos + 1 == argc || argv[pos + 1][0] == '-') {
         die("supply argument for %s", cmd_name);
     }
+}
+
+Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv) {
+    Bool result = True;
+
+    for (i32 i = 1; i < argc; ++i) {
+        if (argv[i][0] != '-') {  // main argument
+            file_ctx_set(&ctx->finp, argv[i]);
+            file_ctx_set(&ctx->fout, argv[i]);
+        } else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
+            printf("xpaint " VERSION "\n");
+            exit(0);
+        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) {
+            is_verbose_output = True;
+        } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--input")) {
+            main_die_if_no_val_for_arg("-i or --input", argc, argv, i);
+            file_ctx_set(&ctx->finp, argv[++i]);
+        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
+            main_die_if_no_val_for_arg("-o or --output", argc, argv, i);
+            file_ctx_set(&ctx->fout, argv[++i]);
+        } else if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--width")) {
+            main_die_if_no_val_for_arg("-w or --width", argc, argv, i);
+            // ctx.dc.width == ctx.dc.cv.im->width at program start
+            ctx->dc.width = strtol(argv[++i], NULL, 0);
+            if (!ctx->dc.width) {
+                die("canvas width must be positive number");
+            }
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--height")) {
+            main_die_if_no_val_for_arg("-h or --height", argc, argv, i);
+            // ctx.dc.height == ctx.dc.cv.im->height at program start
+            ctx->dc.height = strtol(argv[++i], NULL, 0);
+            if (!ctx->dc.height) {
+                die("canvas height must be positive number");
+            }
+        } else if (!strcmp(argv[i], "--help")) {
+            main_show_help_message(stdout);
+            exit(0);
+        } else {
+            fprintf(stderr, "Unknown argument '%s'\n", argv[i]);
+            result = False;
+        }
+    }
+
+    return result;
+}
+
+void main_show_help_message(FILE* out) {
+    fprintf(
+        out,
+        "Usage: xpaint [OPTIONS] [FILE]\n"
+        "\n"
+        "Options:\n"
+        "      --help                   Print help message\n"
+        "  -V, --version                Print version\n"
+        "  -v, --verbose                Use verbose output\n"
+        "  -w, --width <canvas width>   Set canvas width\n"
+        "  -h, --height <canvas height> Set canvas height\n"
+        "  -i, --input <file path>      Set load file\n"
+        "  -o, --output <file path>     Set save file\n"
+    );
 }
 
 void die(char const* errstr, ...) {
@@ -3168,7 +3190,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             if (im) {
                 canvas_load(&ctx->dc, im, ctx->finp.path_dyn);
             } else {
-                die("failed to read input file");
+                die("failed to read input file '%s'", ctx->finp.path_dyn);
             }
         } else {
             Pixmap data = XCreatePixmap(
