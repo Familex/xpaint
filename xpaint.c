@@ -71,6 +71,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 // only one one-byte symbol allowed
 #define ARGB_ALPHA       (0xFF000000)
 #define CL_DELIM         " "
+#define IOCTX_STDIO_STR  "-"
 // adjust brush line width to pencil's line width
 // XXX kinda works only for small values of line_w
 #define BRUSH_LINE_W_MOD 4.0
@@ -117,10 +118,13 @@ struct IconData {
     usize len;
 };
 
-enum ImageType {
-    IMT_Png,
-    IMT_Jpg,
-    IMT_Unknown,
+struct Image {
+    XImage* im;
+    enum ImageType {
+        IMT_Png,
+        IMT_Jpg,
+        IMT_Unknown,
+    } type;
 };
 
 struct Ctx;
@@ -276,9 +280,18 @@ struct Ctx {
         XImage* im;
     } sel_buf;
 
-    struct FileCtx {
-        char* path_dyn;
-    } finp, fout;
+    struct IOCtx {
+        enum {
+            IO_None,
+            IO_File,
+            IO_Stdio,
+        } t;
+        union {
+            struct {
+                char* path_dyn;
+            } file;
+        } d;
+    } inp, out;
 };
 
 struct ClCommand {
@@ -296,8 +309,8 @@ struct ClCommand {
                 ClCDS_LineW = 0,
                 ClCDS_Col,
                 ClCDS_Font,
-                ClCDS_FInp,
-                ClCDS_FOut,
+                ClCDS_Inp,
+                ClCDS_Out,
                 ClCDS_PngCompression,
                 ClCDS_JpgQuality,
                 ClCDS_Spacing,
@@ -313,12 +326,12 @@ struct ClCommand {
                 struct ClCDSDFont {
                     char* name_dyn;
                 } font;
-                struct ClCDSDFInp {
+                struct ClCDSDInp {
                     char* path_dyn;
-                } finp;
-                struct ClCDSDFOut {
+                } inp;
+                struct ClCDSDOut {
                     char* path_dyn;
-                } fout;
+                } out;
                 struct ClCDSDPngCpr {
                     i32 compression;
                 } png_cpr;
@@ -403,8 +416,10 @@ static void tc_free(struct ToolCtx* tc);
 
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
-static void file_ctx_set(struct FileCtx* file_ctx, char const* file_path);
-static void file_ctx_free(struct FileCtx* file_ctx);
+static struct IOCtx ioctx_new(char const* input);
+static void ioctx_set(struct IOCtx* ioctx, char const* input);
+static char const* ioctx_as_str(struct IOCtx const* ioctx);
+static void ioctx_free(struct IOCtx* ioctx);
 
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
@@ -415,13 +430,13 @@ static Pair dpt_to_pt(DPt p);
 static DPt dpt_rotate(DPt p, double deg); // clockwise
 static DPt dpt_add(DPt a, DPt b);
 
-static enum ImageType file_type(char const* file_path);
+static enum ImageType file_type(u8 const* data, u32 len);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 // coefficient c is proportional to the significance of component a
 static argb argb_blend(argb a, argb b, u8 c);
-static XImage* read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
-static XImage* read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg);
-static Bool save_file(struct DrawCtx* dc, struct Input const* input, enum ImageType type, char const* file_path);
+static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
+static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
+static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
@@ -458,12 +473,13 @@ static Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Bool tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Bool tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 
+static struct History history_new(struct Ctx* ctx);
 static Bool history_move(struct Ctx* ctx, Bool forward);
-static void history_push(struct History** hist, struct Ctx* ctx);
-static void history_forward(struct Ctx* ctx);
+static void history_forward(struct Ctx* ctx, struct History* hist_opt);
 static void history_apply(struct Ctx* ctx, struct History* hist);
 static struct History history_clone(struct History const* hist);
-static void historyarr_clear(Display* dp, struct History** hist);
+static void history_free(struct History* hist);
+static void historyarr_clear(struct History** hist);
 
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static void ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
@@ -476,8 +492,8 @@ static u32 canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, P
 static void canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill(XImage* im, argb col);
-static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path); // must be void
-static void canvas_free(Display* dp, struct Canvas* cv);
+static Bool canvas_load(struct DrawCtx* dc, struct Image const* image);
+static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 static void overlay_clear(XImage* im);
@@ -576,9 +592,9 @@ Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv) {
     Bool result = True;
 
     for (i32 i = 1; i < argc; ++i) {
-        if (argv[i][0] != '-') {  // main argument
-            file_ctx_set(&ctx->finp, argv[i]);
-            file_ctx_set(&ctx->fout, argv[i]);
+        if (argv[i][0] != '-' || !strcmp(argv[i], IOCTX_STDIO_STR)) {
+            ioctx_set(&ctx->inp, argv[i]);
+            ioctx_set(&ctx->out, argv[i]);
         } else if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
             printf("xpaint " VERSION "\n");
             exit(0);
@@ -586,10 +602,10 @@ Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv) {
             is_verbose_output = True;
         } else if (!strcmp(argv[i], "-i") || !strcmp(argv[i], "--input")) {
             main_die_if_no_val_for_arg("-i or --input", argc, argv, i);
-            file_ctx_set(&ctx->finp, argv[++i]);
+            ioctx_set(&ctx->inp, argv[++i]);
         } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
             main_die_if_no_val_for_arg("-o or --output", argc, argv, i);
-            file_ctx_set(&ctx->fout, argv[++i]);
+            ioctx_set(&ctx->out, argv[++i]);
         } else if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--width")) {
             main_die_if_no_val_for_arg("-w or --width", argc, argv, i);
             // ctx.dc.width == ctx.dc.cv.im->width at program start
@@ -870,13 +886,36 @@ void fnt_free(Display* dp, struct Fnt* fnt) {
     }
 }
 
-void file_ctx_set(struct FileCtx* file_ctx, char const* file_path) {
-    file_ctx_free(file_ctx);
-    file_ctx->path_dyn = str_new("%s", file_path);
+struct IOCtx ioctx_new(char const* input) {
+    if (!strcmp(input, IOCTX_STDIO_STR)) {
+        return (struct IOCtx) {.t = IO_Stdio};
+    }
+    return (struct IOCtx) {
+        .t = IO_File,
+        .d.file.path_dyn = str_new("%s", input),
+    };
 }
 
-void file_ctx_free(struct FileCtx* file_ctx) {
-    str_free(&file_ctx->path_dyn);
+void ioctx_set(struct IOCtx* ioctx, char const* input) {
+    ioctx_free(ioctx);
+    *ioctx = ioctx_new(input);
+}
+
+char const* ioctx_as_str(struct IOCtx const* ioctx) {
+    switch (ioctx->t) {
+        case IO_None: return "none";
+        case IO_Stdio: return "stdio";
+        case IO_File: return ioctx->d.file.path_dyn;
+    }
+    return "UNKNOWN";
+}
+
+void ioctx_free(struct IOCtx* ioctx) {
+    switch (ioctx->t) {
+        case IO_None: break;
+        case IO_File: str_free(&ioctx->d.file.path_dyn); break;
+        case IO_Stdio: break;
+    }
 }
 
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
@@ -925,36 +964,22 @@ DPt dpt_add(DPt a, DPt b) {
     };
 }
 
-enum ImageType file_type(char const* file_path) {
-    if (!file_path) {
-        return IMT_Unknown;
-    }
-    static u32 const HEADER_SIZE = 8;  // read extra symbols for simplicity
-    u8 h[HEADER_SIZE];
-    enum ImageType result = IMT_Unknown;
-
-    FILE* file = fopen(file_path, "r");
-    if (!file) {
-        return IMT_Unknown;
-    }
-
-    if (fread(h, sizeof(u8), HEADER_SIZE, file) != HEADER_SIZE) {
-        fclose(file);
+enum ImageType file_type(u8 const* data, u32 len) {
+    if (!data || !len) {
         return IMT_Unknown;
     }
 
     // jpeg SOI marker and another marker begin
-    if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) {
-        result = IMT_Jpg;
-    } else
-        // png header
-        if (h[0] == 0x89 && h[1] == 0x50 && h[2] == 0x4E && h[3] == 0x47
-            && h[4] == 0x0D && h[5] == 0x0A && h[6] == 0x1A && h[7] == 0x0A) {
-            result = IMT_Png;
-        }
-
-    fclose(file);
-    return result;
+    if (len >= 2 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+        return IMT_Jpg;
+    }
+    // png header
+    if (len >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E
+        && data[3] == 0x47 && data[4] == 0x0D && data[5] == 0x0A
+        && data[6] == 0x1A && data[7] == 0x0A) {
+        return IMT_Png;
+    }
+    return IMT_Unknown;
 }
 
 u8* ximage_to_rgb(XImage const* image, Bool rgba) {
@@ -1012,7 +1037,7 @@ static u32 argb_to_abgr(argb v) {
     return a | blue << (2 * 8) | g | red;
 }
 
-static XImage* read_file_from_memory(
+static struct Image read_file_from_memory(
     struct DrawCtx const* dc,
     u8 const* data,
     u32 len,
@@ -1024,7 +1049,7 @@ static XImage* read_file_from_memory(
     stbi_uc* image_data =
         stbi_load_from_memory(data, (i32)len, &width, &height, &comp, 4);
     if (image_data == NULL) {
-        return NULL;
+        return (struct Image) {0};
     }
     // process image data
     argb* image = (argb*)image_data;
@@ -1035,7 +1060,7 @@ static XImage* read_file_from_memory(
         // https://stackoverflow.com/a/17030897
         image[i] = argb_to_abgr(image[i]);
     }
-    XImage* result = XCreateImage(
+    XImage* im = XCreateImage(
         dc->dp,
         dc->sys.vinfo.visual,
         dc->sys.vinfo.depth,
@@ -1048,27 +1073,62 @@ static XImage* read_file_from_memory(
         width * 4
     );
 
-    return result;
+    return (struct Image) {.im = im, .type = file_type(data, len)};
 }
 
-XImage*
-read_file_from_path(struct DrawCtx const* dc, char const* file_name, argb bg) {
-    int fd = open(file_name, O_RDONLY);
-    off_t len = lseek(fd, 0, SEEK_END);
-    void* data = mmap(0, len, PROT_READ, MAP_PRIVATE, fd, 0);
+struct Image
+read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
+    switch (ioctx->t) {
+        case IO_None: return (struct Image) {0};
+        case IO_File: {
+            int fd = open(ioctx->d.file.path_dyn, O_RDONLY);
+            off_t len = lseek(fd, 0, SEEK_END);
+            void* data = mmap(0, len, PROT_READ, MAP_PRIVATE, fd, 0);
+            struct Image result = read_file_from_memory(dc, data, len, bg);
 
-    XImage* result = read_file_from_memory(dc, data, len, bg);
+            close(fd);
+            return result;
+        }
+        case IO_Stdio: {
+            u8* data = NULL;
+            u32 len = 0;
+            i32 c = 0;
+            // FIXME read not by 1 char?
+            while ((c = getc(stdin)) != EOF) {
+                len += 1;
+                data = (u8*)realloc(data, len);  // NOLINT (FIXME stange error)
+                if (!data) {
+                    die("out of memory");
+                }
+                data[len - 1] = c;
+            }
+            struct Image result = read_file_from_memory(dc, data, len, bg);
 
-    close(fd);
-
-    return result;
+            free(data);
+            return result;
+        }
+    }
+    return (struct Image) {0};
 }
 
-Bool save_file(
+static void ioctx_write(void* context, void* data, i32 size) {
+    struct IOCtx const* ioctx = (struct IOCtx const*)context;
+    switch (ioctx->t) {
+        case IO_None: break;
+        case IO_File: {
+            FILE* fd = fopen(ioctx->d.file.path_dyn, "w");
+            fwrite(data, sizeof(char), size, fd);
+            fclose(fd);
+        } break;
+        case IO_Stdio: fwrite(data, sizeof(char), size, stdout); break;
+    }
+}
+
+Bool write_io(
     struct DrawCtx* dc,
     struct Input const* input,
     enum ImageType type,
-    char const* file_path
+    struct IOCtx const* ioctx
 ) {
     if (type == IMT_Unknown) {
         return False;
@@ -1081,11 +1141,27 @@ Bool save_file(
     switch (type) {
         case IMT_Png: {
             stbi_write_png_compression_level = input->png_compression_level;
-            result = stbi_write_png(file_path, w, h, 4, rgba_dyn, 0);
+            result = stbi_write_png_to_func(
+                &ioctx_write,
+                (void*)ioctx,
+                w,
+                h,
+                4,
+                rgba_dyn,
+                0
+            );
         } break;
         case IMT_Jpg: {
             i32 quality = input->jpg_quality_level;
-            result = stbi_write_jpg(file_path, w, h, 4, rgba_dyn, quality);
+            result = stbi_write_jpg_to_func(
+                &ioctx_write,
+                (void*)ioctx,
+                w,
+                h,
+                4,
+                rgba_dyn,
+                quality
+            );
         } break;
         case IMT_Unknown: UNREACHABLE();
     }
@@ -1113,15 +1189,17 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                         msg_to_show = str_new("invalid font name: '%s'", font);
                     }
                 } break;
-                case ClCDS_FInp: {
-                    char const* path = cl_cmd->d.set.d.finp.path_dyn;
-                    file_ctx_set(&ctx->finp, path);
-                    msg_to_show = str_new("finp set to '%s'", path);
+                case ClCDS_Inp: {
+                    char const* path = cl_cmd->d.set.d.inp.path_dyn;
+                    ioctx_set(&ctx->inp, path);
+                    msg_to_show =
+                        str_new("inp set to '%s'", ioctx_as_str(&ctx->inp));
                 } break;
-                case ClCDS_FOut: {
-                    char const* path = cl_cmd->d.set.d.fout.path_dyn;
-                    file_ctx_set(&ctx->fout, path);
-                    msg_to_show = str_new("fout set to '%s'", path);
+                case ClCDS_Out: {
+                    char const* path = cl_cmd->d.set.d.out.path_dyn;
+                    ioctx_set(&ctx->out, path);
+                    msg_to_show =
+                        str_new("out set to '%s'", ioctx_as_str(&ctx->out));
                 } break;
                 case ClCDS_PngCompression: {
                     ctx->input.png_compression_level =
@@ -1153,30 +1231,42 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             bit_status |= ClCPrc_Exit;
         } break;
         case ClC_Save: {
-            char const* path =
-                COALESCE(cl_cmd->d.save.path_dyn, ctx->fout.path_dyn);
-            msg_to_show = str_new(
-                save_file(
-                    &ctx->dc,
-                    &ctx->input,
-                    cl_save_type_to_image_type(cl_cmd->d.save.im_type),
-                    path
-                )
-                    ? "image saved to '%s'"
-                    : "failed save image to '%s'",
-                path
-            );
+            if (!cl_cmd->d.save.path_dyn && ctx->out.t == IO_None) {
+                msg_to_show = str_new("can't save: no path provided");
+            } else {
+                struct IOCtx const ioctx = cl_cmd->d.save.path_dyn
+                    ? ioctx_new(cl_cmd->d.save.path_dyn)
+                    : ctx->out;
+                msg_to_show = str_new(
+                    write_io(
+                        &ctx->dc,
+                        &ctx->input,
+                        cl_save_type_to_image_type(cl_cmd->d.save.im_type),
+                        &ioctx
+                    )
+                        ? "image saved to '%s'"
+                        : "failed save image to '%s'",
+                    ioctx_as_str(&ioctx)
+                );
+            }
         } break;
         case ClC_Load: {
-            char const* path =
-                COALESCE(cl_cmd->d.load.path_dyn, ctx->finp.path_dyn);
-            XImage* loaded_image = read_file_from_path(&ctx->dc, path, 0);
-            if (loaded_image) {
-                history_forward(ctx);
-                canvas_load(&ctx->dc, loaded_image, path);
-                msg_to_show = str_new("image_loaded from '%s'", path);
+            struct IOCtx const ioctx = cl_cmd->d.load.path_dyn
+                ? ioctx_new(cl_cmd->d.load.path_dyn)
+                : ctx->inp;
+            struct Image im = read_image_io(&ctx->dc, &ioctx, 0);
+
+            struct History to_push = history_new(ctx);
+            if (canvas_load(&ctx->dc, &im)) {
+                history_forward(ctx, &to_push);
+                msg_to_show =
+                    str_new("image_loaded from '%s'", ioctx_as_str(&ioctx));
             } else {
-                msg_to_show = str_new("failed load image from '%s'", path);
+                history_free(&to_push);
+                msg_to_show = str_new(
+                    "failed load image from '%s'",
+                    ioctx_as_str(&ioctx)
+                );
             }
         } break;
         case ClC_Last: assert(!"invalid enum value");
@@ -1245,21 +1335,21 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
                .d.ok.d.set.t = ClCDS_Font,
                .d.ok.d.set.d.font.name_dyn = str_new("%s", font)};
         }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FInp))) {
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
             char const* path = strtok(NULL, "");  // user can load NULL
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_FInp,
-               .d.ok.d.set.d.finp.path_dyn = path ? str_new("%s", path) : NULL};
+               .d.ok.d.set.t = ClCDS_Inp,
+               .d.ok.d.set.d.inp.path_dyn = path ? str_new("%s", path) : NULL};
         }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_FOut))) {
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Out))) {
             char const* path = strtok(NULL, "");  // user can load NULL
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_FOut,
-               .d.ok.d.set.d.fout.path_dyn = path ? str_new("%s", path) : NULL};
+               .d.ok.d.set.t = ClCDS_Out,
+               .d.ok.d.set.d.out.path_dyn = path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
             char const* compression = strtok(NULL, CL_DELIM);
@@ -1374,11 +1464,11 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
                         case ClCDS_Font:
                             free(cl_cmd->d.set.d.font.name_dyn);
                             break;
-                        case ClCDS_FInp:
-                            free(cl_cmd->d.set.d.finp.path_dyn);
+                        case ClCDS_Inp:
+                            free(cl_cmd->d.set.d.inp.path_dyn);
                             break;
-                        case ClCDS_FOut:
-                            free(cl_cmd->d.set.d.fout.path_dyn);
+                        case ClCDS_Out:
+                            free(cl_cmd->d.set.d.out.path_dyn);
                             break;
                         case ClCDS_LineW:
                         case ClCDS_Col:
@@ -1431,8 +1521,8 @@ char const* cl_cmd_from_enum(enum ClCTag t) {
 static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
     switch (t) {
         case ClCDS_Col: return "col";
-        case ClCDS_FInp: return "finp";
-        case ClCDS_FOut: return "fout";
+        case ClCDS_Inp: return "inp";
+        case ClCDS_Out: return "out";
         case ClCDS_Font: return "font";
         case ClCDS_LineW: return "line_w";
         case ClCDS_PngCompression: return "png_cmpr";
@@ -1882,6 +1972,10 @@ Bool tool_picker_on_release(
     return True;
 }
 
+struct History history_new(struct Ctx* ctx) {
+    return history_clone(&(struct History) {.im = ctx->dc.cv.im});
+}
+
 Bool history_move(struct Ctx* ctx, Bool forward) {
     struct History** hist_pop =
         forward ? &ctx->hist_nextarr : &ctx->hist_prevarr;
@@ -1893,22 +1987,18 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     }
 
     struct History curr = arrpop(*hist_pop);
-    history_push(hist_save, ctx);
+    arrpush(*hist_save, history_new(ctx));
 
     history_apply(ctx, &curr);
 
     return True;
 }
 
-void history_push(struct History** hist, struct Ctx* ctx) {
-    trace("xpaint: history push");
-    arrpush(*hist, history_clone(&(struct History) {.im = ctx->dc.cv.im}));
-}
-
-void history_forward(struct Ctx* ctx) {
+void history_forward(struct Ctx* ctx, struct History* hist_opt) {
+    trace("xpaint: history forward");
     // next history invalidated after user action
-    historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
-    history_push(&ctx->hist_prevarr, ctx);
+    historyarr_clear(&ctx->hist_nextarr);
+    arrpush(ctx->hist_prevarr, hist_opt ? *hist_opt : history_new(ctx));
 }
 
 void history_apply(struct Ctx* ctx, struct History* hist) {
@@ -1923,10 +2013,13 @@ struct History history_clone(struct History const* hist) {
     return result;
 }
 
-void historyarr_clear(Display* dp, struct History** histarr) {
+void history_free(struct History* hist) {
+    XDestroyImage(hist->im);
+}
+
+void historyarr_clear(struct History** histarr) {
     for (u32 i = 0; i < arrlenu(*histarr); ++i) {
-        struct History* h = &(*histarr)[i];
-        XDestroyImage(h->im);
+        history_free(&(*histarr)[i]);
     }
     arrfree(*histarr);
 }
@@ -2264,14 +2357,20 @@ void canvas_fill(XImage* im, argb col) {
     }
 }
 
-static void canvas_load(struct DrawCtx* dc, XImage* im, char const* file_path) {
-    assert(im);
-    canvas_free(dc->dp, &dc->cv);
-    dc->cv.im = im;
-    dc->cv.type = file_type(file_path);
+static Bool canvas_load(struct DrawCtx* dc, struct Image const* image) {
+    if (!image->im) {
+        return False;
+    }
+    canvas_free(&dc->cv);
+    dc->cv.im = image->im;
+    dc->cv.type = image->type;
+    dc->cv.overlay =
+        XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
+    overlay_clear(dc->cv.overlay);
+    return True;
 }
 
-void canvas_free(Display* dp, struct Canvas* cv) {
+void canvas_free(struct Canvas* cv) {
     if (cv->im) {
         XDestroyImage(cv->im);
         cv->im = NULL;
@@ -2972,6 +3071,7 @@ void dc_cache_init(struct DrawCtx* dc) {
 }
 
 void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im) {
+    assert(im);
     XPutImage(
         dc->dp,
         pm,
@@ -3020,6 +3120,8 @@ struct Ctx ctx_init(Display* dp) {
                 .png_compression_level = PNG_DEFAULT_COMPRESSION,
                 .jpg_quality_level = JPG_DEFAULT_QUALITY,
             },
+        .inp = (struct IOCtx) {.t = IO_None},
+        .out = (struct IOCtx) {.t = IO_None},
         .sel_buf.im = NULL,
         .tcarr = NULL,
         .curr_tc = 0,
@@ -3161,12 +3263,13 @@ void setup(Display* dp, struct Ctx* ctx) {
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
             struct IconData icon = get_icon_data(i);
-            images[i] = read_file_from_memory(
+            struct Image im = read_file_from_memory(
                 &ctx->dc,
                 icon.data,
                 icon.len,
                 COL_BG(&ctx->dc, SchmNorm)
             );
+            images[i] = im.im;
         }
     }
 
@@ -3185,12 +3288,10 @@ void setup(Display* dp, struct Ctx* ctx) {
             &canvas_gc_vals
         );
         // read canvas data from file or create empty
-        if (ctx->finp.path_dyn) {
-            XImage* im = read_file_from_path(&ctx->dc, ctx->finp.path_dyn, 0);
-            if (im) {
-                canvas_load(&ctx->dc, im, ctx->finp.path_dyn);
-            } else {
-                die("failed to read input file '%s'", ctx->finp.path_dyn);
+        if (ctx->inp.t != IO_None) {
+            struct Image im = read_image_io(&ctx->dc, &ctx->inp, 0);
+            if (!canvas_load(&ctx->dc, &im)) {
+                die("failed to read input file '%s'", ioctx_as_str(&ctx->inp));
             }
         } else {
             Pixmap data = XCreatePixmap(
@@ -3284,7 +3385,7 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
     // XXX hacky
     if (btn_eq(get_btn(e), BTN_MAIN)) {
-        history_forward(ctx);
+        history_forward(ctx, NULL);
     }
 
     if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
@@ -3625,12 +3726,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
-        if (save_file(
-                &ctx->dc,
-                &ctx->input,
-                ctx->dc.cv.type,
-                ctx->fout.path_dyn
-            )) {
+        if (write_io(&ctx->dc, &ctx->input, ctx->dc.cv.type, &ctx->out)) {
             trace("xpaint: file saved");
         } else {
             trace("xpaint: failed to save image");
@@ -3870,8 +3966,8 @@ void cleanup(struct Ctx* ctx) {
         }
     }
     /* file paths */ {
-        file_ctx_free(&ctx->fout);
-        file_ctx_free(&ctx->finp);
+        ioctx_free(&ctx->out);
+        ioctx_free(&ctx->inp);
     }
     /* SelectionBuffer */ {
         if (ctx->sel_buf.im != NULL) {
@@ -3879,8 +3975,8 @@ void cleanup(struct Ctx* ctx) {
         }
     }
     /* History */ {
-        historyarr_clear(ctx->dc.dp, &ctx->hist_nextarr);
-        historyarr_clear(ctx->dc.dp, &ctx->hist_prevarr);
+        historyarr_clear(&ctx->hist_nextarr);
+        historyarr_clear(&ctx->hist_prevarr);
     }
     /* ToolCtx */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
@@ -3910,7 +4006,7 @@ void cleanup(struct Ctx* ctx) {
             free(ctx->dc.schemes_dyn);
         }
         fnt_free(ctx->dc.dp, &ctx->dc.fnt);
-        canvas_free(ctx->dc.dp, &ctx->dc.cv);
+        canvas_free(&ctx->dc.cv);
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
         XFreeGC(ctx->dc.dp, ctx->dc.gc);
         XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);

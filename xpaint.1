@@ -20,6 +20,8 @@ Path to local file to be modified.
 and
 .B load
 commands will refer to it.
+Use "-" as path to read file from stdin and save to stdout.
+Can be overwritten with \fI--input\fP and \fI--output\fP options.
 
 .SH OPTIONS
 .TP
@@ -73,8 +75,8 @@ Avaliable properties:
 line_w (tools line width),
 col (tool context current color),
 font (interface font, xft name),
-finp (input file),
-fout (output file),
+inp (input file, pass "-" for stdin),
+out (output file, pass "-" for stdout),
 png_cmpr (PNG save file compression level),
 jpg_qlty (JPG save file quality level),
 spacing (brush spacing).
@@ -83,10 +85,10 @@ spacing (brush spacing).
 Exit program. No progress is saved.
 .TP
 .B save \fITYPE\fP [\fIFILE\fP]
-Save canvas contents to file as png or jpg (\fITYPE\fP). fout will be used if \fIFILE\fP not specified.
+Save canvas contents to file as png or jpg (\fITYPE\fP). \fIout\fP will be used if \fIFILE\fP not specified.
 .TP
 .B load [\fIFILE\fP]
-Load png file to canvas. finp will be used if not specified.
+Load png file to canvas. \fIinp\fP will be used if not specified.
 
 .SS TOOL CONTEXT
 
