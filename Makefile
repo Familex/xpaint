@@ -35,25 +35,29 @@ xpaint-d: $(DEPS) ## build debug application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) -g
 
 clean: ## remove generated files
-	@rm -f xpaint xpaint-d
+	@rm -f ./xpaint ./xpaint-d
 
 install: xpaint ## install application
 	@mkdir -p $(PREFIX)/bin
-	cp -f xpaint $(PREFIX)/bin
+	cp -f ./xpaint $(PREFIX)/bin
 	@chmod 755 $(PREFIX)/bin/xpaint
 	@mkdir -p $(MANPREFIX)/man1
-	sed "s/VERSION/$(VERSION)/g" < xpaint.1 > $(MANPREFIX)/man1/xpaint.1
+	sed "s/VERSION/$(VERSION)/g" < ./xpaint.1 > $(MANPREFIX)/man1/xpaint.1
 	@chmod 644 $(MANPREFIX)/man1/xpaint.1
+	@mkdir -p $(PREFIX)/share
+	cp -r --update=all ./share/* $(PREFIX)/share
 
 uninstall: ## uninstall application
 	rm -f $(PREFIX)/bin/xpaint
 	rm -f $(MANPREFIX)/man1/xpaint.1
+	rm -f $(PREFIX)/share/applications/xpaint.desktop
+	rm -f $(PREFIX)/share/icons/hicolor/scalable/apps/xpaint.svg
 
 check: ## check code with clang-tidy
 	$(CLANGTIDY) $(SRC)
 
 dev: clean ## generate dev files
-	bear -- $(MAKE) xpaint-d
+	bear -- $(MAKE) ./xpaint-d
 
 .PHONY: all help run clean install uninstall check dev
 
