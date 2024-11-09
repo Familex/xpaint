@@ -97,6 +97,8 @@ enum {
     A_Targets,
     A_Utf8string,
     A_ImagePng,
+    A_WmProtocols,
+    A_WmDeleteWindow,
     A_Last,
 };
 
@@ -138,6 +140,11 @@ typedef u8 (*circle_get_alpha_fn)(
     double circle_radius,
     Pair p  // point relative circle center
 );
+
+typedef enum {
+    HR_Quit,
+    HR_Ok,
+} HdlrResult;
 
 struct Ctx {
     struct DrawCtx {
@@ -524,17 +531,17 @@ static void dc_cache_free(struct DrawCtx* dc);
 static struct Ctx ctx_init(Display* dp);
 static void setup(Display* dp, struct Ctx* ctx);
 static void run(struct Ctx* ctx);
-static Bool button_press_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool button_release_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool destroy_notify_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool expose_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool key_press_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event);
-static Bool client_message_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult destroy_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult expose_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult mapping_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event);
+static HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event);
 static void cleanup(struct Ctx* ctx);
 // clang-format on
 
@@ -3153,6 +3160,8 @@ void setup(Display* dp, struct Ctx* ctx) {
         atoms[A_Targets] = XInternAtom(dp, "TARGETS", False);
         atoms[A_Utf8string] = XInternAtom(dp, "UTF8_STRING", False);
         atoms[A_ImagePng] = XInternAtom(dp, "image/png", False);
+        atoms[A_WmProtocols] = XInternAtom(dp, "WM_PROTOCOLS", False);
+        atoms[A_WmDeleteWindow] = XInternAtom(dp, "WM_DELETE_WINDOW", False);
     }
 
     /* xrender */ {
@@ -3351,7 +3360,7 @@ void setup(Display* dp, struct Ctx* ctx) {
 }
 
 void run(struct Ctx* ctx) {
-    static Bool (*const handlers[LASTEvent])(struct Ctx*, XEvent*) = {
+    static HdlrResult (*const handlers[LASTEvent])(struct Ctx*, XEvent*) = {
         [KeyPress] = &key_press_hdlr,
         [ButtonPress] = &button_press_hdlr,
         [ButtonRelease] = &button_release_hdlr,
@@ -3379,7 +3388,7 @@ void run(struct Ctx* ctx) {
     }
 }
 
-Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
 
@@ -3400,10 +3409,10 @@ Bool button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     ctx->input.holding_button = get_btn(e);
     ctx->input.is_holding = True;
 
-    return True;
+    return HR_Ok;
 }
 
-Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
     Button e_btn = get_btn(e);
@@ -3442,16 +3451,16 @@ Bool button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     ctx->input.is_holding = False;
     ctx->input.is_dragging = False;
 
-    return True;
+    return HR_Ok;
 }
 
-Bool destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
-    return True;
+HdlrResult destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+    return HR_Ok;
 }
 
-Bool expose_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult expose_hdlr(struct Ctx* ctx, XEvent* event) {
     update_screen(ctx);
-    return True;
+    return HR_Ok;
 }
 
 static void to_next_input_digit(struct Input* input, Bool is_increment) {
@@ -3466,11 +3475,11 @@ static void to_next_input_digit(struct Input* input, Bool is_increment) {
     }
 }
 
-Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     struct Input const* inp = &ctx->input;
     XKeyPressedEvent e = event->xkey;
     if (e.type == KeyRelease) {
-        return True;
+        return HR_Ok;
     }
 
     Status lookup_status;
@@ -3604,7 +3613,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
             cl_cmd_parse_res_free(&res);
             if (is_exit) {
-                return False;
+                return HR_Quit;
             }
         } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_valid) {
             cl_compls_new(cl);
@@ -3704,7 +3713,7 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_EXIT)) {
-        return False;
+        return HR_Quit;
     }
     if (can_action(inp, curr, ACT_NEXT_COLOR)) {
         u32 const curr_col = CURR_TC(ctx).curr_col;
@@ -3733,15 +3742,15 @@ Bool key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
 
-    return True;
+    return HR_Ok;
 }
 
-Bool mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XRefreshKeyboardMapping(&event->xmapping);
-    return True;
+    return HR_Ok;
 }
 
-Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
 
@@ -3791,16 +3800,16 @@ Bool motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     ctx->input.prev_c.x = e->x;
     ctx->input.prev_c.y = e->y;
 
-    return True;
+    return HR_Ok;
 }
 
-Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     struct DrawCtx* dc = &ctx->dc;
 
     if (dc->width == event->xconfigure.width
         && dc->height == event->xconfigure.height) {
         // configure notify calls on move events too
-        return True;
+        return HR_Ok;
     }
 
     dc->width = event->xconfigure.width;
@@ -3820,16 +3829,16 @@ Bool configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     // not required, but reduces flickering
     update_screen(ctx);
 
-    return True;
+    return HR_Ok;
 }
 
-Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     XSelectionRequestEvent request = event->xselectionrequest;
 
     if (XGetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard]) != ctx->dc.window
         || request.selection != atoms[A_Clipboard]
         || request.property == None) {
-        return True;
+        return HR_Ok;
     }
 
     if (request.target == atoms[A_Targets]) {
@@ -3890,10 +3899,10 @@ Bool selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     };
     XSendEvent(ctx->dc.dp, request.requestor, 0, 0, (XEvent*)&sendEvent);
 
-    return True;
+    return HR_Ok;
 }
 
-Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     static Atom target = None;
     trace("selection notify handler");
 
@@ -3949,12 +3958,21 @@ Bool selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             XFree(data_xdyn);
         }
     }
-    return True;
+
+    return HR_Ok;
 }
 
-Bool client_message_hdlr(struct Ctx* ctx, XEvent* event) {
-    // close window on request
-    return False;
+HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
+    XClientMessageEvent* e = (XClientMessageEvent*)event;
+    if (e->message_type != atoms[A_WmProtocols]) {
+        return HR_Ok;
+    }
+
+    if (e->data.l[0] == atoms[A_WmDeleteWindow]) {
+        return HR_Quit;
+    }
+
+    return HR_Ok;
 }
 
 void cleanup(struct Ctx* ctx) {
