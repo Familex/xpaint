@@ -166,7 +166,6 @@ struct Ctx {
         XdbeBackBuffer back_buffer;  // double buffering
         struct Canvas {
             XImage* im;
-            XImage* overlay;  // drawn on top of canvas
             enum ImageType type;
             i32 zoom;  // 0 == no zoom
             Pair scroll;
@@ -202,6 +201,11 @@ struct Ctx {
         i32 png_compression_level;  // FIXME find better place
         i32 jpg_quality_level;  // FIXME find better place
 
+        // drawn on top of canvas
+        // clears before *on_press callbacks
+        // dumps to main canvas after *on_release callbacks
+        XImage* overlay;
+
         enum InputTag {
             InputT_Interact,
             InputT_Color,
@@ -226,7 +230,6 @@ struct Ctx {
         Bool (*on_release)(struct Ctx*, XButtonReleasedEvent const*);
         Bool (*on_drag)(struct Ctx*, XMotionEvent const*);
         Bool (*on_move)(struct Ctx*, XMotionEvent const*);
-        Bool use_overlay;
 
         argb* colarr;
         u32 curr_col;
@@ -409,6 +412,7 @@ static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
+static usize ximage_data_len(XImage const* im);
 
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
@@ -463,6 +467,7 @@ static void cl_push(struct InputConsoleData* cl, char c);
 static void cl_pop(struct InputConsoleData* cl);
 
 static void input_state_set(struct Input* input, enum InputTag is);
+static void input_free(struct Input* input);
 
 static void sel_circ_show(struct Ctx* ctx, i32 x, i32 y);
 static void sel_circ_hide(struct SelectionCircle* sel_circ);
@@ -491,7 +496,7 @@ static void historyarr_clear(struct History** hist);
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static void ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static void canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
-static void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2);
+static void canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2);
 // line from `a` to `b` is a polygon height (a is a base);
 static void canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b);
 static void canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c);
@@ -499,7 +504,7 @@ static u32 canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, P
 static void canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static void canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
 static void canvas_fill(XImage* im, argb col);
-static Bool canvas_load(struct DrawCtx* dc, struct Image const* image);
+static Bool canvas_load(struct Ctx* ctx, struct Image const* image);
 static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
@@ -770,6 +775,11 @@ static Bool can_action(struct Input const* input, Key curr_key, Action act) {
     UNREACHABLE();
 }
 
+usize ximage_data_len(XImage const* im) {
+    // FIXME is it correct?
+    return (usize)im->width * im->height * (im->depth / 8);
+}
+
 char* str_new(char const* fmt, ...) {
     va_list ap1;
     va_start(ap1, fmt);
@@ -848,7 +858,6 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             tc->on_release = &tool_figure_on_release;
             tc->on_drag = &tool_figure_on_drag;
             tc->d.fig = (struct FigureData) {0};
-            tc->use_overlay = True;
             break;
     }
 }
@@ -1264,7 +1273,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             struct Image im = read_image_io(&ctx->dc, &ioctx, 0);
 
             struct History to_push = history_new(ctx);
-            if (canvas_load(&ctx->dc, &im)) {
+            if (canvas_load(ctx, &im)) {
                 history_forward(ctx, &to_push);
                 msg_to_show =
                     str_new("image_loaded from '%s'", ioctx_as_str(&ioctx));
@@ -1692,6 +1701,16 @@ void input_state_set(struct Input* input, enum InputTag const is) {
     }
 }
 
+void input_free(struct Input* input) {
+    if (input->t == InputT_Console) {
+        cl_free(&input->d.cl);
+    }
+    if (input->overlay) {
+        XDestroyImage(input->overlay);
+        input->overlay = NULL;
+    }
+}
+
 // clang-format off
 static void sel_circ_set_tool_selection(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Selection); }
 static void sel_circ_set_tool_pencil(struct Ctx* ctx) { tc_set_tool(&CURR_TC(ctx), Tool_Pencil); }
@@ -1880,7 +1899,7 @@ Bool tool_drawer_on_release(
     struct DrawerData* drawer = &tc->d.drawer;
 
     Pair end = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    XImage* const im = dc->cv.im;
+    XImage* const im = ctx->input.overlay;
     Pair const start =
         state_match(event->state, ShiftMask) ? ctx->input.anchor : end;
 
@@ -1902,11 +1921,12 @@ Bool tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     struct DrawerData const* drawer = &tc->d.drawer;
+    XImage* const im = ctx->input.overlay;
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair const anchor = ctx->input.anchor;
 
-    if (canvas_line(dc->cv.im, tc, drawer->shape, anchor, pointer, False)) {
+    if (canvas_line(im, tc, drawer->shape, anchor, pointer, False)) {
         ctx->input.anchor = pointer;
     }
 
@@ -1926,8 +1946,7 @@ Bool tool_figure_on_release(
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, True, pointer, ctx->input.anchor);
-    overlay_dump(ctx, ctx->dc.cv.overlay);
+    canvas_figure(ctx, ctx->input.overlay, pointer, ctx->input.anchor);
 
     return True;
 }
@@ -1937,10 +1956,12 @@ Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         return False;
     }
 
+    overlay_clear(ctx->input.overlay);
+
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    canvas_figure(ctx, True, pointer, ctx->input.anchor);
+    canvas_figure(ctx, ctx->input.overlay, pointer, ctx->input.anchor);
 
     return True;
 }
@@ -1952,9 +1973,15 @@ Bool tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
+    struct Input* inp = &ctx->input;
 
-    Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    ximage_flood_fill(dc->cv.im, *tc_curr_col(tc), pointer.x, pointer.y);
+    // copy whole canvas to overlay (flood_fill must know surround pixels)
+    usize data_len = ximage_data_len(dc->cv.im);
+    // XXX is XImage::data public member?
+    memcpy(inp->overlay->data, dc->cv.im->data, data_len);
+
+    Pair const cur = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    ximage_flood_fill(inp->overlay, *tc_curr_col(tc), cur.x, cur.y);
 
     return True;
 }
@@ -1966,16 +1993,17 @@ Bool tool_picker_on_release(
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    XImage* im = dc->cv.im;  // overlay always empty, grab from canvas
 
     if (!point_in_rect(
             pointer,
             (Pair) {0, 0},
-            (Pair) {(i32)dc->cv.im->width, (i32)dc->cv.im->height}
+            (Pair) {(i32)im->width, (i32)im->height}
         )) {
         return False;
     }
 
-    *tc_curr_col(tc) = XGetPixel(dc->cv.im, pointer.x, pointer.y);
+    *tc_curr_col(tc) = XGetPixel(im, pointer.x, pointer.y);
     return True;
 }
 
@@ -2119,7 +2147,7 @@ get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
     return (Pair) {-1, -1};  // will not fill anything
 }
 
-void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
+void canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2) {
     if (p1.x == NIL || p1.y == NIL || p2.x == NIL || p2.y == NIL) {
         return;
     }
@@ -2128,7 +2156,6 @@ void canvas_figure(struct Ctx* ctx, Bool to_overlay, Pair p1, Pair p2) {
         return;
     }
     struct FigureData const* fig = &tc->d.fig;
-    XImage* im = to_overlay ? ctx->dc.cv.overlay : ctx->dc.cv.im;
     argb const col = *tc_curr_col(tc);
     i32 const dx = p1.x - p2.x;
     i32 const dy = p1.y - p2.y;
@@ -2364,16 +2391,18 @@ void canvas_fill(XImage* im, argb col) {
     }
 }
 
-static Bool canvas_load(struct DrawCtx* dc, struct Image const* image) {
+static Bool canvas_load(struct Ctx* ctx, struct Image const* image) {
     if (!image->im) {
         return False;
     }
+    struct DrawCtx* dc = &ctx->dc;
+
     canvas_free(&dc->cv);
     dc->cv.im = image->im;
     dc->cv.type = image->type;
-    dc->cv.overlay =
+    ctx->input.overlay =
         XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
-    overlay_clear(dc->cv.overlay);
+    overlay_clear(ctx->input.overlay);
     return True;
 }
 
@@ -2381,10 +2410,6 @@ void canvas_free(struct Canvas* cv) {
     if (cv->im) {
         XDestroyImage(cv->im);
         cv->im = NULL;
-    }
-    if (cv->overlay) {
-        XDestroyImage(cv->overlay);
-        cv->overlay = NULL;
     }
 }
 
@@ -2411,8 +2436,9 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     u32 const old_height = dc->cv.im->height;
 
     // resize overlay too
-    XImage* old_overlay = dc->cv.overlay;
-    dc->cv.overlay = XSubImage(dc->cv.overlay, 0, 0, new_width, new_height);
+    XImage* old_overlay = ctx->input.overlay;
+    ctx->input.overlay =
+        XSubImage(ctx->input.overlay, 0, 0, new_width, new_height);
     XDestroyImage(old_overlay);
 
     // FIXME can fill color be changed?
@@ -2440,7 +2466,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
 }
 
 void overlay_clear(XImage* im) {
-    u32 const data_size = im->width * im->height * (im->depth / 8);
+    u32 const data_size = ximage_data_len(im);
     // XXX is data a public member?
     memset(im->data, 0x0, data_size);
 }
@@ -2455,7 +2481,11 @@ void overlay_dump(struct Ctx* ctx, XImage* overlay) {
             argb ovr = XGetPixel(overlay, x, y);
             if (ovr & ARGB_ALPHA) {
                 argb bg = XGetPixel(cv, x, y);
-                XPutPixel(cv, x, y, argb_blend(ovr, bg, 0xFF));
+                // use overlay opacity as third argument. Looks HACK'y
+                // same in apply_drawer func
+                argb result =
+                    argb_blend(ovr | ARGB_ALPHA, bg, (ovr >> 0x18) & 0xFF);
+                XPutPixel(cv, x, y, result);
             }
         }
     }
@@ -2746,7 +2776,7 @@ void update_screen(struct Ctx* ctx) {
             }
 
             dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im);
-            dc_cache_update_pm(dc, dc->cache.overlay, dc->cv.overlay);
+            dc_cache_update_pm(dc, dc->cache.overlay, ctx->input.overlay);
 
             Picture cv_pict = XRenderCreatePicture(
                 dc->dp,
@@ -3299,7 +3329,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         // read canvas data from file or create empty
         if (ctx->inp.t != IO_None) {
             struct Image im = read_image_io(&ctx->dc, &ctx->inp, 0);
-            if (!canvas_load(&ctx->dc, &im)) {
+            if (!canvas_load(ctx, &im)) {
                 die("failed to read input file '%s'", ioctx_as_str(&ctx->inp));
             }
         } else {
@@ -3325,14 +3355,14 @@ void setup(Display* dp, struct Ctx* ctx) {
             canvas_fill(ctx->dc.cv.im, CANVAS_BACKGROUND);
         }
         /* overlay */ {
-            ctx->dc.cv.overlay = XSubImage(
+            ctx->input.overlay = XSubImage(
                 ctx->dc.cv.im,
                 0,
                 0,
                 ctx->dc.cv.im->width,
                 ctx->dc.cv.im->height
             );
-            overlay_clear(ctx->dc.cv.overlay);
+            overlay_clear(ctx->input.overlay);
         }
 
         ctx->dc.width = CLAMP(
@@ -3437,13 +3467,9 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (btn_eq(e_btn, BTN_ZOOM_OUT)) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
     } else if (tc->on_release) {
-        if (tc->use_overlay) {
-            overlay_clear(ctx->dc.cv.overlay);
-        }
         tc->on_release(ctx, e);
-        if (tc->use_overlay) {
-            overlay_clear(ctx->dc.cv.overlay);
-        }
+        overlay_dump(ctx, ctx->input.overlay);
+        overlay_clear(ctx->input.overlay);
     }
 
     update_screen(ctx);
@@ -3778,10 +3804,6 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             }
         } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
-            if (!ctx->sc.is_active && tc->use_overlay) {
-                // overlay_clear is CPU intensive
-                overlay_clear(ctx->dc.cv.overlay);
-            }
             if (tc->on_drag && tc->on_drag(ctx, e)) {
                 ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
                 update_screen(ctx);
@@ -4002,11 +4024,7 @@ void cleanup(struct Ctx* ctx) {
         }
         arrfree(ctx->tcarr);
     }
-    /* Input */ {
-        if (ctx->input.t == InputT_Console) {
-            cl_free(&ctx->input.d.cl);
-        }
-    }
+    /* Input */ { input_free(&ctx->input); }
     /* DrawCtx */ {
         dc_cache_free(&ctx->dc);
         /* Scheme */ {  // depends on VisualInfo and Colormap
