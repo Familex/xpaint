@@ -1946,6 +1946,7 @@ Bool tool_figure_on_release(
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    overlay_clear(ctx->input.overlay);
     canvas_figure(ctx, ctx->input.overlay, pointer, ctx->input.anchor);
 
     return True;
@@ -1956,11 +1957,10 @@ Bool tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         return False;
     }
 
-    overlay_clear(ctx->input.overlay);
-
     struct DrawCtx* dc = &ctx->dc;
 
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    overlay_clear(ctx->input.overlay);
     canvas_figure(ctx, ctx->input.overlay, pointer, ctx->input.anchor);
 
     return True;
