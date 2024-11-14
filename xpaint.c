@@ -1127,17 +1127,29 @@ read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
     return (struct Image) {0};
 }
 
-static void ioctx_write(void* context, void* data, i32 size) {
-    struct IOCtx const* ioctx = (struct IOCtx const*)context;
-    switch (ioctx->t) {
+struct IOCtxWriteCtx {
+    struct IOCtx const* ioctx;
+    Bool result_out;
+};
+
+static void ioctx_write(void* pctx, void* data, i32 size) {
+    struct IOCtxWriteCtx* ctx = (struct IOCtxWriteCtx*)pctx;
+    ctx->result_out = False;
+
+    switch (ctx->ioctx->t) {
         case IO_None: break;
         case IO_File: {
-            FILE* fd = fopen(ioctx->d.file.path_dyn, "w");
+            FILE* fd = fopen(ctx->ioctx->d.file.path_dyn, "w");
+            if (!fd) {
+                return;
+            }
             fwrite(data, sizeof(char), size, fd);
             fclose(fd);
         } break;
         case IO_Stdio: fwrite(data, sizeof(char), size, stdout); break;
     }
+
+    ctx->result_out = True;
 }
 
 Bool write_io(
@@ -1157,27 +1169,31 @@ Bool write_io(
     switch (type) {
         case IMT_Png: {
             stbi_write_png_compression_level = input->png_compression_level;
+            struct IOCtxWriteCtx ioctx_write_ctx = {.ioctx = ioctx};
             result = stbi_write_png_to_func(
                 &ioctx_write,
-                (void*)ioctx,
+                (void*)&ioctx_write_ctx,
                 w,
                 h,
                 4,
                 rgba_dyn,
                 0
             );
+            result &= ioctx_write_ctx.result_out;
         } break;
         case IMT_Jpg: {
             i32 quality = input->jpg_quality_level;
+            struct IOCtxWriteCtx ioctx_write_ctx = {.ioctx = ioctx};
             result = stbi_write_jpg_to_func(
                 &ioctx_write,
-                (void*)ioctx,
+                (void*)&ioctx_write_ctx,
                 w,
                 h,
                 4,
                 rgba_dyn,
                 quality
             );
+            result &= ioctx_write_ctx.result_out;
         } break;
         case IMT_Unknown: UNREACHABLE();
     }
