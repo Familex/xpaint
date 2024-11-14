@@ -1132,14 +1132,14 @@ struct IOCtxWriteCtx {
     Bool result_out;
 };
 
-static void ioctx_write(void* pctx, void* data, i32 size) {
+static void ioctx_write_part(void* pctx, void* data, i32 size) {
     struct IOCtxWriteCtx* ctx = (struct IOCtxWriteCtx*)pctx;
     ctx->result_out = False;
 
     switch (ctx->ioctx->t) {
         case IO_None: break;
         case IO_File: {
-            FILE* fd = fopen(ctx->ioctx->d.file.path_dyn, "w");
+            FILE* fd = fopen(ctx->ioctx->d.file.path_dyn, "a");
             if (!fd) {
                 return;
             }
@@ -1166,12 +1166,21 @@ Bool write_io(
     i32 w = dc->cv.im->width;
     i32 h = dc->cv.im->height;
     u8* rgba_dyn = ximage_to_rgb(dc->cv.im, True);
+    if (!rgba_dyn) {
+        return False;
+    }
+
+    // FIXME ask before delete/override?
+    if (ioctx->t == IO_File) {
+        remove(ioctx->d.file.path_dyn);
+    }
+
     switch (type) {
         case IMT_Png: {
             stbi_write_png_compression_level = input->png_compression_level;
             struct IOCtxWriteCtx ioctx_write_ctx = {.ioctx = ioctx};
             result = stbi_write_png_to_func(
-                &ioctx_write,
+                &ioctx_write_part,
                 (void*)&ioctx_write_ctx,
                 w,
                 h,
@@ -1185,7 +1194,7 @@ Bool write_io(
             i32 quality = input->jpg_quality_level;
             struct IOCtxWriteCtx ioctx_write_ctx = {.ioctx = ioctx};
             result = stbi_write_jpg_to_func(
-                &ioctx_write,
+                &ioctx_write_part,
                 (void*)&ioctx_write_ctx,
                 w,
                 h,
