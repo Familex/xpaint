@@ -11,6 +11,12 @@
 // default value for signed integers
 #define NIL     (-1)
 #define PNIL    ((Pair) {NIL, NIL})
+#define RNIL \
+    ((Rect) {.l = INT32_MAX, .t = INT32_MAX, .r = INT32_MIN, .b = INT32_MIN})
+
+#define IS_RNIL(p_rect) \
+    ((p_rect.l) == INT32_MAX && (p_rect.t) == INT32_MAX \
+     && (p_rect.r) == INT32_MIN && (p_rect.b) == INT32_MIN)
 
 typedef int8_t i8;
 typedef uint8_t u8;
@@ -28,6 +34,13 @@ typedef struct {
     i32 x;
     i32 y;
 } Pair;
+
+typedef struct {
+    i32 l;
+    i32 t;
+    i32 r;
+    i32 b;
+} Rect;
 
 typedef struct {
     double x;
