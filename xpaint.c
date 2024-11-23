@@ -274,8 +274,9 @@ struct Ctx {
     }* tcarr;
     u32 curr_tc;
 
-    struct History {
-        XImage* im;
+    struct HistItem {
+        Pair pivot;  // top left corner position
+        XImage* patch;  // changed canvas part
     } *hist_prevarr, *hist_nextarr;
 
     struct SelectionCircle {
@@ -489,13 +490,12 @@ static Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 
-static struct History history_new(struct Ctx* ctx);
+static struct HistItem history_new_item(XImage* im, Rect rect);
 static Bool history_move(struct Ctx* ctx, Bool forward);
-static void history_forward(struct Ctx* ctx, struct History* hist_opt);
-static void history_apply(struct Ctx* ctx, struct History* hist);
-static struct History history_clone(struct History const* hist);
-static void history_free(struct History* hist);
-static void historyarr_clear(struct History** hist);
+static void history_forward(struct Ctx* ctx, struct HistItem hist_opt);
+static void history_apply(struct Ctx* ctx, struct HistItem* hist);
+static void history_free(struct HistItem* hist);
+static void historyarr_clear(struct HistItem** hist);
 
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
@@ -1310,9 +1310,12 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 : ctx->inp;
             struct Image im = read_image_io(&ctx->dc, &ioctx, 0);
 
-            struct History to_push = history_new(ctx);
+            XImage* old_cv = ctx->dc.cv.im;
+            Rect old_cv_rect = (Rect) {0, 0, old_cv->width, old_cv->height};
+            struct HistItem to_push = history_new_item(old_cv, old_cv_rect);
+
             if (canvas_load(ctx, &im)) {
-                history_forward(ctx, &to_push);
+                history_forward(ctx, to_push);
                 msg_to_show =
                     str_new("image_loaded from '%s'", ioctx_as_str(&ioctx));
             } else {
@@ -2062,52 +2065,66 @@ Rect tool_picker_on_release(
     return RNIL;
 }
 
-struct History history_new(struct Ctx* ctx) {
-    return history_clone(&(struct History) {.im = ctx->dc.cv.im});
+struct HistItem history_new_item(XImage* im, Rect rect) {
+    return (struct HistItem) {
+        .pivot = (Pair) {rect.l, rect.t},
+        .patch = XSubImage(
+            im,
+            rect.l,
+            rect.t,
+            // inclusive
+            rect.r - rect.l + 1,
+            rect.b - rect.t + 1
+        ),
+    };
 }
 
 Bool history_move(struct Ctx* ctx, Bool forward) {
-    struct History** hist_pop =
+    struct HistItem** hist_pop =
         forward ? &ctx->hist_nextarr : &ctx->hist_prevarr;
-    struct History** hist_save =
+    struct HistItem** hist_save =
         forward ? &ctx->hist_prevarr : &ctx->hist_nextarr;
 
     if (!arrlenu(*hist_pop)) {
         return False;
     }
 
-    struct History curr = arrpop(*hist_pop);
-    arrpush(*hist_save, history_new(ctx));
+    struct HistItem curr = arrpop(*hist_pop);
+    Rect curr_rect = (Rect
+    ) {curr.pivot.x,
+       curr.pivot.y,
+       curr.pivot.x + curr.patch->width,
+       curr.pivot.y + curr.patch->height};
 
+    arrpush(*hist_save, history_new_item(ctx->dc.cv.im, curr_rect));
     history_apply(ctx, &curr);
+    history_free(&curr);
 
     return True;
 }
 
-void history_forward(struct Ctx* ctx, struct History* hist_opt) {
+void history_forward(struct Ctx* ctx, struct HistItem hist_opt) {
     trace("xpaint: history forward");
     // next history invalidated after user action
     historyarr_clear(&ctx->hist_nextarr);
-    arrpush(ctx->hist_prevarr, hist_opt ? *hist_opt : history_new(ctx));
+    arrpush(ctx->hist_prevarr, hist_opt);
 }
 
-void history_apply(struct Ctx* ctx, struct History* hist) {
-    XDestroyImage(ctx->dc.cv.im);
-    ctx->dc.cv.im = hist->im;
+void history_apply(struct Ctx* ctx, struct HistItem* hist) {
+    canvas_copy_region(
+        ctx->dc.cv.im,
+        hist->patch,
+        (Pair) {0, 0},
+        (Pair) {hist->patch->width, hist->patch->height},
+        hist->pivot
+    );
 }
 
-struct History history_clone(struct History const* hist) {
-    struct History result;
-    result.im = XSubImage(hist->im, 0, 0, hist->im->width, hist->im->height);
-
-    return result;
+void history_free(struct HistItem* hist) {
+    XDestroyImage(hist->patch);
 }
 
-void history_free(struct History* hist) {
-    XDestroyImage(hist->im);
-}
-
-void historyarr_clear(struct History** histarr) {
+void historyarr_clear(struct HistItem** histarr) {
     for (u32 i = 0; i < arrlenu(*histarr); ++i) {
         history_free(&(*histarr)[i]);
     }
@@ -2183,8 +2200,9 @@ Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
     return (Rect) {
         MAX(0, c.x),
         MAX(0, c.y),
-        MIN(im->width - 1, c.x + dims.x),
-        MIN(im->height - 1, c.y + dims.y),
+        // Rect is inclusive
+        MIN(im->width - 1, c.x + dims.x - 1),
+        MIN(im->height - 1, c.y + dims.y - 1),
     };
 }
 
@@ -3503,11 +3521,6 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
 
-    // XXX hacky
-    if (btn_eq(get_btn(e), BTN_MAIN)) {
-        history_forward(ctx, NULL);
-    }
-
     if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
         sel_circ_show(ctx, e->x, e->y);
     } else if (tc->on_press) {
@@ -3549,10 +3562,12 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), ctx->input.damage);
-        // FIXME append to history here
+        if (!IS_RNIL(damage)) {
+            history_forward(ctx, history_new_item(ctx->dc.cv.im, damage));
+            overlay_dump(ctx, ctx->input.overlay);
+            overlay_clear(ctx->input.overlay);
+        }
 
-        overlay_dump(ctx, ctx->input.overlay);
-        overlay_clear(ctx->input.overlay);
         ctx->input.damage = RNIL;
     }
 
