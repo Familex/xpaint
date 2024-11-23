@@ -506,7 +506,7 @@ static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, P
 static Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c);
 static Rect canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to, Bool draw_first_pt);
 static Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
-static Rect canvas_copy_region(struct Ctx* ctx, Pair from, Pair dims, Pair to, Bool clear_source);
+static Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to);
 static void canvas_fill(XImage* im, argb col);
 static Bool canvas_load(struct Ctx* ctx, struct Image const* image);
 static void canvas_free(struct Canvas* cv);
@@ -1860,6 +1860,7 @@ Rect tool_selection_on_release(
     }
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
+    struct Input* inp = &ctx->input;
     assert(tc->t == Tool_Selection);
 
     if (SELECTION_DRAGGING(tc)) {  // finish drag selection
@@ -1877,10 +1878,20 @@ Rect tool_selection_on_release(
         Bool clear_source =
             !btn_eq(get_btn(event), BTN_COPY_SELECTION);  // move on BTN_MAIN
 
+        Rect damage = RNIL;
+
+        if (clear_source) {
+            argb bg_col = CANVAS_BACKGROUND;  // FIXME set in runtime?
+            Rect fill_dmg = canvas_fill_rect(inp->overlay, from, dims, bg_col);
+            damage = rect_expand(damage, fill_dmg);
+        }
+
+        Rect copy_damage =
+            canvas_copy_region(inp->overlay, dc->cv.im, from, dims, to);
+
         // unselect area
         sd->begin = sd->end = sd->drag_from = sd->drag_to = PNIL;
-
-        return canvas_copy_region(ctx, from, dims, to, clear_source);
+        return rect_expand(damage, copy_damage);
     }
 
     if (ctx->input.is_dragging) {  // select area
@@ -2414,35 +2425,27 @@ Rect canvas_circle(
 }
 
 Rect canvas_copy_region(
-    struct Ctx* ctx,
+    XImage* dest,
+    XImage* src,
     Pair from,
     Pair dims,
-    Pair to,
-    Bool clear_source
+    Pair to
 ) {
-    struct DrawCtx* dc = &ctx->dc;
-    i32 const w = dc->cv.im->width;
-    i32 const h = dc->cv.im->height;
-    XImage* im = dc->cv.im;  // FIXME draw to overlay
+    i32 const w = src->width;
+    i32 const h = src->height;
 
+    // FIXME alloc only dims.x * dims.y
     u32* region_dyn = (u32*)ecalloc(w * h, sizeof(u32));
     for (i32 get_or_set = 1; get_or_set >= 0; --get_or_set) {
         for (i32 y = 0; y < dims.y; ++y) {
             for (i32 x = 0; x < dims.x; ++x) {
                 if (get_or_set) {
+                    // FIXME UB on wrong 'from' or 'dims'
                     region_dyn[y * w + x] =
-                        XGetPixel(dc->cv.im, from.x + x, from.y + y);
-                    if (clear_source) {
-                        ximage_put_checked(
-                            dc->cv.im,
-                            from.x + x,
-                            from.y + y,
-                            CANVAS_BACKGROUND
-                        );
-                    }
+                        XGetPixel(src, from.x + x, from.y + y);
                 } else {
                     ximage_put_checked(
-                        im,
+                        dest,
                         to.x + x,
                         to.y + y,
                         region_dyn[y * w + x]
@@ -2456,8 +2459,8 @@ Rect canvas_copy_region(
     return (Rect) {
         MAX(0, to.x),
         MAX(0, to.y),
-        MIN(im->width - 1, to.x + dims.x),
-        MIN(im->height - 1, to.y + dims.y),
+        MIN(dest->width - 1, to.x + dims.x),
+        MIN(dest->height - 1, to.y + dims.y),
     };
 }
 
