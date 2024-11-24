@@ -3280,7 +3280,7 @@ void xextinit(Display* dp) {
         die("no X Double Buffer Extention support");
     }
     if (!XSyncInitialize(dp, &maj, &min)) {
-        // not critical if xserver not supports this
+        // not critical if xserver doesn't support this
         fprintf(stderr, "no SYNC Extention support\n");
     }
 }
