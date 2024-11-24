@@ -7,6 +7,7 @@
 #include <X11/extensions/Xdbe.h>  // back buffer
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/render.h>
+#include <X11/extensions/sync.h>
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
@@ -99,6 +100,8 @@ enum {
     A_ImagePng,
     A_WmProtocols,
     A_WmDeleteWindow,
+    A_NetWmSyncRequest,
+    A_NetWmSyncRequestCounter,
     A_Last,
 };
 
@@ -147,6 +150,10 @@ typedef enum {
 } HdlrResult;
 
 struct Ctx {
+    // FIXME find better place
+    XSyncCounter sync_counter;
+    XSyncValue last_sync_request_value;
+
     struct DrawCtx {
         // readonly outside setup and cleanup functions
         struct System {
@@ -538,6 +545,7 @@ static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im);
 static void dc_cache_free(struct DrawCtx* dc);
 
 static struct Ctx ctx_init(Display* dp);
+static void xextinit(Display* dp);
 static void setup(Display* dp, struct Ctx* ctx);
 static void run(struct Ctx* ctx);
 static HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event);
@@ -577,14 +585,7 @@ i32 main(i32 argc, char** argv) {
         exit(1);
     }
 
-    /* extentions support */ {
-        i32 maj = NIL;
-        i32 min = NIL;
-        if (!XdbeQueryExtension(display, &maj, &min)) {
-            die("no X Double Buffer Extention support");
-        }
-    }
-
+    xextinit(display);
     setup(display, &ctx);
     run(&ctx);
     cleanup(&ctx);
@@ -3146,6 +3147,12 @@ void update_statusline(struct Ctx* ctx) {
         },
         1
     );
+
+    XSyncSetCounter(
+        ctx->dc.dp,
+        ctx->sync_counter,
+        ctx->last_sync_request_value
+    );
 }
 
 // FIXME DRY
@@ -3266,6 +3273,18 @@ struct Ctx ctx_init(Display* dp) {
     };
 }
 
+void xextinit(Display* dp) {
+    i32 maj = NIL;
+    i32 min = NIL;
+    if (!XdbeQueryExtension(dp, &maj, &min)) {
+        die("no X Double Buffer Extention support");
+    }
+    if (!XSyncInitialize(dp, &maj, &min)) {
+        // not critical if xserver not supports this
+        fprintf(stderr, "no SYNC Extention support\n");
+    }
+}
+
 void setup(Display* dp, struct Ctx* ctx) {
     assert(dp);
     assert(ctx);
@@ -3291,6 +3310,10 @@ void setup(Display* dp, struct Ctx* ctx) {
         atoms[A_ImagePng] = XInternAtom(dp, "image/png", False);
         atoms[A_WmProtocols] = XInternAtom(dp, "WM_PROTOCOLS", False);
         atoms[A_WmDeleteWindow] = XInternAtom(dp, "WM_DELETE_WINDOW", False);
+        atoms[A_NetWmSyncRequest] =
+            XInternAtom(dp, "_NET_WM_SYNC_REQUEST", False);
+        atoms[A_NetWmSyncRequestCounter] =
+            XInternAtom(dp, "_NET_WM_SYNC_REQUEST_COUNTER", False);
     }
 
     /* xrender */ {
@@ -3345,6 +3368,30 @@ void setup(Display* dp, struct Ctx* ctx) {
            .encoding = atoms[A_Utf8string]}
     );
 
+    /* turn on protocol support */ {
+        Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
+
+        Atom protocols[] = {wm_delete_window, atoms[A_NetWmSyncRequest]};
+        XSetWMProtocols(dp, ctx->dc.window, protocols, LENGTH(protocols));
+    }
+
+    /* _NET_WM_SYNC_REQUEST */ {
+        XSyncIntToValue(&ctx->last_sync_request_value, 0);
+        ctx->sync_counter =
+            XSyncCreateCounter(dp, ctx->last_sync_request_value);
+
+        XChangeProperty(
+            dp,
+            ctx->dc.window,
+            atoms[A_NetWmSyncRequestCounter],
+            XA_CARDINAL,
+            32,
+            PropModeReplace,
+            (unsigned char*)&ctx->sync_counter,
+            1
+        );
+    }
+
     /* X input method setup */ {
         // from https://gist.github.com/baines/5a49f1334281b2685af5dcae81a6fa8a
         XSetLocaleModifiers("");
@@ -3370,11 +3417,6 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     ctx->dc.back_buffer = XdbeAllocateBackBufferName(dp, ctx->dc.window, 0);
-
-    /* turn on protocol support */ {
-        Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
-        XSetWMProtocols(dp, ctx->dc.window, &wm_delete_window, 1);
-    }
 
     if (!fnt_set(&ctx->dc, FONT_NAME)) {
         die("failed to load default font: %s", FONT_NAME);
@@ -3503,11 +3545,11 @@ void run(struct Ctx* ctx) {
         [MappingNotify] = &mapping_notify_hdlr,
     };
 
-    Bool running = True;
+    HdlrResult running = HR_Ok;
     XEvent event;
 
     XSync(ctx->dc.dp, False);
-    while (running && !XNextEvent(ctx->dc.dp, &event)) {
+    while (running != HR_Quit && !XNextEvent(ctx->dc.dp, &event)) {
         if (XFilterEvent(&event, ctx->dc.window)) {
             continue;
         }
@@ -3956,9 +3998,6 @@ HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         dc->cv.scroll.y = (i32)(clientarea.y - cv_size.y) / 2;
     }
 
-    // not required, but reduces flickering
-    update_screen(ctx);
-
     return HR_Ok;
 }
 
@@ -4102,6 +4141,12 @@ HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
         return HR_Quit;
     }
 
+    if (e->data.l[0] == atoms[A_NetWmSyncRequest]) {
+        ctx->last_sync_request_value =
+            (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
+        return HR_Ok;
+    }
+
     return HR_Ok;
 }
 
@@ -4113,6 +4158,7 @@ void cleanup(struct Ctx* ctx) {
             }
         }
     }
+    /* sync counter */ { XSyncDestroyCounter(ctx->dc.dp, ctx->sync_counter); }
     /* file paths */ {
         ioctx_free(&ctx->out);
         ioctx_free(&ctx->inp);
