@@ -216,22 +216,24 @@ struct Ctx {
         // tracks damage to overlay from _on_press to _on_release.
         Rect damage;
 
-        enum InputTag {
-            InputT_Interact,
-            InputT_Color,
-            InputT_Console,
-        } t;
-        union InputData {
-            struct InputColorData {
-                u32 current_digit;
-            } col;
-            struct InputConsoleData {
-                char* cmdarr;
-                char** compls_arr;
-                Bool compls_valid;
-                usize compls_curr;
-            } cl;
-        } d;
+        struct InputMode {
+            enum InputTag {
+                InputT_Interact,
+                InputT_Color,
+                InputT_Console,
+            } t;
+            union {
+                struct InputColorData {
+                    u32 current_digit;
+                } col;
+                struct InputConsoleData {
+                    char* cmdarr;
+                    char** compls_arr;
+                    Bool compls_valid;
+                    usize compls_curr;
+                } cl;
+            } d;
+        } mode;
     } input;
 
     struct ToolCtx {
@@ -478,7 +480,8 @@ static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
 static void cl_pop(struct InputConsoleData* cl);
 
-static void input_state_set(struct Input* input, enum InputTag is);
+static void input_mode_set(struct Input* input, enum InputTag mode_tag);
+static void input_mode_free(struct InputMode* input_mode);
 static void input_free(struct Input* input);
 
 static void sel_circ_show(struct Ctx* ctx, i32 x, i32 y);
@@ -772,7 +775,7 @@ static Bool can_action(struct Input const* input, Key curr_key, Action act) {
     if (!key_eq(curr_key, act.key)) {
         return False;
     }
-    switch (input->t) {
+    switch (input->mode.t) {
         case InputT_Interact: return (i32)act.mode & MF_Int;
         case InputT_Color: return (i32)act.mode & MF_Color;
         case InputT_Console: return False;  // managed manually
@@ -1723,30 +1726,31 @@ void cl_pop(struct InputConsoleData* cl) {
     cl_compls_free(cl);
 }
 
-void input_state_set(struct Input* input, enum InputTag const is) {
-    switch (input->t) {
-        case InputT_Console: cl_free(&input->d.cl); break;
-        default: break;
-    }
+void input_mode_set(struct Input* input, enum InputTag const mode_tag) {
+    input_mode_free(&input->mode);
+    input->mode.t = mode_tag;
 
-    input->t = is;
-
-    switch (is) {
+    switch (input->mode.t) {
         case InputT_Color:
-            input->d.col = (struct InputColorData) {.current_digit = 0};
+            input->mode.d.col = (struct InputColorData) {.current_digit = 0};
             break;
         case InputT_Console:
-            input->d.cl = (struct InputConsoleData
+            input->mode.d.cl = (struct InputConsoleData
             ) {.cmdarr = NULL, .compls_valid = False};
             break;
         case InputT_Interact: break;
     }
 }
 
-void input_free(struct Input* input) {
-    if (input->t == InputT_Console) {
-        cl_free(&input->d.cl);
+void input_mode_free(struct InputMode* input_mode) {
+    switch (input_mode->t) {
+        case InputT_Console: cl_free(&input_mode->d.cl); break;
+        default: break;
     }
+}
+
+void input_free(struct Input* input) {
+    input_mode_free(&input->mode);
     if (input->overlay) {
         XDestroyImage(input->overlay);
         input->overlay = NULL;
@@ -3001,6 +3005,7 @@ void update_screen(struct Ctx* ctx) {
 void update_statusline(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
+    struct InputMode* mode = &ctx->input.mode;
     u32 const statusline_h = statusline_height(dc);
     Pair const clientarea = clientarea_size(dc);
 
@@ -3010,8 +3015,8 @@ void update_statusline(struct Ctx* ctx) {
         (Pair) {(i32)dc->width, (i32)statusline_h},
         COL_BG(&ctx->dc, SchmNorm)
     );
-    if (ctx->input.t == InputT_Console) {
-        char const* command = ctx->input.d.cl.cmdarr;
+    if (mode->t == InputT_Console) {
+        char const* command = mode->d.cl.cmdarr;
         usize const command_len = arrlen(command);
         // extra 2 for prompt and terminator
         char* cl_str_dyn = ecalloc(2 + command_len, sizeof(char));
@@ -3022,10 +3027,10 @@ void update_statusline(struct Ctx* ctx) {
             (i32)get_string_width(&ctx->dc, cl_str_dyn, command_len + 1);
         i32 const cmd_y = (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM);
         draw_string(&ctx->dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
-        if (ctx->input.d.cl.compls_arr) {
+        if (mode->d.cl.compls_arr) {
             draw_string(
                 &ctx->dc,
-                ctx->input.d.cl.compls_arr[ctx->input.d.cl.compls_curr],
+                mode->d.cl.compls_arr[mode->d.cl.compls_curr],
                 (Pair) {user_cmd_w, cmd_y},
                 SchmFocus,
                 False
@@ -3085,10 +3090,10 @@ void update_statusline(struct Ctx* ctx) {
         /* input state */ {
             draw_string(
                 dc,
-                ctx->input.t == InputT_Interact      ? "INT"
-                    : ctx->input.t == InputT_Color   ? "COL"
-                    : ctx->input.t == InputT_Console ? "CMD"
-                                                     : "???",
+                mode->t == InputT_Interact      ? "INT"
+                    : mode->t == InputT_Color   ? "COL"
+                    : mode->t == InputT_Console ? "CMD"
+                                                : "???",
                 input_state_c,
                 SchmNorm,
                 False
@@ -3111,9 +3116,9 @@ void update_statusline(struct Ctx* ctx) {
                 );
                 draw_string(dc, col_count, col_count_c, SchmNorm, False);
             }
-            if (ctx->input.t == InputT_Color) {
+            if (mode->t == InputT_Color) {
                 static u32 const hash_w = 1;
-                u32 const curr_dig = ctx->input.d.col.current_digit;
+                u32 const curr_dig = mode->d.col.current_digit;
                 char const col_digit_value[] =
                     {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
                 draw_string(
@@ -3258,7 +3263,7 @@ struct Ctx ctx_init(Display* dp) {
             },
         .input =
             (struct Input) {
-                .t = InputT_Interact,
+                .mode.t = InputT_Interact,
                 .anchor = PNIL,
                 .png_compression_level = PNG_DEFAULT_COMPRESSION,
                 .jpg_quality_level = JPG_DEFAULT_QUALITY,
@@ -3631,19 +3636,21 @@ HdlrResult expose_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 static void to_next_input_digit(struct Input* input, Bool is_increment) {
-    assert(input->t == InputT_Color);
+    struct InputMode* mode = &input->mode;
+    assert(mode->t == InputT_Color);
 
-    if (input->d.col.current_digit == 0 && !is_increment) {
-        input->d.col.current_digit = 5;
-    } else if (input->d.col.current_digit == 5 && is_increment) {
-        input->d.col.current_digit = 0;
+    if (mode->d.col.current_digit == 0 && !is_increment) {
+        mode->d.col.current_digit = 5;
+    } else if (mode->d.col.current_digit == 5 && is_increment) {
+        mode->d.col.current_digit = 0;
     } else {
-        input->d.col.current_digit += is_increment ? 1 : -1;
+        mode->d.col.current_digit += is_increment ? 1 : -1;
     }
 }
 
 HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     struct Input const* inp = &ctx->input;
+    struct InputMode const* mode = &inp->mode;
     XKeyPressedEvent e = event->xkey;
     if (e.type == KeyRelease) {
         return HR_Ok;
@@ -3671,14 +3678,14 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     };
 
     // custom conditions
-    if (inp->t == InputT_Interact && BETWEEN(curr.sym, XK_1, XK_9)) {
+    if (mode->t == InputT_Interact && BETWEEN(curr.sym, XK_1, XK_9)) {
         u32 val = key_sym - XK_1;
         if (val < TCS_NUM) {
             ctx->curr_tc = val;
             update_statusline(ctx);
         }
     }
-    if (inp->t == InputT_Interact && BETWEEN(curr.sym, XK_Left, XK_Down)
+    if (mode->t == InputT_Interact && BETWEEN(curr.sym, XK_Left, XK_Down)
         && (state_match(curr.mask, ControlMask)
             || state_match(curr.mask, ControlMask | ShiftMask))) {
         u32 const value = e.state & ShiftMask ? 25 : 5;
@@ -3696,7 +3703,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_screen(ctx);
     }
     // change selected color digit with pressed key
-    if (inp->t == InputT_Color && strlen(lookup_buf) == 1) {
+    if (mode->t == InputT_Color && strlen(lookup_buf) == 1) {
         u32 val = lookup_buf[0]
             - (BETWEEN(lookup_buf[0], '0', '9')       ? '0'
                    : BETWEEN(lookup_buf[0], 'a', 'f') ? ('a' - 10)
@@ -3705,7 +3712,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         if (val != lookup_buf[0]) {  // if assigned
             // selected digit counts from left to
             // right except alpha (aarrggbb <=> --012345)
-            u32 shift = (5 - ctx->input.d.col.current_digit) * 4;
+            u32 shift = (5 - mode->d.col.current_digit) * 4;
             *tc_curr_col(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
             *tc_curr_col(&CURR_TC(ctx)) |= val << shift;  // set
             to_next_input_digit(&ctx->input, True);
@@ -3714,8 +3721,8 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     // else-if chain to filter keys
-    if (inp->t == InputT_Console) {
-        struct InputConsoleData* cl = &ctx->input.d.cl;
+    if (mode->t == InputT_Console) {
+        struct InputConsoleData* cl = &ctx->input.mode.d.cl;
         if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
             char* complt = cl->compls_arr[cl->compls_curr];
             while (*complt) {
@@ -3727,7 +3734,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             update_statusline(ctx);
         } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
-            input_state_set(&ctx->input, InputT_Interact);
+            input_mode_set(&ctx->input, InputT_Interact);
             ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
             str_free(&cmd_dyn);
             Bool is_exit = False;
@@ -3851,16 +3858,16 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
     if (can_action(inp, curr, ACT_MODE_INTERACT)
         // XXX direct action key access
-        || (inp->t == InputT_Console && key_eq(curr, ACT_MODE_INTERACT.key))) {
-        input_state_set(&ctx->input, InputT_Interact);
+        || (mode->t == InputT_Console && key_eq(curr, ACT_MODE_INTERACT.key))) {
+        input_mode_set(&ctx->input, InputT_Interact);
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_MODE_COLOR)) {
-        input_state_set(&ctx->input, InputT_Color);
+        input_mode_set(&ctx->input, InputT_Color);
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_MODE_CONSOLE)) {
-        input_state_set(&ctx->input, InputT_Console);
+        input_mode_set(&ctx->input, InputT_Console);
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_ADD_COLOR)) {
@@ -3902,7 +3909,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
-        if (write_io(&ctx->dc, &ctx->input, ctx->dc.cv.type, &ctx->out)) {
+        if (write_io(&ctx->dc, inp, ctx->dc.cv.type, &ctx->out)) {
             trace("xpaint: file saved");
         } else {
             trace("xpaint: failed to save image");
