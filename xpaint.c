@@ -82,14 +82,11 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define HAS_SELECTION(p_tc) \
-    ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.end.x != NIL \
-     && (p_tc)->d.sel.end.y != NIL && (p_tc)->d.sel.begin.x != NIL \
-     && (p_tc)->d.sel.begin.y != NIL \
-     && (p_tc)->d.sel.end.x != (p_tc)->d.sel.begin.x \
-     && (p_tc)->d.sel.end.y != (p_tc)->d.sel.begin.y)
+    ((p_tc)->t == Tool_Selection && !IS_PNIL((p_tc)->d.sel.begin) \
+     && !IS_PNIL((p_tc)->d.sel.end) \
+     && !PAIR_EQ((p_tc)->d.sel.begin, (p_tc)->d.sel.end))
 #define SELECTION_DRAGGING(p_tc) \
-    ((p_tc)->t == Tool_Selection && (p_tc)->d.sel.drag_from.x != NIL \
-     && (p_tc)->d.sel.drag_from.y != NIL)
+    ((p_tc)->t == Tool_Selection && !IS_PNIL((p_tc)->d.sel.drag_from))
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 
@@ -2246,7 +2243,7 @@ get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
 }
 
 Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2) {
-    if (p1.x == NIL || p1.y == NIL || p2.x == NIL || p2.y == NIL) {
+    if (IS_PNIL(p1) || IS_PNIL(p2)) {
         return RNIL;
     }
     struct ToolCtx* tc = &CURR_TC(ctx);
@@ -2347,7 +2344,7 @@ Rect canvas_line(
 
     Rect damage = RNIL;
 
-    if (from.x == NIL || from.y == NIL || to.x == NIL || to.y == NIL) {
+    if (IS_PNIL(from) || IS_PNIL(to)) {
         return RNIL;
     }
 
@@ -2366,7 +2363,7 @@ Rect canvas_line(
             Rect pt_damage = canvas_apply_drawer(im, tc, shape, from);
             damage = rect_expand(damage, pt_damage);
         }
-        if (from.x == to.x && from.y == to.y) {
+        if (PAIR_EQ(from, to)) {
             break;
         }
         i32 e2 = 2 * error;
@@ -2992,7 +2989,7 @@ void update_screen(struct Ctx* ctx) {
             }
         }
     }
-    if (WND_ANCHOR_CROSS_SIZE && ctx->input.anchor.x != NIL
+    if (WND_ANCHOR_CROSS_SIZE && !IS_PNIL(ctx->input.anchor)
         && !ctx->input.is_dragging) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
         Pair center = point_from_cv_to_scr(dc, ctx->input.anchor);
