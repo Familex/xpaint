@@ -492,6 +492,7 @@ static Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
 static Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event);
+static Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
 static Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
@@ -868,7 +869,7 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
         case Tool_Fill: tc->on_release = &tool_fill_on_release; break;
         case Tool_Picker: tc->on_release = &tool_picker_on_release; break;
         case Tool_Figure:
-            tc->on_press = &tool_drawer_on_press;  // same behavior
+            tc->on_press = &tool_figure_on_press;
             tc->on_release = &tool_figure_on_release;
             tc->on_drag = &tool_figure_on_drag;
             tc->d.fig = (struct FigureData) {0};
@@ -1997,6 +1998,20 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     }
 
     return damage;
+}
+
+Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)) {
+        return RNIL;
+    }
+
+    struct DrawCtx* dc = &ctx->dc;
+
+    if (!state_match(event->state, ShiftMask)) {
+        ctx->input.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
+    }
+
+    return RNIL;
 }
 
 Rect tool_figure_on_release(
