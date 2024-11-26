@@ -1939,12 +1939,18 @@ Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     }
 
     struct DrawCtx* dc = &ctx->dc;
+    struct ToolCtx* tc = &CURR_TC(ctx);
 
     if (!state_match(event->state, ShiftMask)) {
         ctx->input.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
+        return canvas_apply_drawer(
+            ctx->input.overlay,
+            tc,
+            tc->d.drawer.shape,
+            point_from_scr_to_cv_xy(dc, event->x, event->y)
+        );
     }
 
-    // nothing drawn on press
     return RNIL;
 }
 
@@ -1960,16 +1966,15 @@ Rect tool_drawer_on_release(
     struct DrawCtx* dc = &ctx->dc;
     struct DrawerData* drawer = &tc->d.drawer;
 
+    Pair begin = ctx->input.anchor;
     Pair end = point_from_scr_to_cv_xy(dc, event->x, event->y);
     XImage* const im = ctx->input.overlay;
-    Pair const start =
-        state_match(event->state, ShiftMask) ? ctx->input.anchor : end;
 
     ctx->input.anchor = end;
 
     // all points with drag motion drawn in on_drag
-    if (!ctx->input.is_dragging) {
-        return canvas_line(im, tc, drawer->shape, start, end, True);
+    if (!ctx->input.is_dragging && state_match(event->state, ShiftMask)) {
+        return canvas_line(im, tc, drawer->shape, begin, end, False);
     }
 
     return RNIL;
@@ -3622,6 +3627,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
 
     ctx->input.is_holding = False;
     ctx->input.is_dragging = False;
+    ctx->input.drag_from = PNIL;
 
     return HR_Ok;
 }
@@ -3930,9 +3936,13 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 
     if (ctx->input.is_holding) {
         if (!ctx->input.is_dragging) {
-            ctx->input.is_dragging = True;
-            ctx->input.drag_from =
-                point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
+            Pair cur = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
+            ctx->input.is_dragging = !IS_PNIL(ctx->input.drag_from)
+                && (ctx->input.drag_from.x != cur.x
+                    || ctx->input.drag_from.y != cur.y);
+            if (!ctx->input.is_dragging) {
+                ctx->input.drag_from = cur;
+            }
         }
 
         struct timeval current_time;

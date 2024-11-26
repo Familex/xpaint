@@ -14,6 +14,8 @@
 #define RNIL \
     ((Rect) {.l = INT32_MAX, .t = INT32_MAX, .r = INT32_MIN, .b = INT32_MIN})
 
+#define IS_PNIL(p_pair)   ((p_pair).x == NIL && (p_pair).y == NIL)
+#define PAIR_EQ(p_a, p_b) ((p_a).x == (p_b).x && (p_a).y == (p_b).y)
 #define IS_RNIL(p_rect) \
     ((p_rect.l) == INT32_MAX && (p_rect.t) == INT32_MAX \
      && (p_rect.r) == INT32_MIN && (p_rect.b) == INT32_MIN)
