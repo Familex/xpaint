@@ -49,12 +49,12 @@ Set save file.
 .SH USAGE
 
 .SS MODES
-Application can be in \fICOLOR\fP,
-\fICONSOLE\fP or \fIINTERACT\fP mode.
+Application can be in \fICOLOR\fP, \fICONSOLE\fP, \fIINTERACT\fP or \fITRANSFORM\fP modes.
 Default mode is interact (\fI<Esc>\fP to enter),
 it used to edit canvas.
 Color mode (\fIc\fP to enter) is used to change color in current tool context.
 Console mode (\fI:\fP to enter) is used to execute commands.
+Transform mode (automatic enter with selection tool) is used to transform canvas or selected area.
 
 .SS CONSOLE
 In console mode all keys (except \fI<Esc>\fP) are captured to command line.
@@ -224,6 +224,9 @@ Zoom canvas in (out).
 .TP
 .B BTN_COPY_SELECITON <S-LeftMouse>
 Make selection with selection tool and drag it with this button to copy area (instead of move).
+.TP
+.B BTN_TRANS_MOVE <LeftMouse>
+Move canvas or selection in transform mode.
 
 .SH NOTE
 All listed keys are in vim notation.

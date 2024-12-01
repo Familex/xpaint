@@ -69,6 +69,7 @@ typedef struct {
     enum {
         MF_Int = 0x1,  // interact
         MF_Color = 0x2,  // color
+        MF_Trans = 0x3,  // transform
         // MF_Term managed manually because can use any key
     } mode;
     Key key;

@@ -43,10 +43,9 @@ i32 const SEL_CIRC_LINE_STYLE = LineSolid;
 
 // selection tool
 u32 const SEL_TOOL_LINE_W = 2;
+argb const SEL_TOOL_COL = 0x80000000;
 i32 const SEL_TOOL_LINE_STYLE = LineOnOffDash;
-Bool const SEL_TOOL_DRAW_WHILE_DRAG = False;
 argb const SEL_TOOL_SELECTION_FG = 0xFF181818;
-argb const SEL_TOOL_DRAG_FG = 0xFFE01818;
 
 u32 const TOOLS_DEFAULT_LINE_W = 5;
 u32 const TOOLS_BRUSH_DEFAULT_SPACING = 1;  // '1' to disable. must be >= 1
@@ -70,6 +69,7 @@ Button const BTN_ZOOM_IN = {Button4, ControlMask};
 Button const BTN_ZOOM_OUT = {Button5, ControlMask};
 // by default area moves
 Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
+Button const BTN_TRANS_MOVE = {Button1};
 
 // actions {allowed modes, {key, modifier mask}}
 Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
