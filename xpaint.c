@@ -1932,6 +1932,7 @@ Rect tool_selection_on_release(
 
     Pair p = {MIN(begin_x, end_x), MIN(begin_y, end_y)};
     Pair dims = (Pair) {MAX(begin_x, end_x) - p.x, MAX(begin_y, end_y) - p.y};
+    overlay_clear(inp->overlay);
     Rect damage = canvas_copy_region(inp->overlay, dc->cv.im, p, dims, p);
 
     // move on BTN_MAIN, copy on BTN_COPY_SELECTION
