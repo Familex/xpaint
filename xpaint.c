@@ -3591,8 +3591,10 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
     } else if (inp->mode.t == InputT_Transform) {
         struct InputTransformData* transd = &inp->mode.d.trans;
-        transd->acc.move.x += e->x - inp->press_pt.x;
-        transd->acc.move.y += e->y - inp->press_pt.y;
+        if (btn_eq(e_btn, BTN_TRANS_MOVE)) {
+            transd->acc.move.x += e->x - inp->press_pt.x;
+            transd->acc.move.y += e->y - inp->press_pt.y;
+        }
         transd->curr = (Transform) {0};
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
