@@ -70,7 +70,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 
 #define PI               (3.141)
 // only one one-byte symbol allowed
-#define ARGB_ALPHA       (0xFF000000)
+#define ARGB_ALPHA       ((argb)(0xFF000000))
 #define CL_DELIM         " "
 #define IOCTX_STDIO_STR  "-"
 // adjust brush line width to pencil's line width
@@ -415,7 +415,7 @@ typedef struct {
 } ClCPrsResult;
 
 // clang-format off
-static void die(char const* errstr, ...);
+__attribute__((noreturn)) static void die(char const* errstr, ...);
 static void trace(char const* fmt, ...);
 static void* ecalloc(u32 n, u32 size);
 static u32 digit_count(u32 number);
@@ -1183,10 +1183,11 @@ read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
             // FIXME read not by 1 char?
             while ((c = getc(stdin)) != EOF) {
                 len += 1;
-                data = (u8*)realloc(data, len);  // NOLINT (FIXME stange error)
-                if (!data) {
+                u8* expanded = (u8*)realloc(data, len);
+                if (!expanded) {
                     die("out of memory");
                 }
+                data = expanded;
                 data[len - 1] = c;
             }
             struct Image result = read_file_from_memory(dc, data, len, bg);
@@ -1684,7 +1685,7 @@ static void cl_compls_update_helper(
             char const* prefix =
                 add_delim && strlen(token) == 0 ? CL_DELIM : "";
             char* complt = str_new("%s%s", prefix, enum_str + offset);
-            arrpush(*result, complt);  // NOLINT
+            arrpush(*result, complt);
         }
     }
 }
