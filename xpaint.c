@@ -3572,12 +3572,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
 
     sel_circ_hide(&ctx->sc);
 
-    if (btn_eq(e_btn, BTN_SEL_CIRC)) {
-        i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
-        if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
-            ctx->sc.items[selected_item].on_select(ctx);
-        }
-    } else if (btn_eq(e_btn, BTN_SCROLL_UP)) {
+    if (btn_eq(e_btn, BTN_SCROLL_UP)) {
         canvas_scroll(&ctx->dc.cv, (Pair) {0, 10});
     } else if (btn_eq(e_btn, BTN_SCROLL_DOWN)) {
         canvas_scroll(&ctx->dc.cv, (Pair) {0, -10});
@@ -3596,6 +3591,11 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
             transd->acc.move.y += e->y - inp->press_pt.y;
         }
         transd->curr = (Transform) {0};
+    } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
+        i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
+        if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
+            ctx->sc.items[selected_item].on_select(ctx);
+        }
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
         if (!IS_RNIL(damage) && inp->mode.t != InputT_Transform) {
