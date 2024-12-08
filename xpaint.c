@@ -240,6 +240,7 @@ struct Ctx {
                 struct InputTransformData {
                     Transform acc;  // accumulated
                     Transform curr;
+                    Rect init_damage;
                 } trans;
             } d;
         } mode;
@@ -459,6 +460,7 @@ static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
+static Pair point_apply_trans(Pair p, Transform trans);
 static Pair dpt_to_pt(DPt p);
 static DPt dpt_rotate(DPt p, double deg); // clockwise
 static DPt dpt_add(DPt a, DPt b);
@@ -843,9 +845,9 @@ XTransform xtrans_scale(double z) {
 
 XTransform xtrans_from_trans(Transform trans) {
     return (XTransform) {{
-        {1, 0, -trans.move.x},
-        {0, 1, -trans.move.y},
-        {0, 0, 1},
+        {XDoubleToFixed(1), XDoubleToFixed(0), XDoubleToFixed(trans.move.x)},
+        {XDoubleToFixed(0), XDoubleToFixed(1), XDoubleToFixed(trans.move.y)},
+        {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)},
     }};
 }
 
@@ -853,9 +855,12 @@ XTransform xtrans_mult(XTransform a, XTransform b) {
     XTransform result;
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
-            result.matrix[i][j] = 0;
+            result.matrix[i][j] = XDoubleToFixed(0);
             for (int k = 0; k < 3; k++) {
-                result.matrix[i][j] += a.matrix[i][k] * b.matrix[k][j];
+                result.matrix[i][j] += XDoubleToFixed(
+                    XFixedToDouble(a.matrix[i][k])
+                    * XFixedToDouble(b.matrix[k][j])
+                );
             }
         }
     }
@@ -1030,6 +1035,18 @@ Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
 Bool point_in_rect(Pair p, Pair a1, Pair a2) {
     return MIN(a1.x, a2.x) < p.x && p.x < MAX(a1.x, a2.x)
         && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
+}
+
+Pair point_apply_trans(Pair p, Transform trans) {
+    XFixed(*m)[3] = xtrans_from_trans(trans).matrix;
+
+    // m[2] is not used
+    return (Pair) {
+        XFixedToDouble(m[0][0]) * p.x + XFixedToDouble(m[0][1]) * p.y
+            + XFixedToDouble(m[0][2]) * 1,
+        XFixedToDouble(m[1][0]) * p.x + XFixedToDouble(m[1][1]) * p.y
+            + XFixedToDouble(m[1][2]) * 1,
+    };
 }
 
 Pair dpt_to_pt(DPt p) {
@@ -2936,9 +2953,15 @@ void update_screen(struct Ctx* ctx) {
             double const z = 1.0 / ZOOM_C(dc);
             XTransform xtrans_z = xtrans_scale(z);
             XTransform xtrans_ovr = xtrans_mult(
-                xtrans_z,
-                xtrans_from_trans(OVERLAY_TRANSFORM(&ctx->input.mode))
+                xtrans_from_trans(OVERLAY_TRANSFORM(&ctx->input.mode)),
+                xtrans_z
             );
+            // HACK xrender missinterprets translate transformations
+            xtrans_ovr.matrix[0][2] =
+                XDoubleToFixed(-1.0 * XFixedToDouble(xtrans_ovr.matrix[0][2]));
+            xtrans_ovr.matrix[1][2] =
+                XDoubleToFixed(-1.0 * XFixedToDouble(xtrans_ovr.matrix[1][2]));
+
             XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_z);
             XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_ovr);
 
@@ -2969,6 +2992,43 @@ void update_screen(struct Ctx* ctx) {
             XRenderFreePicture(dc->dp, bb_pict);
         }
     }
+    // transform mode rectangle
+    if (ctx->input.mode.t == InputT_Transform) {
+        Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
+        Rect const idmg = ctx->input.mode.d.trans.init_damage;
+        Pair transformed[] = {
+            point_apply_trans((Pair) {idmg.l, idmg.t}, trans),
+            point_apply_trans((Pair) {idmg.r, idmg.t}, trans),
+            point_apply_trans((Pair) {idmg.r, idmg.b}, trans),
+            point_apply_trans((Pair) {idmg.l, idmg.b}, trans),
+        };
+        for (u32 i = 0; i < LENGTH(transformed); ++i) {
+            Pair from = point_from_cv_to_scr(dc, transformed[i]);
+            Pair to = point_from_cv_to_scr(
+                dc,
+                transformed[(i + 1) % LENGTH(transformed)]
+            );
+            XSetForeground(dc->dp, dc->screen_gc, 0xFF000000);
+            XSetLineAttributes(
+                dc->dp,
+                dc->screen_gc,
+                3,
+                LineOnOffDash,
+                CapButt,
+                JoinMiter
+            );
+            XDrawLine(
+                dc->dp,
+                dc->back_buffer,
+                dc->screen_gc,
+                from.x,
+                from.y,
+                to.x,
+                to.y
+            );
+        }
+    }
+
     if (WND_ANCHOR_CROSS_SIZE && !IS_PNIL(ctx->input.anchor)
         && !ctx->input.is_dragging) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
@@ -3599,7 +3659,9 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
-        if (!IS_RNIL(damage) && inp->mode.t != InputT_Transform) {
+        if (inp->mode.t == InputT_Transform) {
+            inp->mode.d.trans.init_damage = damage;
+        } else if (!IS_RNIL(damage)) {
             history_forward(ctx, history_new_item(ctx->dc.cv.im, damage));
             overlay_dump(ctx->dc.cv.im, inp->overlay);
             overlay_clear(inp->overlay);
