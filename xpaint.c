@@ -551,7 +551,6 @@ static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle con
 static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
-static void show_message_va(struct Ctx* ctx, char const* fmt, ...);
 
 static void dc_cache_init(struct DrawCtx* dc);
 static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im);
@@ -3226,16 +3225,6 @@ void show_message(struct Ctx* ctx, char const* msg) {
     );
 }
 
-void show_message_va(struct Ctx* ctx, char const* fmt, ...) {
-    va_list ap;
-
-    va_start(ap, fmt);
-    char* msg_dyn = str_new_va(fmt, ap);
-    show_message(ctx, msg_dyn);
-    str_free(&msg_dyn);
-    va_end(ap);
-}
-
 void dc_cache_init(struct DrawCtx* dc) {
     assert(dc->cache.pm == 0 && dc->cache.overlay == 0);
 
@@ -3703,6 +3692,8 @@ static void to_next_input_digit(struct Input* input, Bool is_increment) {
 }
 
 HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
+    char* cl_msg_to_show = NULL;
+
     struct Input const* inp = &ctx->input;
     struct InputMode const* mode = &inp->mode;
     XKeyPressedEvent e = event->xkey;
@@ -3736,7 +3727,6 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         u32 val = key_sym - XK_1;
         if (val < TCS_NUM) {
             ctx->curr_tc = val;
-            update_statusline(ctx);
         }
     }
     if (mode->t == InputT_Interact && BETWEEN(curr.sym, XK_Left, XK_Down)
@@ -3754,7 +3744,6 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                          : key_sym == XK_Up ? value
                                             : 0))
         );
-        update_screen(ctx);
     }
     // change selected color digit with pressed key
     if (mode->t == InputT_Color && strlen(lookup_buf) == 1) {
@@ -3770,7 +3759,6 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             *tc_curr_col(&CURR_TC(ctx)) &= ~(0xF << shift);  // clear
             *tc_curr_col(&CURR_TC(ctx)) |= val << shift;  // set
             to_next_input_digit(&ctx->input, True);
-            update_statusline(ctx);
         }
     }
 
@@ -3785,7 +3773,6 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
             cl_compls_free(cl);
             cl_push(cl, CL_DELIM[0]);
-            update_statusline(ctx);
         } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
             input_mode_set(ctx, InputT_Interact);
@@ -3796,41 +3783,35 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 case ClCPrs_Ok: {
                     struct ClCommand* cmd = &res.d.ok;
                     ClCPrcResult res = cl_cmd_process(ctx, cmd);
-                    update_screen(ctx);
                     if (res.bit_status & ClCPrc_Msg) {
-                        show_message(ctx, res.msg_dyn);
+                        // XXX double memory allocation
+                        cl_msg_to_show = str_new(res.msg_dyn);
                         str_free(&res.msg_dyn);  // XXX member free
                     }
                     is_exit = (Bool)(res.bit_status & ClCPrc_Exit);
                 } break;
                 case ClCPrs_ENoArg: {
                     if (res.d.noarg.context_optdyn) {
-                        show_message_va(
-                            ctx,
+                        cl_msg_to_show = str_new(
                             "provide %s to '%s' command",
                             res.d.noarg.arg_desc_dyn,
                             res.d.noarg.context_optdyn
                         );
                     } else {
-                        show_message_va(
-                            ctx,
-                            "provide %s",
-                            res.d.noarg.arg_desc_dyn
-                        );
+                        cl_msg_to_show =
+                            str_new("provide %s", res.d.noarg.arg_desc_dyn);
                     }
                 } break;
                 case ClCPrs_EInvArg: {
                     if (res.d.invarg.context_optdyn) {
-                        show_message_va(
-                            ctx,
+                        cl_msg_to_show = str_new(
                             "%s: invalid arg '%s': %s",
                             res.d.invarg.context_optdyn,
                             res.d.invarg.arg_dyn,
                             res.d.invarg.error_dyn
                         );
                     } else {
-                        show_message_va(
-                            ctx,
+                        cl_msg_to_show = str_new(
                             "invalid arg '%s': %s",
                             res.d.invarg.arg_dyn,
                             res.d.invarg.error_dyn
@@ -3845,36 +3826,30 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_valid) {
             cl_compls_new(cl);
-            update_statusline(ctx);
         } else if (key_eq(curr, KEY_CL_NEXT_COMPLT) && cl->compls_valid) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
                 cl->compls_curr = (cl->compls_curr + 1) % max;
             }
-            update_statusline(ctx);
         } else if (key_eq(curr, KEY_CL_ERASE_CHAR)) {
             cl_pop(cl);
-            update_statusline(ctx);
         } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
             for (i32 i = 0; i < text_len; ++i) {
                 cl_push(cl, (char)(lookup_buf[i] & 0xFF));
             }
-            update_statusline(ctx);
         }
     }
 
-    // actions (FIXME update_screen always?)
+    // actions
     if (can_action(inp, curr, ACT_UNDO)) {
         if (!history_move(ctx, False)) {
             trace("xpaint: can't undo history");
         }
-        update_screen(ctx);
     }
     if (can_action(inp, curr, ACT_REVERT)) {
         if (!history_move(ctx, True)) {
             trace("xpaint: can't revert history");
         }
-        update_screen(ctx);
     }
     if (can_action(inp, curr, ACT_COPY_AREA)) {
         XSetSelectionOwner(
@@ -3903,45 +3878,36 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
     if (can_action(inp, curr, ACT_SWAP_COLOR)) {
         tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).prev_col);
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_ZOOM_IN)) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1);
-        update_screen(ctx);
     }
     if (can_action(inp, curr, ACT_ZOOM_OUT)) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
-        update_screen(ctx);
     }
     if (can_action(inp, curr, ACT_MODE_INTERACT)
         // XXX direct action key access
         || (mode->t == InputT_Console && key_eq(curr, ACT_MODE_INTERACT.key))) {
         input_mode_set(ctx, InputT_Interact);
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_MODE_COLOR)) {
         input_mode_set(ctx, InputT_Color);
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_MODE_CONSOLE)) {
         input_mode_set(ctx, InputT_Console);
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_ADD_COLOR)) {
         u32 const len = arrlen(CURR_TC(ctx).colarr);
         if (len != MAX_COLORS) {
             tc_set_curr_col_num(&CURR_TC(ctx), len);
             arrpush(CURR_TC(ctx).colarr, 0xFF000000);
-            update_statusline(ctx);
         }
     }
     if (can_action(inp, curr, ACT_TO_RIGHT_COL_DIGIT)) {
         to_next_input_digit(&ctx->input, True);
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_TO_LEFT_COL_DIGIT)) {
         to_next_input_digit(&ctx->input, False);
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_EXIT)) {
         return HR_Quit;
@@ -3953,7 +3919,6 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             &CURR_TC(ctx),
             curr_col + 1 == col_num ? 0 : curr_col + 1
         );
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_PREV_COLOR)) {
         u32 const curr_col = CURR_TC(ctx).curr_col;
@@ -3963,7 +3928,6 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             &CURR_TC(ctx),
             curr_col == 0 ? col_num - 1 : curr_col - 1
         );
-        update_statusline(ctx);
     }
     if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
         if (write_io(&ctx->dc, inp, ctx->dc.cv.type, &ctx->out)) {
@@ -3971,6 +3935,13 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         } else {
             trace("xpaint: failed to save image");
         }
+    }
+
+    // FIXME extra updates on invalid events
+    update_screen(ctx);
+    if (cl_msg_to_show) {
+        show_message(ctx, cl_msg_to_show);
+        str_free(&cl_msg_to_show);
     }
 
     return HR_Ok;
