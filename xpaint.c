@@ -3648,8 +3648,9 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (inp->mode.t == InputT_Transform) {
         struct InputTransformData* transd = &inp->mode.d.trans;
         if (btn_eq(e_btn, BTN_TRANS_MOVE)) {
-            transd->acc.move.x += e->x - inp->press_pt.x;
-            transd->acc.move.y += e->y - inp->press_pt.y;
+            Pair cur = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
+            transd->acc.move.x += cur.x - inp->press_pt.x;
+            transd->acc.move.y += cur.y - inp->press_pt.y;
         }
         transd->curr = (Transform) {0};
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
@@ -3984,10 +3985,10 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     XMotionEvent* e = (XMotionEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct Input* inp = &ctx->input;
+    Pair const cur = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
 
     if (ctx->input.is_holding) {
         if (!ctx->input.is_dragging) {
-            Pair cur = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
             ctx->input.is_dragging = !PAIR_EQ(cur, ctx->input.press_pt);
         }
 
@@ -4011,8 +4012,8 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             if (inp->mode.t == InputT_Transform) {
                 struct InputTransformData* transd = &inp->mode.d.trans;
                 if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
-                    transd->curr.move.x = e->x - inp->press_pt.x;
-                    transd->curr.move.y = e->y - inp->press_pt.y;
+                    transd->curr.move.x = cur.x - inp->press_pt.x;
+                    transd->curr.move.y = cur.y - inp->press_pt.y;
                 }
                 update_screen(ctx);
             } else if (tc->on_drag) {
