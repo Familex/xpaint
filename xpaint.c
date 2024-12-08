@@ -2145,6 +2145,8 @@ Rect tool_picker_on_release(
 }
 
 struct HistItem history_new_item(XImage* im, Rect rect) {
+    assert(!IS_RNIL(rect) && rect.l <= rect.r && rect.t <= rect.b);
+
     return (struct HistItem) {
         .pivot = (Pair) {rect.l, rect.t},
         .patch = XSubImage(
@@ -2267,22 +2269,20 @@ Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
 }
 
 Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
+    Rect damage = RNIL;
+
     Bool const nx = dims.x < 0;
     Bool const ny = dims.y < 0;
     for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
         for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
              ++y) {
-            ximage_put_checked(im, x, y, col);
+            if (ximage_put_checked(im, x, y, col)) {
+                damage = rect_expand(damage, (Rect) {x, y, x, y});
+            }
         }
     }
 
-    return (Rect) {
-        MAX(0, c.x),
-        MAX(0, c.y),
-        // Rect is inclusive
-        MIN(im->width - 1, c.x + dims.x - 1),
-        MIN(im->height - 1, c.y + dims.y - 1),
-    };
+    return damage;
 }
 
 // FIXME w unused (required because of circle_get_alpha_fn)
