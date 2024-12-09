@@ -240,7 +240,7 @@ struct Ctx {
                 struct InputTransformData {
                     Transform acc;  // accumulated
                     Transform curr;
-                    Rect init_damage;
+                    Rect overlay_bounds;
                 } trans;
             } d;
         } mode;
@@ -1823,7 +1823,8 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             break;
         case InputT_Interact: break;
         case InputT_Transform:
-            inp->mode.d.trans = (struct InputTransformData) {0};
+            inp->mode.d.trans =
+                (struct InputTransformData) {.overlay_bounds = RNIL};
             break;
     }
 }
@@ -2994,12 +2995,12 @@ void update_screen(struct Ctx* ctx) {
     // transform mode rectangle
     if (ctx->input.mode.t == InputT_Transform) {
         Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
-        Rect const idmg = ctx->input.mode.d.trans.init_damage;
+        Rect const idmg = ctx->input.mode.d.trans.overlay_bounds;
         Pair transformed[] = {
             point_apply_trans((Pair) {idmg.l, idmg.t}, trans),
-            point_apply_trans((Pair) {idmg.r, idmg.t}, trans),
-            point_apply_trans((Pair) {idmg.r, idmg.b}, trans),
-            point_apply_trans((Pair) {idmg.l, idmg.b}, trans),
+            point_apply_trans((Pair) {idmg.r + 1, idmg.t}, trans),
+            point_apply_trans((Pair) {idmg.r + 1, idmg.b + 1}, trans),
+            point_apply_trans((Pair) {idmg.l, idmg.b + 1}, trans),
         };
         for (u32 i = 0; i < LENGTH(transformed); ++i) {
             Pair from = point_from_cv_to_scr(dc, transformed[i]);
@@ -3650,7 +3651,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
         if (inp->mode.t == InputT_Transform) {
-            inp->mode.d.trans.init_damage = damage;
+            inp->mode.d.trans.overlay_bounds = ximage_calc_damage(inp->overlay);
         } else if (!IS_RNIL(damage)) {
             history_forward(ctx, history_new_item(ctx->dc.cv.im, damage));
             overlay_dump(ctx->dc.cv.im, inp->overlay);
