@@ -39,7 +39,7 @@
 #include "config.h"
 #include "types.h"
 
-// embeded data
+// embedded data
 INCBIN(u8, pic_tool_fill, "res/tool-fill.png");
 INCBIN(u8, pic_tool_pencil, "res/tool-pencil.png");
 INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
@@ -3041,7 +3041,7 @@ void update_screen(struct Ctx* ctx) {
         draw_line(dc, lb, rt, SchmNorm, True);
     }
 
-    update_statusline(ctx);  // backbuffer swaped here
+    update_statusline(ctx);  // backbuffer swapped here
 }
 
 static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
@@ -4103,7 +4103,7 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     if (request.target == atoms[A_Targets]) {
-        Atom avaliable_targets[] = {atoms[A_ImagePng]};
+        Atom available_targets[] = {atoms[A_ImagePng]};
         XChangeProperty(
             request.display,
             request.requestor,
@@ -4111,8 +4111,8 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
             XA_ATOM,
             32,
             PropModeReplace,
-            (unsigned char const*)avaliable_targets,
-            LENGTH(avaliable_targets)
+            (unsigned char const*)available_targets,
+            LENGTH(available_targets)
         );
     } else if (request.target == atoms[A_ImagePng]) {
         u8* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
