@@ -4,7 +4,7 @@
 # xpaint version
 VERSION = 0.4.0
 
-# instalation path
+# installation path
 PREFIX = /usr/local
 MANPREFIX = $(PREFIX)/share/man
 
