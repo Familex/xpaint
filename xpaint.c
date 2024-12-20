@@ -3044,9 +3044,133 @@ void update_screen(struct Ctx* ctx) {
     update_statusline(ctx);  // backbuffer swaped here
 }
 
-void update_statusline(struct Ctx* ctx) {
+static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
+    struct DrawCtx const* dc = &ctx->dc;
+    struct ToolCtx const* tc = &CURR_TC(ctx);
+
+    switch (module->t) {
+        case SLM_Spacer: return module->d.spacer;
+        case SLM_Text:
+            return get_string_width(dc, module->d.text, strlen(module->d.text));
+        case SLM_ToolCtx: {
+            u32 result = 0;
+            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                result += get_int_width(dc, "%d", tc_name)
+                    + STATUSLINE_MODULE_SPACING_SMALL_PX;
+            }
+            return result - STATUSLINE_MODULE_SPACING_SMALL_PX;
+        }
+        case SLM_Mode: {
+            char const* int_str = input_mode_as_str(ctx->input.mode.t);
+            return get_string_width(dc, int_str, strlen(int_str));
+        }
+        case SLM_Tool: {
+            char const* tool_str = tc_get_tool_name(tc);
+            return get_string_width(dc, tool_str, strlen(tool_str));
+        }
+        case SLM_ToolLineW: return get_int_width(dc, "%d", tc->line_w);
+        case SLM_ToolSpacing:
+            return get_int_width(
+                dc,
+                "%d",
+                TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 0
+            );
+        case SLM_ColorBox: return module->d.color_box_w;
+        case SLM_ColorName:
+            // XXX uses 'F' as overage character
+            return get_string_width(dc, "#FFFFFF", 7);
+        case SLM_ColorList:
+            return get_string_width(dc, "/", 1)
+                + get_int_width(dc, "%d", MAX_COLORS) * 2;
+    }
+    UNREACHABLE();
+    return 0;
+}
+
+static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
+    struct InputMode* mode = &ctx->input.mode;
+
+    switch (module->t) {
+        case SLM_Spacer: break;
+        case SLM_Text: {
+            char const* str = module->d.text;
+            draw_string(dc, str, c, SchmNorm, False);
+        } break;
+        case SLM_ToolCtx: {
+            i32 x = c.x;
+            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                draw_int(
+                    dc,
+                    tc_name,
+                    (Pair) {(i32)x, c.y},
+                    ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm,
+                    False
+                );
+                x += (i32)(get_int_width(dc, "%d", tc_name)
+                           + STATUSLINE_MODULE_SPACING_SMALL_PX);
+            }
+        } break;
+        case SLM_Mode: {
+            char const* name = input_mode_as_str(mode->t);
+            enum Schm const schm =
+                mode->t == InputT_Interact ? SchmNorm : SchmFocus;
+            draw_string(dc, name, c, schm, False);
+        } break;
+        case SLM_Tool: {
+            char const* name = tc_get_tool_name(tc);
+            draw_string(dc, name, c, SchmNorm, False);
+        } break;
+        case SLM_ToolLineW: {
+            draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
+        } break;
+        case SLM_ToolSpacing: {
+            i32 const val = TC_IS_DRAWER(tc) ? (i32)tc->d.drawer.spacing : 0;
+            draw_int(dc, val, c, SchmNorm, False);
+        } break;
+        case SLM_ColorBox: {
+            fill_rect(
+                dc,
+                (Pair) {c.x, clientarea_size(dc).y},
+                (Pair) {(i32)module->d.color_box_w, (i32)statusline_height(dc)},
+                *tc_curr_col(tc)
+            );
+        } break;
+        case SLM_ColorName: {
+            static u32 const col_value_size = 1 + 6;
+
+            char col_value[col_value_size + 1];
+            sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
+            draw_string(dc, col_value, c, SchmNorm, False);
+            // draw focused digit
+            if (mode->t == InputT_Color) {
+                static u32 const hash_w = 1;
+                u32 const curr_dig = mode->d.col.current_digit;
+                char const col_digit_value[] =
+                    {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
+                u32 focus_offset =
+                    get_string_width(dc, col_value, curr_dig + hash_w);
+                draw_string(
+                    dc,
+                    col_digit_value,
+                    (Pair) {c.x + (i32)focus_offset, c.y},
+                    SchmFocus,
+                    False
+                );
+            }
+        } break;
+        case SLM_ColorList: {
+            // FIXME why it compiles
+            char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
+            sprintf(col_count, "%d/%td", tc->curr_col + 1, arrlen(tc->colarr));
+            draw_string(dc, col_count, c, SchmNorm, False);
+        } break;
+    }
+}
+
+void update_statusline(struct Ctx* ctx) {
+    struct DrawCtx* dc = &ctx->dc;
     struct InputMode* mode = &ctx->input.mode;
     u32 const statusline_h = statusline_height(dc);
     Pair const clientarea = clientarea_size(dc);
@@ -3080,106 +3204,31 @@ void update_statusline(struct Ctx* ctx) {
         }
         str_free(&cl_str_dyn);
     } else {
-        static u32 const gap = 5;
-        static u32 const small_gap = gap / 2;
-        // widths of captions
-        // XXX uses 'F' as average character
-        u32 const col_count_w = get_string_width(dc, "/", 1)
-            + get_int_width(dc, "%d", MAX_COLORS) * 2 + gap;
-        u32 tcs_w = 0;
-        /* tcs_w */ {
-            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                tcs_w += get_int_width(dc, "%d", tc_name) + small_gap;
-            }
-            tcs_w += gap;
-        }
-        u32 const col_name_w = get_string_width(dc, "#FFFFFF", 7) + gap;
-        // fixed length
-        u32 const input_state_w = get_string_width(dc, "FFF", 3) + gap;
-        u32 const tool_name_w = get_string_width(dc, "FFFFFFF", 7) + gap;
-        // left **bottom** corners of captions
-        Pair const tcs_c = {0, (i32)(dc->height - STATUSLINE_PADDING_BOTTOM)};
-        Pair const input_state_c = {(i32)(tcs_c.x + tcs_w), tcs_c.y};
-        Pair const tool_name_c = {
-            (i32)(input_state_c.x + input_state_w),
-            input_state_c.y
-        };
-        Pair const line_w_c = {
-            (i32)(tool_name_c.x + tool_name_w),
-            tool_name_c.y
-        };
-        Pair const col_count_c = {(i32)(dc->width - col_count_w), line_w_c.y};
-        Pair const col_c = {(i32)(col_count_c.x - col_name_w), col_count_c.y};
-        // colored rectangle
-        static u32 const col_rect_w = 30;
-        static u32 const col_value_size = 1 + 6;
+        u32 const y = dc->height - STATUSLINE_PADDING_BOTTOM;
 
-        XSetBackground(dc->dp, dc->screen_gc, COL_BG(&ctx->dc, SchmNorm));
-        XSetForeground(dc->dp, dc->screen_gc, COL_FG(&ctx->dc, SchmNorm));
-        /* tc */ {
-            i32 x = tcs_c.x;
-            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                draw_int(
-                    dc,
-                    tc_name,
-                    (Pair) {x, tcs_c.y},
-                    ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm,
-                    False
-                );
-                x += (i32)(get_int_width(dc, "%d", tc_name) + small_gap);
+        {
+            // current module left-bottom corner
+            u32 x = 0;
+            for (u32 i = 0; i < LENGTH(LEFT_MODULES); ++i) {
+                SLModule const* module = &LEFT_MODULES[i];
+                draw_module(ctx, module, (Pair) {(i32)x, (i32)y});
+
+                x += get_module_width(ctx, module)
+                    + STATUSLINE_MODULE_SPACING_PX;
             }
         }
-        /* input state */ {
-            draw_string(
-                dc,
-                input_mode_as_str(mode->t),
-                input_state_c,
-                SchmNorm,
-                False
-            );
-        }
-        draw_string(dc, tc_get_tool_name(tc), tool_name_c, SchmNorm, False);
-        draw_int(dc, (i32)tc->line_w, line_w_c, SchmNorm, False);
-        /* color */ {
-            char col_value[col_value_size + 1];
-            sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
-            draw_string(dc, col_value, col_c, SchmNorm, False);
-            /* color count */ {
-                // FIXME how it possible
-                char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
-                sprintf(
-                    col_count,
-                    "%d/%td",
-                    tc->curr_col + 1,
-                    arrlen(tc->colarr)
-                );
-                draw_string(dc, col_count, col_count_c, SchmNorm, False);
+
+        {
+            // current module left-bottom corner
+            u32 x = dc->width;
+            for (i32 i = LENGTH(RIGHT_MODULES) - 1; i >= 0; --i) {
+                SLModule const* module = &RIGHT_MODULES[i];
+                x -= get_module_width(ctx, module);
+
+                draw_module(ctx, module, (Pair) {(i32)x, (i32)y});
+
+                x -= STATUSLINE_MODULE_SPACING_PX;
             }
-            if (mode->t == InputT_Color) {
-                static u32 const hash_w = 1;
-                u32 const curr_dig = mode->d.col.current_digit;
-                char const col_digit_value[] =
-                    {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
-                draw_string(
-                    dc,
-                    col_digit_value,
-                    (Pair
-                    ) {col_c.x
-                           + (i32
-                           )get_string_width(dc, col_value, curr_dig + hash_w),
-                       col_c.y},
-                    SchmFocus,
-                    False
-                );
-            }
-            fill_rect(
-                dc,
-                (Pair
-                ) {(i32)(dc->width - col_name_w - col_rect_w - col_count_w),
-                   clientarea.y},
-                (Pair) {(i32)col_rect_w, (i32)statusline_h},
-                *tc_curr_col(tc)
-            );
         }
     }
 

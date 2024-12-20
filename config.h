@@ -28,12 +28,29 @@ XRenderColor const SCHEMES[SchmLast][2] = {
     [SchmFocus] = {{0xFFFF, 0, 0, 0xFFFF}, {0x9999, 0x1818, 0x1818, 0xFFFF}},
 };
 
+// see types.h for definitions
+SLModule const LEFT_MODULES[] = {
+    {SLM_ToolCtx},
+    {SLM_Mode},
+    {SLM_Tool},
+    {SLM_Text, .d.text = "| w: "},
+    {SLM_ToolLineW},
+};
+
+SLModule const RIGHT_MODULES[] = {
+    {SLM_ColorBox, .d.color_box_w = 24},
+    {SLM_ColorName},
+    {SLM_ColorList},
+};
+
+u32 const STATUSLINE_MODULE_SPACING_PX = 5;
+u32 const STATUSLINE_MODULE_SPACING_SMALL_PX = STATUSLINE_MODULE_SPACING_PX / 2;
+u32 const STATUSLINE_PADDING_BOTTOM = 4;
+
 argb const WND_BACKGROUND = 0xFF181818;
 Pair const WND_LAUNCH_MIN_SIZE = {350, 300};
 Pair const WND_LAUNCH_MAX_SIZE = {1000, 1000};
 i32 const WND_ANCHOR_CROSS_SIZE = 8;  // 0 to disable
-
-u32 const STATUSLINE_PADDING_BOTTOM = 4;
 
 // selection circle
 u32 const SEL_CIRC_OUTER_R_PX = 225;

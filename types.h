@@ -67,6 +67,26 @@ enum Schm {
 
 typedef struct {
     enum {
+        SLM_Spacer,  // static spacer
+        SLM_Text,  // static text
+        SLM_ToolCtx,  // list of tool contexts
+        SLM_Mode,  // current mode
+        SLM_Tool,  // current tool
+        SLM_ToolLineW,  // current line width of tool
+        SLM_ToolSpacing,  // current spacing of pencil/brush tool
+        SLM_ColorBox,  // rectangle filled with current color
+        SLM_ColorName,  // name of current color
+        SLM_ColorList,  // current index and size of color list
+    } t;  // type
+    union {
+        u32 spacer;  // for SLM_Spacer
+        char const* text;  // for SLM_Text
+        u32 color_box_w;  // for SLM_ColorBox
+    } d;  // data for corresponding type
+} SLModule;  // status line modules
+
+typedef struct {
+    enum {
         MF_Int = 0x1,  // interact
         MF_Color = 0x2,  // color
         MF_Trans = 0x3,  // transform
