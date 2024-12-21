@@ -469,6 +469,8 @@ static enum ImageType file_type(u8 const* data, u32 len);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 // coefficient c is proportional to the significance of component a
 static argb argb_blend(argb a, argb b, u8 c);
+// receives premultiplied argb value
+static argb argb_normalize(argb c);
 static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
 static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
@@ -1130,6 +1132,15 @@ argb argb_blend(argb a, argb b, u8 c) {
     u32 const blue = (blend * ab + inv_blend * bb) >> 8;
 
     return alpha << 24 | red << 16 | green << 8 | blue;
+}
+
+argb argb_normalize(argb const c) {
+    double const m = 255.0 / ((c >> 24) & 0xFF);
+    u32 const red = MIN(0xFF, ((c >> 16) & 0xFF) * m);
+    u32 const green = MIN(0xFF, ((c >> 8) & 0xFF) * m);
+    u32 const blue = MIN(0xFF, (c & 0xFF) * m);
+
+    return ARGB_ALPHA | red << 16 | green << 8 | blue;
 }
 
 static u32 argb_to_abgr(argb v) {
@@ -2655,10 +2666,9 @@ void overlay_dump(XImage* dest, XImage* overlay) {
             argb ovr = XGetPixel(overlay, x, y);
             if (ovr & ARGB_ALPHA) {
                 argb bg = XGetPixel(dest, x, y);
-                // use overlay opacity as third argument. Looks HACK'y
-                // same in apply_drawer func
+                // make first argument opaque and use its opacity as third argument.
                 argb result =
-                    argb_blend(ovr | ARGB_ALPHA, bg, (ovr >> 0x18) & 0xFF);
+                    argb_blend(argb_normalize(ovr), bg, (ovr >> 0x18) & 0xFF);
                 ximage_put_checked(dest, x, y, result);
             }
         }
