@@ -29,10 +29,10 @@ run: xpaint-d ## run application with ARGS
 	./xpaint-d -v $(ARGS)
 
 xpaint: $(DEPS) ## build release application
-	@$(CC) -o $@ $(SRC) $(CCFLAGS) -O2 -DNDEBUG
+	@$(CC) -o $@ $(SRC) $(RELEASE_FLAGS)
 
 xpaint-d: $(DEPS) ## build debug application
-	@$(CC) -o $@ $(SRC) $(CCFLAGS) -g
+	@$(CC) -o $@ $(SRC) $(DEBUG_FLAGS)
 
 clean: ## remove generated files
 	@rm -f ./xpaint ./xpaint-d
@@ -75,3 +75,5 @@ DEFINES = -DVERSION=\"$(VERSION)\" \
 		done \
 	)
 CCFLAGS = -std=c99 -pedantic -Wall $(INCS) $(LIBS) $(DEFINES)
+RELEASE_FLAGS = $(CCFLAGS) -flto -O2 -DNDEBUG
+DEBUG_FLAGS = $(CCFLAGS) -g
