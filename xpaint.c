@@ -49,6 +49,8 @@ INCBIN(u8, pic_tool_figure, "res/tool-figure.png");
 INCBIN(u8, pic_fig_rect, "res/figure-rectangle.png");
 INCBIN(u8, pic_fig_circ, "res/figure-circle.png");
 INCBIN(u8, pic_fig_tri, "res/figure-triangle.png");
+INCBIN(u8, pic_fig_fill_on, "res/figure-fill-on.png");
+INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
 INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
@@ -115,6 +117,8 @@ enum Icon {
     I_FigRect,
     I_FigCirc,
     I_FigTri,
+    I_FigFillOn,
+    I_FigFillOff,
     I_Last,
 };
 
@@ -296,11 +300,10 @@ struct Ctx {
         Bool is_active;
         i32 x;
         i32 y;
-        u32 item_count;
         struct Item {
             void (*on_select)(struct Ctx*);
             enum Icon icon;
-        }* items;
+        }* items_arr;
     } sc;
 
     struct SelectionBuffer {
@@ -497,8 +500,8 @@ static void input_mode_free(struct InputMode* input_mode);
 static char const* input_mode_as_str(enum InputTag mode_tag);
 static void input_free(struct Input* input);
 
-static void sel_circ_show(struct Ctx* ctx, i32 x, i32 y);
-static void sel_circ_hide(struct SelectionCircle* sel_circ);
+static void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y);
+static void sel_circ_free_and_hide(struct SelectionCircle* sel_circ);
 static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
 
 // separate functions, because they are callbacks
@@ -747,6 +750,10 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_FigRect: return (D) {pic_fig_rect_data, RES_SZ_FIGURE_RECTANGLE};
         case I_FigCirc: return (D) {pic_fig_circ_data, RES_SZ_FIGURE_CIRCLE};
         case I_FigTri: return (D) {pic_fig_tri_data, RES_SZ_FIGURE_TRIANGLE};
+        case I_FigFillOff:
+            return (D) {pic_fig_fill_off_data, RES_SZ_FIGURE_FILL_OFF};
+        case I_FigFillOn:
+            return (D) {pic_fig_fill_on_data, RES_SZ_FIGURE_FILL_ON};
         default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
     }
 }
@@ -1883,19 +1890,26 @@ static void sel_circ_figure_set_rectangle(struct Ctx* ctx) { sel_circ_set_figure
 static void sel_circ_figure_set_triangle(struct Ctx* ctx) { sel_circ_set_figure(ctx, Figure_Triangle); }
 // clang-format on
 
-void sel_circ_show(struct Ctx* ctx, i32 x, i32 y) {
-    if (CURR_TC(ctx).t == Tool_Figure) {
-        static struct Item callbacks[] = {
+void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y) {
+    sel_circ_free_and_hide(&ctx->sc);
+
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    struct SelectionCircle* sc = &ctx->sc;
+
+    if (tc->t == Tool_Figure) {
+        struct Item items[] = {
             {.on_select = &sel_circ_figure_set_circle, .icon = I_FigCirc},
             {.on_select = &sel_circ_figure_set_rectangle, .icon = I_FigRect},
             {.on_select = &sel_circ_figure_set_triangle, .icon = I_FigTri},
-            {.on_select = &sel_circ_figure_toggle_fill, .icon = I_Fill},
+            {.on_select = &sel_circ_figure_toggle_fill,
+             .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn},
             {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
         };
-        ctx->sc.items = callbacks;
-        ctx->sc.item_count = LENGTH(callbacks);
+        for (u32 i = 0; i < LENGTH(items); ++i) {
+            arrpush(sc->items_arr, items[i]);
+        }
     } else {
-        static struct Item callbacks[] = {
+        struct Item items[] = {
             {.on_select = &sel_circ_set_tool_selection, .icon = I_Select},
             {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
             {.on_select = &sel_circ_set_tool_fill, .icon = I_Fill},
@@ -1903,15 +1917,20 @@ void sel_circ_show(struct Ctx* ctx, i32 x, i32 y) {
             {.on_select = &sel_circ_set_tool_brush, .icon = I_Brush},
             {.on_select = &sel_circ_set_tool_figure, .icon = I_Figure},
         };
-        ctx->sc.items = callbacks;
-        ctx->sc.item_count = LENGTH(callbacks);
+        for (u32 i = 0; i < LENGTH(items); ++i) {
+            arrpush(sc->items_arr, items[i]);
+        }
     }
     ctx->sc.x = x;
     ctx->sc.y = y;
     ctx->sc.is_active = True;
 }
 
-void sel_circ_hide(struct SelectionCircle* sel_circ) {
+void sel_circ_free_and_hide(struct SelectionCircle* sel_circ) {
+    if (sel_circ->items_arr) {
+        arrfree(sel_circ->items_arr);
+        sel_circ->items_arr = NULL;
+    }
     sel_circ->is_active = False;
 }
 
@@ -1921,7 +1940,7 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     if (pointer_x_rel == 0 && pointer_y_rel == 0) {
         return NIL;  // prevent 0.0 / 0.0 division
     }
-    double const segment_rad = PI * 2 / MAX(1, sc->item_count);
+    double const segment_rad = PI * 2 / MAX(1, arrlen(sc->items_arr));
     double const segment_deg = segment_rad / PI * 180;
     double const pointer_r =
         sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
@@ -2815,12 +2834,12 @@ void draw_selection_circle(
     );
 
     {
-        double const segment_rad = PI * 2 / MAX(1, sc->item_count);
+        double const segment_rad = PI * 2 / MAX(1, arrlen(sc->items_arr));
         double const segment_deg = segment_rad / PI * 180;
 
         // item images
-        for (u32 item = 0; item < sc->item_count; ++item) {
-            XImage* image = images[sc->items[item].icon];
+        for (u32 item = 0; item < arrlen(sc->items_arr); ++item) {
+            XImage* image = images[sc->items_arr[item].icon];
             assert(image != NULL);
 
             XPutImage(
@@ -2872,9 +2891,10 @@ void draw_selection_circle(
             );
         }
 
-        if (sc->item_count >= 2) {  // segment lines
+        if (arrlen(sc->items_arr) >= 2) {  // segment lines
             XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
-            for (u32 line_num = 0; line_num < sc->item_count; ++line_num) {
+            for (u32 line_num = 0; line_num < arrlen(sc->items_arr);
+                 ++line_num) {
                 XDrawLine(
                     dc->dp,
                     dc->window,
@@ -3363,6 +3383,7 @@ struct Ctx ctx_init(Display* dp) {
         .curr_tc = 0,
         .hist_nextarr = NULL,
         .hist_prevarr = NULL,
+        .sc.items_arr = NULL,
     };
 }
 
@@ -3659,7 +3680,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (ctx->input.mode.t == InputT_Transform) {
         // do nothing
     } else if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
-        sel_circ_show(ctx, e->x, e->y);
+        sel_circ_init_and_show(ctx, e->x, e->y);
     } else if (tc->on_press) {
         ctx->input.damage = tc->on_press(ctx, e);
     }
@@ -3679,8 +3700,6 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct Input* inp = &ctx->input;
     Button e_btn = get_btn(e);
-
-    sel_circ_hide(&ctx->sc);
 
     if (btn_eq(e_btn, BTN_SCROLL_UP)) {
         canvas_scroll(&ctx->dc.cv, (Pair) {0, 10});
@@ -3704,8 +3723,9 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         transd->curr = (Transform) {0};
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
-        if (selected_item != NIL && ctx->sc.items[selected_item].on_select) {
-            ctx->sc.items[selected_item].on_select(ctx);
+        if (selected_item != NIL
+            && ctx->sc.items_arr[selected_item].on_select) {
+            ctx->sc.items_arr[selected_item].on_select(ctx);
         }
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
@@ -3720,6 +3740,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         inp->damage = RNIL;
     }
 
+    sel_circ_free_and_hide(&ctx->sc);
     update_screen(ctx);
 
     inp->is_holding = False;
@@ -4274,6 +4295,7 @@ void cleanup(struct Ctx* ctx) {
         historyarr_clear(&ctx->hist_nextarr);
         historyarr_clear(&ctx->hist_prevarr);
     }
+    /* Selection circle */ { sel_circ_free_and_hide(&ctx->sc); }
     /* ToolCtx */ {
         for (i32 i = 0; i < TCS_NUM; ++i) {
             tc_free(&ctx->tcarr[i]);
