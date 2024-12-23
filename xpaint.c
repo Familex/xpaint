@@ -1972,8 +1972,8 @@ Rect tool_selection_on_release(
     struct Input* inp = &ctx->input;
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    i32 const begin_x = inp->press_pt.x;
-    i32 const begin_y = inp->press_pt.y;
+    i32 const begin_x = CLAMP(inp->press_pt.x, 0, dc->cv.im->width);
+    i32 const begin_y = CLAMP(inp->press_pt.y, 0, dc->cv.im->height);
     i32 const end_x = CLAMP(pointer.x, 0, dc->cv.im->width);
     i32 const end_y = CLAMP(pointer.y, 0, dc->cv.im->height);
 
@@ -2560,6 +2560,8 @@ Rect canvas_copy_region(
 ) {
     i32 const w = src->width;
     i32 const h = src->height;
+    assert(from.x >= 0 && from.y >= 0);
+    assert(from.x + dims.x <= w && from.y + dims.y <= h);
 
     // FIXME alloc only dims.x * dims.y
     u32* region_dyn = (u32*)ecalloc(w * h, sizeof(u32));
@@ -2567,7 +2569,6 @@ Rect canvas_copy_region(
         for (i32 y = 0; y < dims.y; ++y) {
             for (i32 x = 0; x < dims.x; ++x) {
                 if (get_or_set) {
-                    // FIXME UB on wrong 'from' or 'dims'
                     region_dyn[y * w + x] =
                         XGetPixel(src, from.x + x, from.y + y);
                 } else {
