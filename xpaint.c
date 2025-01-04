@@ -220,7 +220,10 @@ struct Ctx {
         // drawn on top of canvas
         // clears before *on_press callbacks
         // dumps to main canvas after *on_release callbacks
-        XImage* overlay;
+        struct InputOverlay {
+            XImage* im;
+            Rect rect;  // bounding box of actual content
+        } ovr;
 
         // tracks damage to overlay from _on_press to _on_release.
         Rect damage;
@@ -437,6 +440,7 @@ static usize ximage_data_len(XImage const* im);
 static void ximage_apply_trans(XImage** im_out, Transform t);
 static Rect ximage_calc_damage(XImage* im);
 static Rect rect_expand(Rect a, Rect b);
+static Pair rect_dims(Rect a);
 
 static XTransform xtrans_scale(double z);
 static XTransform xtrans_from_trans(Transform trans);
@@ -524,6 +528,7 @@ static void history_apply(struct Ctx* ctx, struct HistItem* hist);
 static void history_free(struct HistItem* hist);
 static void historyarr_clear(struct HistItem** hist);
 
+static void ximage_clear(XImage* im);
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
@@ -539,8 +544,9 @@ static Bool canvas_load(struct Ctx* ctx, struct Image const* image);
 static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
-static void overlay_clear(XImage* im);
+static void overlay_clear(struct InputOverlay* ovr);
 static void overlay_dump(XImage* dest, XImage* overlay);
+static void overlay_expand_rect(struct InputOverlay* ovr, Rect rect);
 static void canvas_scroll(struct Canvas* cv, Pair delta);
 
 static u32 statusline_height(struct DrawCtx const* dc);
@@ -813,7 +819,7 @@ void ximage_apply_trans(XImage** im_out, Transform t) {
     XImage* result =
         XSubImage(*im_out, 0, 0, (*im_out)->width, (*im_out)->height);
 
-    overlay_clear(result);
+    ximage_clear(result);
     for (i32 i = 0; i < (*im_out)->width; ++i) {
         for (i32 j = 0; j < (*im_out)->height; ++j) {
             argb const pixel = XGetPixel(*im_out, i, j);
@@ -844,6 +850,10 @@ Rect rect_expand(Rect a, Rect b) {
         .r = MAX(a.r, b.r),
         .b = MAX(a.b, b.b),
     };
+}
+
+Pair rect_dims(Rect a) {
+    return (Pair) {a.r - a.l, a.b - a.t};
 }
 
 XTransform xtrans_scale(double z) {
@@ -1822,9 +1832,9 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
 
     switch (inp->mode.t) {
         case InputT_Transform:
-            ximage_apply_trans(&inp->overlay, OVERLAY_TRANSFORM(&inp->mode));
-            overlay_dump(ctx->dc.cv.im, inp->overlay);
-            overlay_clear(inp->overlay);
+            ximage_apply_trans(&inp->ovr.im, OVERLAY_TRANSFORM(&inp->mode));
+            overlay_dump(ctx->dc.cv.im, inp->ovr.im);
+            overlay_clear(&inp->ovr);
             update_screen(ctx);
             break;
         default: break;
@@ -1871,9 +1881,10 @@ char const* input_mode_as_str(enum InputTag mode_tag) {
 
 void input_free(struct Input* input) {
     input_mode_free(&input->mode);
-    if (input->overlay) {
-        XDestroyImage(input->overlay);
-        input->overlay = NULL;
+    if (input->ovr.im) {
+        XDestroyImage(input->ovr.im);
+        input->ovr.im = NULL;
+        input->ovr.rect = RNIL;
     }
 }
 
@@ -1984,8 +1995,9 @@ Rect tool_selection_on_release(
 
     Pair p = {MIN(begin_x, end_x), MIN(begin_y, end_y)};
     Pair dims = (Pair) {MAX(begin_x, end_x) - p.x, MAX(begin_y, end_y) - p.y};
-    overlay_clear(inp->overlay);
-    Rect damage = canvas_copy_region(inp->overlay, dc->cv.im, p, dims, p);
+
+    overlay_clear(&inp->ovr);
+    Rect damage = canvas_copy_region(inp->ovr.im, dc->cv.im, p, dims, p);
 
     // move on BTN_MAIN, copy on BTN_COPY_SELECTION
     if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
@@ -2014,9 +2026,9 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     i32 const w = end_x - begin_x;
     i32 const h = end_y - begin_y;
 
-    overlay_clear(inp->overlay);
+    overlay_clear(&inp->ovr);
     return canvas_fill_rect(
-        inp->overlay,
+        inp->ovr.im,
         (Pair) {begin_x, begin_y},
         (Pair) {w, h},
         SEL_TOOL_COL
@@ -2034,7 +2046,7 @@ Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     if (!state_match(event->state, ShiftMask)) {
         ctx->input.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
         return canvas_apply_drawer(
-            ctx->input.overlay,
+            ctx->input.ovr.im,
             tc,
             tc->d.drawer.shape,
             point_from_scr_to_cv_xy(dc, event->x, event->y)
@@ -2058,7 +2070,7 @@ Rect tool_drawer_on_release(
 
     Pair begin = ctx->input.anchor;
     Pair end = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    XImage* const im = ctx->input.overlay;
+    XImage* const im = ctx->input.ovr.im;
 
     ctx->input.anchor = end;
 
@@ -2078,7 +2090,7 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     struct DrawerData const* drawer = &tc->d.drawer;
-    XImage* const im = ctx->input.overlay;
+    XImage* const im = ctx->input.ovr.im;
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair const anchor = ctx->input.anchor;
@@ -2120,8 +2132,8 @@ Rect tool_figure_on_release(
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
 
-    overlay_clear(ctx->input.overlay);
-    return canvas_figure(ctx, ctx->input.overlay, pointer, anchor);
+    overlay_clear(&ctx->input.ovr);
+    return canvas_figure(ctx, ctx->input.ovr.im, pointer, anchor);
 }
 
 Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
@@ -2133,10 +2145,10 @@ Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
 
-    overlay_clear(ctx->input.overlay);
+    overlay_clear(&ctx->input.ovr);
     ctx->input.damage = RNIL;  // also undo damage
 
-    return canvas_figure(ctx, ctx->input.overlay, pointer, anchor);
+    return canvas_figure(ctx, ctx->input.ovr.im, pointer, anchor);
 }
 
 Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
@@ -2151,11 +2163,11 @@ Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     // copy whole canvas to overlay (flood_fill must know surround pixels)
     usize data_len = ximage_data_len(dc->cv.im);
     // XXX is XImage::data public member?
-    memcpy(inp->overlay->data, dc->cv.im->data, data_len);
+    memcpy(inp->ovr.im->data, dc->cv.im->data, data_len);
 
     Pair const cur = point_from_scr_to_cv_xy(dc, event->x, event->y);
 
-    return ximage_flood_fill(inp->overlay, *tc_curr_col(tc), cur.x, cur.y);
+    return ximage_flood_fill(inp->ovr.im, *tc_curr_col(tc), cur.x, cur.y);
 }
 
 Rect tool_picker_on_release(
@@ -2245,6 +2257,12 @@ void historyarr_clear(struct HistItem** histarr) {
         history_free(&(*histarr)[i]);
     }
     arrfree(*histarr);
+}
+
+void ximage_clear(XImage* im) {
+    u32 const data_size = ximage_data_len(im);
+    // XXX is data a public member?
+    memset(im->data, 0x0, data_size);
 }
 
 Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
@@ -2592,8 +2610,8 @@ Rect canvas_copy_region(
     return (Rect) {
         MAX(0, to.x),
         MAX(0, to.y),
-        MIN(dest->width - 1, to.x + dims.x),
-        MIN(dest->height - 1, to.y + dims.y),
+        MIN(dest->width - 1, to.x + dims.x - 1),
+        MIN(dest->height - 1, to.y + dims.y - 1),
     };
 }
 
@@ -2614,9 +2632,9 @@ static Bool canvas_load(struct Ctx* ctx, struct Image const* image) {
     canvas_free(&dc->cv);
     dc->cv.im = image->im;
     dc->cv.type = image->type;
-    ctx->input.overlay =
+    ctx->input.ovr.im =
         XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
-    overlay_clear(ctx->input.overlay);
+    overlay_clear(&ctx->input.ovr);
     return True;
 }
 
@@ -2646,13 +2664,17 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
         return;
     }
     struct DrawCtx* dc = &ctx->dc;
+    struct Input* inp = &ctx->input;
     u32 const old_width = dc->cv.im->width;
     u32 const old_height = dc->cv.im->height;
 
     // resize overlay too
-    XImage* old_overlay = ctx->input.overlay;
-    ctx->input.overlay =
-        XSubImage(ctx->input.overlay, 0, 0, new_width, new_height);
+    XImage* old_overlay = inp->ovr.im;
+    inp->ovr.im = XSubImage(inp->ovr.im, 0, 0, new_width, new_height);
+    inp->ovr.rect.l = MIN(new_width, inp->ovr.rect.l);
+    inp->ovr.rect.r = MIN(new_width, inp->ovr.rect.r);
+    inp->ovr.rect.t = MIN(new_height, inp->ovr.rect.t);
+    inp->ovr.rect.b = MIN(new_height, inp->ovr.rect.b);
     XDestroyImage(old_overlay);
 
     // FIXME can fill color be changed?
@@ -2679,10 +2701,9 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     }
 }
 
-void overlay_clear(XImage* im) {
-    u32 const data_size = ximage_data_len(im);
-    // XXX is data a public member?
-    memset(im->data, 0x0, data_size);
+void overlay_clear(struct InputOverlay* ovr) {
+    ximage_clear(ovr->im);
+    ovr->rect = RNIL;
 }
 
 void overlay_dump(XImage* dest, XImage* overlay) {
@@ -2698,6 +2719,10 @@ void overlay_dump(XImage* dest, XImage* overlay) {
             }
         }
     }
+}
+
+void overlay_expand_rect(struct InputOverlay* ovr, Rect rect) {
+    ovr->rect = rect_expand(ovr->rect, rect);
 }
 
 void canvas_scroll(struct Canvas* cv, Pair delta) {
@@ -3320,15 +3345,15 @@ void dc_cache_update(struct Ctx* ctx) {
     }
 
     dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im);
-    dc_cache_update_pm(dc, dc->cache.overlay, inp->overlay);
+    dc_cache_update_pm(dc, dc->cache.overlay, inp->ovr.im);
 }
 
 void dc_cache_init(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
     assert(dc->cache.pm == 0 && dc->cache.overlay == 0);
-    assert(dc->cv.im->width == inp->overlay->width);
-    assert(dc->cv.im->height == inp->overlay->height);
+    assert(dc->cv.im->width == inp->ovr.im->width);
+    assert(dc->cv.im->height == inp->ovr.im->height);
 
     dc->cache.pm = XCreatePixmap(
         dc->dp,
@@ -3341,8 +3366,8 @@ void dc_cache_init(struct Ctx* ctx) {
     dc->cache.overlay = XCreatePixmap(
         dc->dp,
         dc->window,
-        inp->overlay->width,
-        inp->overlay->height,
+        inp->ovr.im->width,
+        inp->ovr.im->height,
         dc->sys.vinfo.depth
     );
 
@@ -3618,14 +3643,14 @@ void setup(Display* dp, struct Ctx* ctx) {
             canvas_fill(ctx->dc.cv.im, CANVAS_BACKGROUND);
         }
         /* overlay */ {
-            ctx->input.overlay = XSubImage(
+            ctx->input.ovr.im = XSubImage(
                 ctx->dc.cv.im,
                 0,
                 0,
                 ctx->dc.cv.im->width,
                 ctx->dc.cv.im->height
             );
-            overlay_clear(ctx->input.overlay);
+            overlay_clear(&ctx->input.ovr);
         }
 
         ctx->dc.width = CLAMP(
@@ -3684,13 +3709,16 @@ void run(struct Ctx* ctx) {
 HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
+    struct Input* inp = &ctx->input;
 
-    if (ctx->input.mode.t == InputT_Transform) {
+    if (inp->mode.t == InputT_Transform) {
         // do nothing
     } else if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
         sel_circ_init_and_show(ctx, e->x, e->y);
     } else if (tc->on_press) {
-        ctx->input.damage = tc->on_press(ctx, e);
+        Rect const damage = tc->on_press(ctx, e);
+        overlay_expand_rect(&inp->ovr, damage);
+        inp->damage = damage;
     }
 
     update_screen(ctx);
@@ -3734,12 +3762,14 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     } else if (tc->on_release) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
+        overlay_expand_rect(&inp->ovr, damage);
+
         if (inp->mode.t == InputT_Transform) {
-            inp->mode.d.trans.overlay_bounds = ximage_calc_damage(inp->overlay);
+            inp->mode.d.trans.overlay_bounds = ximage_calc_damage(inp->ovr.im);
         } else if (!IS_RNIL(damage)) {
             history_forward(ctx, history_new_item(ctx->dc.cv.im, damage));
-            overlay_dump(ctx->dc.cv.im, inp->overlay);
-            overlay_clear(inp->overlay);
+            overlay_dump(ctx->dc.cv.im, inp->ovr.im);
+            overlay_clear(&inp->ovr);
         }
 
         inp->damage = RNIL;
@@ -3944,21 +3974,25 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             ctx->dc.window,
             CurrentTime
         );
-        Rect damage = ximage_calc_damage(inp->overlay);
 
         if (ctx->sel_buf.im != NULL) {
             XDestroyImage(ctx->sel_buf.im);
         }
-        if (IS_RNIL(damage)) {
+        if (IS_RNIL(inp->ovr.rect)) {
             // copy all canvas
             i32 const w = ctx->dc.cv.im->width;
             i32 const h = ctx->dc.cv.im->height;
             ctx->sel_buf.im = XSubImage(ctx->dc.cv.im, 0, 0, w, h);
         } else {
             // copy cropped overlay
-            i32 const w = damage.r - damage.l;
-            i32 const h = damage.b - damage.t;
-            ctx->sel_buf.im = XSubImage(inp->overlay, damage.l, damage.t, w, h);
+            Pair dims = rect_dims(inp->ovr.rect);
+            ctx->sel_buf.im = XSubImage(
+                inp->ovr.im,
+                inp->ovr.rect.l,
+                inp->ovr.rect.t,
+                dims.x,
+                dims.y
+            );
         }
         assert(ctx->sel_buf.im != NULL);
     }
@@ -4075,6 +4109,8 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_screen(ctx);
             } else if (tc->on_drag) {
                 Rect damage = tc->on_drag(ctx, e);
+                overlay_expand_rect(&inp->ovr, damage);
+
                 if (!IS_RNIL(damage)) {
                     ctx->input.damage = rect_expand(inp->damage, damage);
                     ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
@@ -4087,6 +4123,8 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         // FIXME unused
         if (tc->on_move) {
             Rect damage = tc->on_move(ctx, e);
+            overlay_expand_rect(&inp->ovr, damage);
+
             if (!IS_RNIL(damage)) {
                 inp->damage = rect_expand(inp->damage, damage);
                 inp->last_proc_drag_ev_us = 0;
