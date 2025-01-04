@@ -195,8 +195,8 @@ struct Ctx {
             XftColor bg;
         }* schemes_dyn;  // must be len of SchmLast
         struct Cache {
-            u32 pm_w;  // to validate pm
-            u32 pm_h;
+            Pair dims;  // to validate pm and overlay
+
             Pixmap pm;  // pixel buffer to update screen
             Pixmap overlay;  // extra pixmap for overlay
         } cache;
@@ -558,9 +558,10 @@ static void update_screen(struct Ctx* ctx);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
 
-static void dc_cache_init(struct DrawCtx* dc);
-static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im);
+static void dc_cache_init(struct Ctx* ctx);
 static void dc_cache_free(struct DrawCtx* dc);
+// update Pixmaps for XRender interactions
+static void dc_cache_update(struct Ctx* ctx);
 
 static struct Ctx ctx_init(Display* dp);
 static void xextinit(Display* dp);
@@ -2951,17 +2952,8 @@ void update_screen(struct Ctx* ctx) {
             WND_BACKGROUND
         );
         /* put scaled image */ {
+            dc_cache_update(ctx);
             //  https://stackoverflow.com/a/66896097
-
-            // resize pixmaps if needed
-            if (dc->cache.pm_w != dc->cv.im->width
-                || dc->cache.pm_h != dc->cv.im->height) {
-                dc_cache_free(dc);
-                dc_cache_init(dc);
-            }
-
-            dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im);
-            dc_cache_update_pm(dc, dc->cache.overlay, ctx->input.overlay);
 
             Picture cv_pict = XRenderCreatePicture(
                 dc->dp,
@@ -3310,8 +3302,33 @@ void show_message(struct Ctx* ctx, char const* msg) {
     );
 }
 
-void dc_cache_init(struct DrawCtx* dc) {
+static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im) {
+    assert(im);
+    XPutImage(dc->dp, pm, dc->screen_gc, im, 0, 0, 0, 0, im->width, im->height);
+}
+
+void dc_cache_update(struct Ctx* ctx) {
+    struct DrawCtx* dc = &ctx->dc;
+    struct Input* inp = &ctx->input;
+    assert(dc->cache.overlay && dc->cache.pm);
+
+    // resize pixmaps if needed
+    if (dc->cache.dims.x != dc->cv.im->width
+        || dc->cache.dims.y != dc->cv.im->height) {
+        dc_cache_free(dc);
+        dc_cache_init(ctx);
+    }
+
+    dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im);
+    dc_cache_update_pm(dc, dc->cache.overlay, inp->overlay);
+}
+
+void dc_cache_init(struct Ctx* ctx) {
+    struct DrawCtx* dc = &ctx->dc;
+    struct Input* inp = &ctx->input;
     assert(dc->cache.pm == 0 && dc->cache.overlay == 0);
+    assert(dc->cv.im->width == inp->overlay->width);
+    assert(dc->cv.im->height == inp->overlay->height);
 
     dc->cache.pm = XCreatePixmap(
         dc->dp,
@@ -3320,31 +3337,17 @@ void dc_cache_init(struct DrawCtx* dc) {
         dc->cv.im->height,
         dc->sys.vinfo.depth
     );
+
     dc->cache.overlay = XCreatePixmap(
         dc->dp,
         dc->window,
-        dc->cv.im->width,
-        dc->cv.im->height,
+        inp->overlay->width,
+        inp->overlay->height,
         dc->sys.vinfo.depth
     );
-    dc->cache.pm_w = dc->cv.im->width;
-    dc->cache.pm_h = dc->cv.im->height;
-}
 
-void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im) {
-    assert(im);
-    XPutImage(
-        dc->dp,
-        pm,
-        dc->screen_gc,
-        im,
-        0,
-        0,
-        0,
-        0,
-        dc->cv.im->width,
-        dc->cv.im->height
-    );
+    dc->cache.dims.x = dc->cv.im->width;
+    dc->cache.dims.y = dc->cv.im->height;
 }
 
 void dc_cache_free(struct DrawCtx* dc) {
@@ -3639,7 +3642,7 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     // draw cache
-    dc_cache_init(&ctx->dc);
+    dc_cache_init(ctx);
 
     for (i32 i = 0; i < TCS_NUM; ++i) {
         tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
