@@ -248,7 +248,6 @@ struct Ctx {
                 struct InputTransformData {
                     Transform acc;  // accumulated
                     Transform curr;
-                    Rect overlay_bounds;
                 } trans;
             } d;
         } mode;
@@ -438,13 +437,14 @@ static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
 static usize ximage_data_len(XImage const* im);
 static void ximage_apply_trans(XImage** im_out, Transform t);
-static Rect ximage_calc_damage(XImage* im);
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
 
 static XTransform xtrans_scale(double z);
 static XTransform xtrans_from_trans(Transform trans);
 static XTransform xtrans_mult(XTransform a, XTransform b);
+// HACK xrender missinterprets XTransform values
+static XTransform xtrans_set_picture_transform_hack(XTransform a);
 
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
@@ -831,18 +831,6 @@ void ximage_apply_trans(XImage** im_out, Transform t) {
     *im_out = result;
 }
 
-Rect ximage_calc_damage(XImage* im) {
-    Rect damage = RNIL;
-    for (i32 i = 0; i < im->width; ++i) {
-        for (i32 j = 0; j < im->height; ++j) {
-            if (XGetPixel(im, i, j) != 0) {
-                damage = rect_expand(damage, (Rect) {i, j, i, j});
-            }
-        }
-    }
-    return damage;
-}
-
 Rect rect_expand(Rect a, Rect b) {
     return (Rect) {
         .l = MIN(a.l, b.l),
@@ -864,11 +852,13 @@ XTransform xtrans_scale(double z) {
 }
 
 XTransform xtrans_from_trans(Transform trans) {
+    // clang-format off
     return (XTransform) {{
         {XDoubleToFixed(1), XDoubleToFixed(0), XDoubleToFixed(trans.move.x)},
         {XDoubleToFixed(0), XDoubleToFixed(1), XDoubleToFixed(trans.move.y)},
         {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)},
     }};
+    // clang-format on
 }
 
 XTransform xtrans_mult(XTransform a, XTransform b) {
@@ -885,6 +875,14 @@ XTransform xtrans_mult(XTransform a, XTransform b) {
         }
     }
     return result;
+}
+
+XTransform xtrans_set_picture_transform_hack(XTransform a) {
+    a.matrix[0][0] = XDoubleToFixed(1.0 / XFixedToDouble(a.matrix[0][0]));
+    a.matrix[1][1] = XDoubleToFixed(1.0 / XFixedToDouble(a.matrix[1][1]));
+    a.matrix[0][2] = XDoubleToFixed(-1.0 * XFixedToDouble(a.matrix[0][2]));
+    a.matrix[1][2] = XDoubleToFixed(-1.0 * XFixedToDouble(a.matrix[1][2]));
+    return a;
 }
 
 char* str_new(char const* fmt, ...) {
@@ -1856,7 +1854,6 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             inp->mode.d.trans = (struct InputTransformData) {
                 .curr = TRANSFORM_DEFAULT,
                 .acc = TRANSFORM_DEFAULT,
-                .overlay_bounds = RNIL,
             };
             break;
     }
@@ -2969,6 +2966,8 @@ void draw_selection_circle(
 
 void update_screen(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
+    struct Input* inp = &ctx->input;
+
     /* draw canvas */ {
         fill_rect(
             dc,
@@ -3002,20 +3001,23 @@ void update_screen(struct Ctx* ctx) {
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
 
-            double const z = 1.0 / ZOOM_C(dc);
-            XTransform xtrans_z = xtrans_scale(z);
-            XTransform xtrans_ovr = xtrans_mult(
-                xtrans_from_trans(OVERLAY_TRANSFORM(&ctx->input.mode)),
-                xtrans_z
-            );
-            // HACK xrender missinterprets translate transformations
-            xtrans_ovr.matrix[0][2] =
-                XDoubleToFixed(-1.0 * XFixedToDouble(xtrans_ovr.matrix[0][2]));
-            xtrans_ovr.matrix[1][2] =
-                XDoubleToFixed(-1.0 * XFixedToDouble(xtrans_ovr.matrix[1][2]));
+            struct InputMode const* mode = &inp->mode;
+            XTransform xtrans_zoom = xtrans_scale(ZOOM_C(dc));
+            XTransform xtrans_ovr = xtrans_from_trans(TRANSFORM_DEFAULT);
+            if (mode->t == InputT_Transform) {
+                xtrans_ovr = xtrans_mult(
+                    xtrans_ovr,
+                    xtrans_from_trans(OVERLAY_TRANSFORM(mode))
+                );
+            }
+            xtrans_ovr = xtrans_mult(xtrans_ovr, xtrans_zoom);
 
-            XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_z);
-            XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_ovr);
+            XTransform xtrans_zoom_final =
+                xtrans_set_picture_transform_hack(xtrans_zoom);
+            XTransform xtrans_ovr_final =
+                xtrans_set_picture_transform_hack(xtrans_ovr);
+            XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_zoom_final);
+            XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_ovr_final);
 
             Pair const cv_size = canvas_size(dc);
             // clang-format off
@@ -3047,12 +3049,12 @@ void update_screen(struct Ctx* ctx) {
     // transform mode rectangle
     if (ctx->input.mode.t == InputT_Transform) {
         Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
-        Rect const idmg = ctx->input.mode.d.trans.overlay_bounds;
+        Rect const rect = inp->ovr.rect;
         Pair transformed[] = {
-            point_apply_trans((Pair) {idmg.l, idmg.t}, trans),
-            point_apply_trans((Pair) {idmg.r + 1, idmg.t}, trans),
-            point_apply_trans((Pair) {idmg.r + 1, idmg.b + 1}, trans),
-            point_apply_trans((Pair) {idmg.l, idmg.b + 1}, trans),
+            point_apply_trans((Pair) {rect.l, rect.t}, trans),
+            point_apply_trans((Pair) {rect.r + 1, rect.t}, trans),
+            point_apply_trans((Pair) {rect.r + 1, rect.b + 1}, trans),
+            point_apply_trans((Pair) {rect.l, rect.b + 1}, trans),
         };
         for (u32 i = 0; i < LENGTH(transformed); ++i) {
             Pair from = point_from_cv_to_scr(dc, transformed[i]);
@@ -3764,9 +3766,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
         overlay_expand_rect(&inp->ovr, damage);
 
-        if (inp->mode.t == InputT_Transform) {
-            inp->mode.d.trans.overlay_bounds = ximage_calc_damage(inp->ovr.im);
-        } else if (!IS_RNIL(damage)) {
+        if (inp->mode.t != InputT_Transform && !IS_RNIL(damage)) {
             history_forward(ctx, history_new_item(ctx->dc.cv.im, damage));
             overlay_dump(ctx->dc.cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
@@ -4102,10 +4102,15 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
             if (inp->mode.t == InputT_Transform) {
                 struct InputTransformData* transd = &inp->mode.d.trans;
+                Pair const cur_delta = {
+                    cur.x - inp->press_pt.x,
+                    cur.y - inp->press_pt.y
+                };
+
                 if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
-                    transd->curr.move.x = cur.x - inp->press_pt.x;
-                    transd->curr.move.y = cur.y - inp->press_pt.y;
+                    transd->curr.move = cur_delta;
                 }
+
                 update_screen(ctx);
             } else if (tc->on_drag) {
                 Rect damage = tc->on_drag(ctx, e);
