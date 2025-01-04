@@ -85,7 +85,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define OVERLAY_TRANSFORM(p_mode) \
     ((p_mode)->t != InputT_Transform \
-         ? ((Transform) {0}) \
+         ? TRANSFORM_DEFAULT \
          : ((Transform) { \
              .move.x = \
                  (p_mode)->d.trans.curr.move.x + (p_mode)->d.trans.acc.move.x, \
@@ -94,6 +94,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
          }))
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
+#define TRANSFORM_DEFAULT  ((Transform) {0})
 
 enum {
     A_Clipboard,
@@ -1841,8 +1842,11 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             break;
         case InputT_Interact: break;
         case InputT_Transform:
-            inp->mode.d.trans =
-                (struct InputTransformData) {.overlay_bounds = RNIL};
+            inp->mode.d.trans = (struct InputTransformData) {
+                .curr = TRANSFORM_DEFAULT,
+                .acc = TRANSFORM_DEFAULT,
+                .overlay_bounds = RNIL,
+            };
             break;
     }
 }
@@ -3716,12 +3720,9 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
     } else if (inp->mode.t == InputT_Transform) {
         struct InputTransformData* transd = &inp->mode.d.trans;
-        if (btn_eq(e_btn, BTN_TRANS_MOVE)) {
-            Pair cur = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
-            transd->acc.move.x += cur.x - inp->press_pt.x;
-            transd->acc.move.y += cur.y - inp->press_pt.y;
-        }
-        transd->curr = (Transform) {0};
+        transd->acc.move.x += transd->curr.move.x;
+        transd->acc.move.y += transd->curr.move.y;
+        transd->curr = TRANSFORM_DEFAULT;
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL
