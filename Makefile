@@ -34,8 +34,11 @@ xpaint: $(DEPS) ## build release application
 xpaint-d: $(DEPS) ## build debug application
 	@$(CC) -o $@ $(SRC) $(DEBUG_FLAGS)
 
+xpaint-d-ns: $(DEPS) ## build debug (no symbols) application
+	@$(CC) -o $@ $(SRC) $(DEBUG_NO_SYMBOLS_FLAGS)
+
 clean: ## remove generated files
-	@rm -f ./xpaint ./xpaint-d
+	@rm -f ./xpaint ./xpaint-d ./xpaint-d-ns
 
 install: xpaint ## install application
 	@mkdir -p $(PREFIX)/bin
@@ -77,3 +80,4 @@ DEFINES = -DVERSION=\"$(VERSION)\" \
 CCFLAGS = -std=c99 -pedantic -Wall $(INCS) $(LIBS) $(DEFINES)
 RELEASE_FLAGS = $(CCFLAGS) -flto -O2 -DNDEBUG
 DEBUG_FLAGS = $(CCFLAGS) -g
+DEBUG_NO_SYMBOLS_FLAGS = $(CCFLAGS) -O0 -DNDEBUG
