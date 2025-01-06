@@ -87,6 +87,8 @@ Button const BTN_ZOOM_OUT = {Button5, ControlMask};
 // by default area moves
 Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
 Button const BTN_TRANS_MOVE = {Button1};
+Button const BTN_TRANS_RESIZE = {Button3};
+Button const BTN_TRANS_RESIZE_PROPORTIONAL = {Button3, ShiftMask};
 
 // actions {allowed modes, {key, modifier mask}}
 Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};

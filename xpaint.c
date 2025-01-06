@@ -87,6 +87,10 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
     ((p_mode)->t != InputT_Transform \
          ? TRANSFORM_DEFAULT \
          : ((Transform) { \
+             .scale.x = (p_mode)->d.trans.curr.scale.x \
+                 * (p_mode)->d.trans.acc.scale.x, \
+             .scale.y = (p_mode)->d.trans.curr.scale.y \
+                 * (p_mode)->d.trans.acc.scale.y, \
              .move.x = \
                  (p_mode)->d.trans.curr.move.x + (p_mode)->d.trans.acc.move.x, \
              .move.y = \
@@ -94,7 +98,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
          }))
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
-#define TRANSFORM_DEFAULT  ((Transform) {0})
+#define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
 
 enum {
     A_Clipboard,
@@ -139,6 +143,7 @@ struct Image {
 
 typedef struct {
     Pair move;
+    DPt scale;  // (1, 1) for no scale change
 } Transform;
 
 struct Ctx;
@@ -247,7 +252,7 @@ struct Ctx {
                 } cl;
                 struct InputTransformData {
                     Transform acc;  // accumulated
-                    Transform curr;
+                    Transform curr;  // current mouse drag
                 } trans;
             } d;
         } mode;
@@ -436,10 +441,11 @@ static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
 static usize ximage_data_len(XImage const* im);
-static void ximage_apply_trans(XImage** im_out, Transform t);
+static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
 
+static XTransform xtrans_overlay_transform_mode(struct Input const* input);
 static XTransform xtrans_scale(double z);
 static XTransform xtrans_from_trans(Transform trans);
 static XTransform xtrans_mult(XTransform a, XTransform b);
@@ -469,6 +475,7 @@ static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 static Pair point_apply_trans(Pair p, Transform trans);
+static Pair point_apply_trans_pivot(Pair p, Transform trans, Pair pivot);
 static Pair dpt_to_pt(DPt p);
 static DPt dpt_rotate(DPt p, double deg); // clockwise
 static DPt dpt_add(DPt a, DPt b);
@@ -815,20 +822,33 @@ usize ximage_data_len(XImage const* im) {
     return (usize)im->width * im->height * (im->depth / 8);
 }
 
-void ximage_apply_trans(XImage** im_out, Transform t) {
-    XImage* result =
-        XSubImage(*im_out, 0, 0, (*im_out)->width, (*im_out)->height);
+XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans) {
+    u32 const w = im->width;
+    u32 const h = im->height;
 
-    ximage_clear(result);
-    for (i32 i = 0; i < (*im_out)->width; ++i) {
-        for (i32 j = 0; j < (*im_out)->height; ++j) {
-            argb const pixel = XGetPixel(*im_out, i, j);
-            ximage_put_checked(result, i + t.move.x, j + t.move.y, pixel);
-        }
-    }
+    Pixmap src_pm =
+        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
+    XPutImage(dc->dp, src_pm, dc->screen_gc, im, 0, 0, 0, 0, w, h);
+    Pixmap dst_pm =
+        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
 
-    XDestroyImage(*im_out);
-    *im_out = result;
+    Picture src =
+        XRenderCreatePicture(dc->dp, src_pm, dc->sys.xrnd_pic_format, 0, NULL);
+    Picture dst =
+        XRenderCreatePicture(dc->dp, dst_pm, dc->sys.xrnd_pic_format, 0, NULL);
+
+    XTransform xtrans_pict = xtrans_set_picture_transform_hack(xtrans);
+    XRenderSetPictureTransform(dc->dp, src, &xtrans_pict);
+    XRenderComposite(dc->dp, PictOpSrc, src, None, dst, 0, 0, 0, 0, 0, 0, w, h);
+
+    XImage* result = XGetImage(dc->dp, dst_pm, 0, 0, w, h, AllPlanes, ZPixmap);
+
+    XRenderFreePicture(dc->dp, src);
+    XRenderFreePicture(dc->dp, dst);
+    XFreePixmap(dc->dp, src_pm);
+    XFreePixmap(dc->dp, dst_pm);
+
+    return result;
 }
 
 Rect rect_expand(Rect a, Rect b) {
@@ -844,6 +864,37 @@ Pair rect_dims(Rect a) {
     return (Pair) {a.r - a.l, a.b - a.t};
 }
 
+XTransform xtrans_overlay_transform_mode(struct Input const* input) {
+    XTransform result = xtrans_from_trans(TRANSFORM_DEFAULT);
+
+    if (input->mode.t == InputT_Transform) {
+        Pair const move = OVERLAY_TRANSFORM(&input->mode).move;
+        DPt const scale = OVERLAY_TRANSFORM(&input->mode).scale;
+
+        // move pivot to (0, 0)
+        result.matrix[0][2] -= XDoubleToFixed(input->ovr.rect.l);
+        result.matrix[1][2] -= XDoubleToFixed(input->ovr.rect.t);
+
+        // apply scale transform
+        result = xtrans_mult(
+            result,
+            xtrans_from_trans((Transform) {.scale = scale})
+        );
+
+        // move (0, 0) to pivot (scaled)
+        result.matrix[0][2] +=
+            XDoubleToFixed((double)input->ovr.rect.l / scale.x);
+        result.matrix[1][2] +=
+            XDoubleToFixed((double)input->ovr.rect.t / scale.y);
+
+        // apply move transform (scaled)
+        result.matrix[0][2] += XDoubleToFixed((double)move.x / scale.x);
+        result.matrix[1][2] += XDoubleToFixed((double)move.y / scale.y);
+    }
+
+    return result;
+}
+
 XTransform xtrans_scale(double z) {
     return (XTransform
     ) {{{XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0)},
@@ -852,11 +903,13 @@ XTransform xtrans_scale(double z) {
 }
 
 XTransform xtrans_from_trans(Transform trans) {
+    // move -> scale
+
     // clang-format off
     return (XTransform) {{
-        {XDoubleToFixed(1), XDoubleToFixed(0), XDoubleToFixed(trans.move.x)},
-        {XDoubleToFixed(0), XDoubleToFixed(1), XDoubleToFixed(trans.move.y)},
-        {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)},
+        {XDoubleToFixed(trans.scale.x), XDoubleToFixed(0.0), XDoubleToFixed(trans.move.x)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(trans.scale.y), XDoubleToFixed(trans.move.y)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(0.0), XDoubleToFixed(1.0)},
     }};
     // clang-format on
 }
@@ -1065,6 +1118,18 @@ Pair point_apply_trans(Pair p, Transform trans) {
         XFixedToDouble(m[1][0]) * p.x + XFixedToDouble(m[1][1]) * p.y
             + XFixedToDouble(m[1][2]) * 1,
     };
+}
+
+Pair point_apply_trans_pivot(Pair p, Transform trans, Pair pivot) {
+    Transform move_to_pivot = TRANSFORM_DEFAULT;
+
+    move_to_pivot.move = (Pair) {-pivot.x, -pivot.y};
+    p = point_apply_trans(p, move_to_pivot);
+
+    p = point_apply_trans(p, trans);
+
+    move_to_pivot.move = pivot;
+    return point_apply_trans(p, move_to_pivot);
 }
 
 Pair dpt_to_pt(DPt p) {
@@ -1829,12 +1894,18 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
     struct Input* inp = &ctx->input;
 
     switch (inp->mode.t) {
-        case InputT_Transform:
-            ximage_apply_trans(&inp->ovr.im, OVERLAY_TRANSFORM(&inp->mode));
-            overlay_dump(ctx->dc.cv.im, inp->ovr.im);
+        case InputT_Transform: {
+            XImage* transformed = ximage_apply_xtrans(
+                inp->ovr.im,
+                &ctx->dc,
+                xtrans_overlay_transform_mode(inp)
+            );
+            overlay_dump(ctx->dc.cv.im, transformed);
+            XDestroyImage(transformed);
+
             overlay_clear(&inp->ovr);
             update_screen(ctx);
-            break;
+        } break;
         default: break;
     }
 
@@ -1852,8 +1923,8 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
         case InputT_Interact: break;
         case InputT_Transform:
             inp->mode.d.trans = (struct InputTransformData) {
-                .curr = TRANSFORM_DEFAULT,
                 .acc = TRANSFORM_DEFAULT,
+                .curr = TRANSFORM_DEFAULT,
             };
             break;
     }
@@ -3001,23 +3072,15 @@ void update_screen(struct Ctx* ctx) {
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
 
-            struct InputMode const* mode = &inp->mode;
-            XTransform xtrans_zoom = xtrans_scale(ZOOM_C(dc));
-            XTransform xtrans_ovr = xtrans_from_trans(TRANSFORM_DEFAULT);
-            if (mode->t == InputT_Transform) {
-                xtrans_ovr = xtrans_mult(
-                    xtrans_ovr,
-                    xtrans_from_trans(OVERLAY_TRANSFORM(mode))
-                );
-            }
-            xtrans_ovr = xtrans_mult(xtrans_ovr, xtrans_zoom);
+            XTransform const xtrans_zoom = xtrans_scale(ZOOM_C(dc));
 
-            XTransform xtrans_zoom_final =
+            XTransform xtrans_canvas =
                 xtrans_set_picture_transform_hack(xtrans_zoom);
-            XTransform xtrans_ovr_final =
-                xtrans_set_picture_transform_hack(xtrans_ovr);
-            XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_zoom_final);
-            XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_ovr_final);
+            XTransform xtrans_overlay = xtrans_set_picture_transform_hack(
+                xtrans_mult(xtrans_overlay_transform_mode(inp), xtrans_zoom)
+            );
+            XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_canvas);
+            XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_overlay);
 
             Pair const cv_size = canvas_size(dc);
             // clang-format off
@@ -3050,11 +3113,16 @@ void update_screen(struct Ctx* ctx) {
     if (ctx->input.mode.t == InputT_Transform) {
         Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
         Rect const rect = inp->ovr.rect;
+        Pair const pivot = {rect.l, rect.t};
         Pair transformed[] = {
-            point_apply_trans((Pair) {rect.l, rect.t}, trans),
-            point_apply_trans((Pair) {rect.r + 1, rect.t}, trans),
-            point_apply_trans((Pair) {rect.r + 1, rect.b + 1}, trans),
-            point_apply_trans((Pair) {rect.l, rect.b + 1}, trans),
+            point_apply_trans_pivot((Pair) {rect.l, rect.t}, trans, pivot),
+            point_apply_trans_pivot((Pair) {rect.r + 1, rect.t}, trans, pivot),
+            point_apply_trans_pivot(
+                (Pair) {rect.r + 1, rect.b + 1},
+                trans,
+                pivot
+            ),
+            point_apply_trans_pivot((Pair) {rect.l, rect.b + 1}, trans, pivot),
         };
         for (u32 i = 0; i < LENGTH(transformed); ++i) {
             Pair from = point_from_cv_to_scr(dc, transformed[i]);
@@ -3755,6 +3823,8 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         struct InputTransformData* transd = &inp->mode.d.trans;
         transd->acc.move.x += transd->curr.move.x;
         transd->acc.move.y += transd->curr.move.y;
+        transd->acc.scale.x *= transd->curr.scale.x;
+        transd->acc.scale.y *= transd->curr.scale.y;
         transd->curr = TRANSFORM_DEFAULT;
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
@@ -4107,7 +4177,33 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     cur.y - inp->press_pt.y
                 };
 
-                if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
+                if (btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
+                    || btn_eq(
+                        inp->holding_button,
+                        BTN_TRANS_RESIZE_PROPORTIONAL
+                    )) {
+                    // adjust scale to match cursor
+
+                    Transform trans = transd->acc;
+                    Pair lt = {inp->ovr.rect.l, inp->ovr.rect.t};
+                    Pair rb = {inp->ovr.rect.r, inp->ovr.rect.b};
+                    Pair lt_trans = point_apply_trans_pivot(lt, trans, lt);
+                    Pair rb_trans = point_apply_trans_pivot(rb, trans, lt);
+                    Pair delta = {cur.x - rb_trans.x, cur.y - rb_trans.y};
+                    Pair dims = {
+                        rb_trans.x - lt_trans.x,
+                        rb_trans.y - lt_trans.y
+                    };
+                    DPt scale = {
+                        ((double)dims.x + delta.x) / dims.x,
+                        ((double)dims.y + delta.y) / dims.y
+                    };
+
+                    transd->curr.scale =
+                        btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
+                        ? scale
+                        : (DPt) {MAX(scale.x, scale.y), MAX(scale.x, scale.y)};
+                } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
                     transd->curr.move = cur_delta;
                 }
 
