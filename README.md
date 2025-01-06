@@ -8,7 +8,7 @@
 
 ## Documentation
 
-For detailed program description and usage see [man 1 xpaint](./xpaint.1).
+For detailed program description and usage see [xpaint(1)](./xpaint.1).
 
 ## Requirements
 
