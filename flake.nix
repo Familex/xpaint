@@ -32,6 +32,13 @@
 
               buildPhase = "${make} ${name}";
               installPhase = "${make} PREFIX=$out install";
+
+              meta = {
+                description = "simple paint application written for X";
+                homepage = "https://github.com/Familex/xpaint";
+                meta.license = pkgs.lib.licenses.mit;
+                mainProgram = "xpaint";
+              };
             };
         };
 
