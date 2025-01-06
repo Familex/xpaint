@@ -538,6 +538,7 @@ static void historyarr_clear(struct HistItem** hist);
 static void ximage_clear(XImage* im);
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
+static Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col1, argb col2);
 static Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2);
 // line from `a` to `b` is a polygon height (a is a base);
@@ -563,7 +564,8 @@ static Pair canvas_size(struct DrawCtx const* dc);
 static void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert);
 static void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert);
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col);
-static int draw_line(struct DrawCtx* dc, Pair from, Pair to, enum Schm sc, Bool invert);
+static int draw_line_ex(struct DrawCtx* dc, Pair from, Pair to, u32 w, int line_style, enum Schm sc, Bool invert);
+static int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool invert);
 static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
@@ -2095,11 +2097,14 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     i32 const h = end_y - begin_y;
 
     overlay_clear(&inp->ovr);
-    return canvas_fill_rect(
+    return canvas_dash_rect(
         inp->ovr.im,
         (Pair) {begin_x, begin_y},
         (Pair) {w, h},
-        SEL_TOOL_COL
+        2,
+        4,
+        COL_BG(dc, SchmNorm),
+        COL_FG(dc, SchmNorm)
     );
 }
 
@@ -2385,6 +2390,54 @@ Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
     }
 
     arrfree(queue_arr);
+
+    return damage;
+}
+
+Rect canvas_dash_rect(
+    XImage* im,
+    Pair c,
+    Pair dims,
+    u32 w,
+    u32 dash_w,
+    argb col1,
+    argb col2
+) {
+    Rect damage = RNIL;
+
+    Pair const corners[] = {
+        c,
+        {c.x + dims.x, c.y},
+        {c.x + dims.x, c.y + dims.y},
+        {c.x, c.y + dims.y}
+    };
+
+    for (u32 i = 0; i < LENGTH(corners); ++i) {
+        Pair curr = corners[i];
+        Pair const to = corners[(i + 1) % LENGTH(corners)];
+        Pair const delta = {to.x - curr.x, to.y - curr.y};
+        assert(delta.x == 0 || delta.y == 0);
+        Pair const delta_sign = {
+            delta.x == 0      ? 0
+                : delta.x > 0 ? 1
+                              : -1,
+            delta.y == 0      ? 0
+                : delta.y > 0 ? 1
+                              : -1
+        };
+
+        u32 iterations = 0;
+        while (!PAIR_EQ(curr, to) && iterations < 10000000) {
+            Pair const lt = (Pair) {curr.x - (i32)w / 2, curr.y - (i32)w / 2};
+            argb col = iterations / dash_w % 2 ? col1 : col2;
+            Rect d = canvas_fill_rect(im, lt, (Pair) {(i32)w, (i32)w}, col);
+            damage = rect_expand(damage, d);
+
+            curr.x += delta_sign.x;
+            curr.y += delta_sign.y;
+            iterations += 1;
+        }
+    }
 
     return damage;
 }
@@ -2861,27 +2914,30 @@ int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col) {
     );
 }
 
+int draw_line_ex(
+    struct DrawCtx* dc,
+    Pair from,
+    Pair to,
+    u32 w,
+    int line_style,
+    enum Schm sc,
+    Bool invert
+) {
+    GC gc = dc->screen_gc;
+    XSetForeground(dc->dp, gc, invert ? COL_BG(dc, sc) : COL_FG(dc, sc));
+    XSetLineAttributes(dc->dp, gc, w, line_style, CapButt, JoinMiter);
+    return XDrawLine(dc->dp, dc->back_buffer, gc, from.x, from.y, to.x, to.y);
+}
+
 int draw_line(
     struct DrawCtx* dc,
     Pair from,
     Pair to,
+    u32 w,
     enum Schm sc,
     Bool invert
 ) {
-    XSetForeground(
-        dc->dp,
-        dc->screen_gc,
-        invert ? COL_BG(dc, sc) : COL_FG(dc, sc)
-    );
-    return XDrawLine(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
-        from.x,
-        from.y,
-        to.x,
-        to.y
-    );
+    return draw_line_ex(dc, from, to, w, LineSolid, sc, invert);
 }
 
 u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
@@ -3130,24 +3186,8 @@ void update_screen(struct Ctx* ctx) {
                 dc,
                 transformed[(i + 1) % LENGTH(transformed)]
             );
-            XSetForeground(dc->dp, dc->screen_gc, 0xFF000000);
-            XSetLineAttributes(
-                dc->dp,
-                dc->screen_gc,
-                3,
-                LineOnOffDash,
-                CapButt,
-                JoinMiter
-            );
-            XDrawLine(
-                dc->dp,
-                dc->back_buffer,
-                dc->screen_gc,
-                from.x,
-                from.y,
-                to.x,
-                to.y
-            );
+            draw_line(dc, from, to, 2, SchmNorm, True);
+            draw_line_ex(dc, from, to, 2, LineOnOffDash, SchmNorm, False);
         }
     }
 
@@ -3159,8 +3199,10 @@ void update_screen(struct Ctx* ctx) {
         Pair lb = (Pair) {center.x - size, center.y + size};
         Pair rt = (Pair) {center.x + size, center.y - size};
         Pair rb = (Pair) {center.x + size, center.y + size};
-        draw_line(dc, lt, rb, SchmNorm, True);
-        draw_line(dc, lb, rt, SchmNorm, True);
+        draw_line(dc, lt, rb, 1, SchmNorm, True);
+        draw_line_ex(dc, lt, rb, 1, LineOnOffDash, SchmNorm, False);
+        draw_line(dc, lb, rt, 1, SchmNorm, True);
+        draw_line_ex(dc, lb, rt, 1, LineOnOffDash, SchmNorm, False);
     }
 
     update_statusline(ctx);  // backbuffer swapped here
