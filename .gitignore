@@ -4,6 +4,7 @@
 /xpaint
 /xpaint-d
 /xpaint-d-ns
+/xpaint*.AppImage
 /result
 
 # build
