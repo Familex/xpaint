@@ -2,22 +2,24 @@
 *
 !*/
 
-!README.md
-!xpaint.1
+!/README.md
+!/xpaint.1
 
-!config.h
-!types.h
-!xpaint.c
-!res/**
-!lib/**
+!/config.h
+!/types.h
+!/xpaint.c
+!/res/**
+!/lib/**
 
-!Makefile
-!.clang-format
-!.clang-tidy
-!flake.nix
-!flake.lock
-!share/**
+!/Makefile
+!/.clang-format
+!/.clang-tidy
+!/flake.nix
+!/flake.lock
+!/share/**
 
-!LICENSE
-!.gitignore
-!.gitattributes
+!/LICENSE
+!/.gitignore
+!/.gitattributes
+
+/.direnv/
