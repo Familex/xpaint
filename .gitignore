@@ -1,23 +1,23 @@
-# artifacts
-/private/
-/build/
-/xpaint
-/xpaint-d
-/xpaint-d-ns
-/xpaint*.AppImage
-/result
+# whitelist gitignore
+*
+!*/
 
-# build
-/.cache/
-/compile_commands.json
-/.kdev*/
+!README.md
+!xpaint.1
 
-# env
-/.envrc
-/.direnv/
+!config.h
+!types.h
+!xpaint.c
+!res/**
+!lib/**
 
-# analyzers
-/flamegraph.svg
-/heaptrack.*.zst
-/perf.data*
-/gdb.txt
+!Makefile
+!.clang-format
+!.clang-tidy
+!flake.nix
+!flake.lock
+!share/**
+
+!LICENSE
+!.gitignore
+!.gitattributes
