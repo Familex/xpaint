@@ -77,6 +77,7 @@ i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
 Button const BTN_SEL_CIRC = {Button3};
+Button const BTN_CANVAS_RESIZE = {Button3, ControlMask};
 Button const BTN_SCROLL_DRAG = {Button2};
 Button const BTN_SCROLL_UP = {Button4};
 Button const BTN_SCROLL_DOWN = {Button5};

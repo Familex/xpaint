@@ -442,6 +442,7 @@ static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
 static usize ximage_data_len(XImage const* im);
 static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
+
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
 
@@ -566,10 +567,11 @@ static void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool inver
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col);
 static int draw_line_ex(struct DrawCtx* dc, Pair from, Pair to, u32 w, int line_style, enum Schm sc, Bool invert);
 static int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool invert);
+static void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w);
 static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
-static void update_screen(struct Ctx* ctx);
+static void update_screen(struct Ctx* ctx, Pair cur_scr);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
 
@@ -1906,7 +1908,7 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             XDestroyImage(transformed);
 
             overlay_clear(&inp->ovr);
-            update_screen(ctx);
+            update_screen(ctx, PNIL);
         } break;
         default: break;
     }
@@ -2921,10 +2923,9 @@ int draw_line(
     return draw_line_ex(dc, from, to, w, LineSolid, sc, invert);
 }
 
-u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
-    XGlyphInfo ext;
-    XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
-    return ext.xOff;
+void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w) {
+    draw_line(dc, from, to, w, SchmNorm, True);
+    draw_line_ex(dc, from, to, w, LineOnOffDash, SchmNorm, False);
 }
 
 u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
@@ -2932,6 +2933,12 @@ u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
     char buf[MAX_BUF];
     snprintf(buf, MAX_BUF, format, i);
     return get_string_width(dc, buf, strlen(buf));
+}
+
+u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
+    XGlyphInfo ext;
+    XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
+    return ext.xOff;
 }
 
 void draw_selection_circle(
@@ -3072,7 +3079,7 @@ void draw_selection_circle(
     }
 }
 
-void update_screen(struct Ctx* ctx) {
+void update_screen(struct Ctx* ctx, Pair cur_scr) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
 
@@ -3172,18 +3179,26 @@ void update_screen(struct Ctx* ctx) {
         }
     }
 
-    if (WND_ANCHOR_CROSS_SIZE && !IS_PNIL(ctx->input.anchor)
-        && !ctx->input.is_dragging) {
+    if (WND_ANCHOR_CROSS_SIZE && !IS_PNIL(inp->anchor) && !inp->is_dragging) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
-        Pair center = point_from_cv_to_scr(dc, ctx->input.anchor);
-        Pair lt = (Pair) {center.x - size, center.y - size};
-        Pair lb = (Pair) {center.x - size, center.y + size};
-        Pair rt = (Pair) {center.x + size, center.y - size};
-        Pair rb = (Pair) {center.x + size, center.y + size};
-        draw_line(dc, lt, rb, 1, SchmNorm, True);
-        draw_line_ex(dc, lt, rb, 1, LineOnOffDash, SchmNorm, False);
-        draw_line(dc, lb, rt, 1, SchmNorm, True);
-        draw_line_ex(dc, lb, rt, 1, LineOnOffDash, SchmNorm, False);
+        Pair c = point_from_cv_to_scr(dc, inp->anchor);
+        Rect const rect = {c.x - size, c.y - size, c.x + size, c.y + size};
+        draw_dash_line(dc, (Pair) {rect.l, rect.b}, (Pair) {rect.r, rect.t}, 1);
+        draw_dash_line(dc, (Pair) {rect.l, rect.t}, (Pair) {rect.r, rect.b}, 1);
+    }
+
+    if (inp->is_dragging
+        && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE)) {
+        Pair const cur = point_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
+
+        Pair const lt = point_from_cv_to_scr_xy(dc, 0, 0);
+        Pair const rt = point_from_cv_to_scr_xy(dc, cur.x, 0);
+        Pair const rb = point_from_cv_to_scr_xy(dc, cur.x, cur.y);
+        Pair const lb = point_from_cv_to_scr_xy(dc, 0, cur.y);
+        draw_dash_line(dc, lt, rt, 1);
+        draw_dash_line(dc, rt, rb, 1);
+        draw_dash_line(dc, rb, lb, 1);
+        draw_dash_line(dc, lb, lt, 1);
     }
 
     update_statusline(ctx);  // backbuffer swapped here
@@ -3814,7 +3829,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         inp->damage = damage;
     }
 
-    update_screen(ctx);
+    update_screen(ctx, (Pair) {e->x, e->y});
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
     ctx->input.press_pt = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
@@ -3827,21 +3842,25 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonReleasedEvent* e = (XButtonReleasedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
+    struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
     Button e_btn = get_btn(e);
 
-    if (btn_eq(e_btn, BTN_SCROLL_UP)) {
-        canvas_scroll(&ctx->dc.cv, (Pair) {0, 10});
+    if (btn_eq(e_btn, BTN_CANVAS_RESIZE)) {
+        Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
+        canvas_resize(ctx, cur.x, cur.y);
+    } else if (btn_eq(e_btn, BTN_SCROLL_UP)) {
+        canvas_scroll(&dc->cv, (Pair) {0, 10});
     } else if (btn_eq(e_btn, BTN_SCROLL_DOWN)) {
-        canvas_scroll(&ctx->dc.cv, (Pair) {0, -10});
+        canvas_scroll(&dc->cv, (Pair) {0, -10});
     } else if (btn_eq(e_btn, BTN_SCROLL_LEFT)) {
-        canvas_scroll(&ctx->dc.cv, (Pair) {-10, 0});
+        canvas_scroll(&dc->cv, (Pair) {-10, 0});
     } else if (btn_eq(e_btn, BTN_SCROLL_RIGHT)) {
-        canvas_scroll(&ctx->dc.cv, (Pair) {10, 0});
+        canvas_scroll(&dc->cv, (Pair) {10, 0});
     } else if (btn_eq(e_btn, BTN_ZOOM_IN)) {
-        canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1);
+        canvas_change_zoom(dc, inp->prev_c, 1);
     } else if (btn_eq(e_btn, BTN_ZOOM_OUT)) {
-        canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
+        canvas_change_zoom(dc, inp->prev_c, -1);
     } else if (inp->mode.t == InputT_Transform) {
         struct InputTransformData* transd = &inp->mode.d.trans;
         transd->acc.move.x += transd->curr.move.x;
@@ -3861,8 +3880,8 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
 
         Rect final_damage = rect_expand(inp->damage, curr_damage);
         if (!IS_RNIL(final_damage) && inp->mode.t != InputT_Transform) {
-            history_forward(ctx, history_new_item(ctx->dc.cv.im, final_damage));
-            overlay_dump(ctx->dc.cv.im, inp->ovr.im);
+            history_forward(ctx, history_new_item(dc->cv.im, final_damage));
+            overlay_dump(dc->cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
         }
 
@@ -3874,7 +3893,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     inp->press_pt = PNIL;
 
     sel_circ_free_and_hide(&ctx->sc);
-    update_screen(ctx);
+    update_screen(ctx, (Pair) {e->x, e->y});
 
     return HR_Ok;
 }
@@ -3884,7 +3903,9 @@ HdlrResult destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 HdlrResult expose_hdlr(struct Ctx* ctx, XEvent* event) {
-    update_screen(ctx);
+    XExposeEvent* e = (XExposeEvent*)event;
+
+    update_screen(ctx, (Pair) {e->x, e->y});
     return HR_Ok;
 }
 
@@ -4152,7 +4173,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     // FIXME extra updates on invalid events
-    update_screen(ctx);
+    update_screen(ctx, (Pair) {e.x, e.y});
     if (cl_msg_to_show) {
         show_message(ctx, cl_msg_to_show);
         str_free(&cl_msg_to_show);
@@ -4191,7 +4212,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             // last update will be in button_release_hdlr
             if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
                 ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
-                update_screen(ctx);
+                update_screen(ctx, (Pair) {e->x, e->y});
             }
         } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
             if (inp->mode.t == InputT_Transform) {
@@ -4231,7 +4252,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     transd->curr.move = cur_delta;
                 }
 
-                update_screen(ctx);
+                update_screen(ctx, (Pair) {e->x, e->y});
             } else if (tc->on_drag) {
                 Rect damage = tc->on_drag(ctx, e);
                 overlay_expand_rect(&inp->ovr, damage);
@@ -4241,7 +4262,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
                 }
                 // FIXME it here to draw selection tool (returns RNIL in on_drag)
-                update_screen(ctx);
+                update_screen(ctx, (Pair) {e->x, e->y});
             }
         }
     } else {
@@ -4253,7 +4274,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             if (!IS_RNIL(damage)) {
                 inp->damage = rect_expand(inp->damage, damage);
                 inp->last_proc_drag_ev_us = 0;
-                update_screen(ctx);
+                update_screen(ctx, (Pair) {e->x, e->y});
             }
         }
     }
