@@ -3888,12 +3888,12 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         inp->damage = RNIL;
     }
 
-    sel_circ_free_and_hide(&ctx->sc);
-    update_screen(ctx);
-
     inp->is_holding = False;
     inp->is_dragging = False;
     inp->press_pt = PNIL;
+
+    sel_circ_free_and_hide(&ctx->sc);
+    update_screen(ctx);
 
     return HR_Ok;
 }
