@@ -3875,11 +3875,12 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
             ctx->sc.items_arr[selected_item].on_select(ctx);
         }
     } else if (tc->on_release) {
-        Rect damage = rect_expand(tc->on_release(ctx, e), inp->damage);
-        overlay_expand_rect(&inp->ovr, damage);
+        Rect curr_damage = tc->on_release(ctx, e);
+        overlay_expand_rect(&inp->ovr, curr_damage);
 
-        if (inp->mode.t != InputT_Transform && !IS_RNIL(damage)) {
-            history_forward(ctx, history_new_item(ctx->dc.cv.im, damage));
+        Rect final_damage = rect_expand(inp->damage, curr_damage);
+        if (!IS_RNIL(final_damage) && inp->mode.t != InputT_Transform) {
+            history_forward(ctx, history_new_item(ctx->dc.cv.im, final_damage));
             overlay_dump(ctx->dc.cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
         }
