@@ -2465,15 +2465,6 @@ static u8 canvas_brush_get_a(u32 w, double r, Pair p) {
     return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
 }
 
-static u8 canvas_figure_circle_get_a_fill(u32 w, double r, Pair p) {
-    return 0xFF;
-}
-
-static u8 canvas_figure_circle_get_a(u32 w, double r, Pair p) {
-    double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
-    return (r - curr_r < w) * 0xFF;
-}
-
 static Pair
 get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
     switch (type) {
@@ -2498,24 +2489,14 @@ Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2) {
     }
     struct FigureData const* fig = &tc->d.fig;
     argb const col = *tc_curr_col(tc);
-    i32 const dx = p1.x - p2.x;
-    i32 const dy = p1.y - p2.y;
 
     switch (fig->curr) {
-        case Figure_Circle: {
-            double const d = sqrt(dx * dx + dy * dy);
-            return canvas_circle(
-                im,
-                tc,
-                fig->fill ? &canvas_figure_circle_get_a_fill
-                          : &canvas_figure_circle_get_a,
-                (u32)d,
-                (Pair) {(p1.x + p2.x) / 2, (p1.y + p2.y) / 2}
-            );
-        }
+        case Figure_Circle:
         case Figure_Rectangle:
         case Figure_Triangle: {
-            u32 sides = fig->curr == Figure_Triangle ? 3 : 4;
+            u32 sides = fig->curr == Figure_Triangle ? 3
+                : fig->curr == Figure_Rectangle      ? 4
+                                                     : 250;
             Rect damage = canvas_regular_poly(im, tc, sides, p2, p1);
             if (fig->fill) {
                 Pair const im_dims = {im->width, im->height};
