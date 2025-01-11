@@ -440,8 +440,6 @@ static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
-static usize ximage_data_len(XImage const* im);
-static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
 
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
@@ -531,14 +529,19 @@ static Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* 
 
 static struct HistItem history_new_item(XImage* im, Rect rect);
 static Bool history_move(struct Ctx* ctx, Bool forward);
-static void history_forward(struct Ctx* ctx, struct HistItem hist_opt);
+static void history_forward(struct Ctx* ctx, struct HistItem hist);
 static void history_apply(struct Ctx* ctx, struct HistItem* hist);
 static void history_free(struct HistItem* hist);
 static void historyarr_clear(struct HistItem** hist);
 
+static usize ximage_data_len(XImage const* im);
+static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
+static void ximage_blend(XImage* dest, XImage* overlay);
 static void ximage_clear(XImage* im);
 static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
+static Rect ximage_calc_damage(XImage* im);
+
 static Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col1, argb col2);
 static Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2);
@@ -553,10 +556,9 @@ static Bool canvas_load(struct Ctx* ctx, struct Image const* image);
 static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
-static void overlay_clear(struct InputOverlay* ovr);
-static void overlay_dump(XImage* dest, XImage* overlay);
-static void overlay_expand_rect(struct InputOverlay* ovr, Rect rect);
 static void canvas_scroll(struct Canvas* cv, Pair delta);
+static void overlay_clear(struct InputOverlay* ovr);
+static void overlay_expand_rect(struct InputOverlay* ovr, Rect rect);
 
 static u32 statusline_height(struct DrawCtx const* dc);
 // window size - interface parts (e.g. statusline)
@@ -819,40 +821,6 @@ static Bool can_action(struct Input const* input, Key curr_key, Action act) {
         case InputT_Transform: return (i32)act.mode & MF_Trans;
     }
     UNREACHABLE();
-}
-
-usize ximage_data_len(XImage const* im) {
-    // FIXME is it correct?
-    return (usize)im->width * im->height * (im->depth / 8);
-}
-
-XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans) {
-    u32 const w = im->width;
-    u32 const h = im->height;
-
-    Pixmap src_pm =
-        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
-    XPutImage(dc->dp, src_pm, dc->screen_gc, im, 0, 0, 0, 0, w, h);
-    Pixmap dst_pm =
-        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
-
-    Picture src =
-        XRenderCreatePicture(dc->dp, src_pm, dc->sys.xrnd_pic_format, 0, NULL);
-    Picture dst =
-        XRenderCreatePicture(dc->dp, dst_pm, dc->sys.xrnd_pic_format, 0, NULL);
-
-    XTransform xtrans_pict = xtrans_set_picture_transform_hack(xtrans);
-    XRenderSetPictureTransform(dc->dp, src, &xtrans_pict);
-    XRenderComposite(dc->dp, PictOpSrc, src, None, dst, 0, 0, 0, 0, 0, 0, w, h);
-
-    XImage* result = XGetImage(dc->dp, dst_pm, 0, 0, w, h, AllPlanes, ZPixmap);
-
-    XRenderFreePicture(dc->dp, src);
-    XRenderFreePicture(dc->dp, dst);
-    XFreePixmap(dc->dp, src_pm);
-    XFreePixmap(dc->dp, dst_pm);
-
-    return result;
 }
 
 Rect rect_expand(Rect a, Rect b) {
@@ -1895,16 +1863,16 @@ void cl_pop(struct InputConsoleData* cl) {
 }
 
 void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
+    struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
 
     switch (inp->mode.t) {
         case InputT_Transform: {
-            XImage* transformed = ximage_apply_xtrans(
-                inp->ovr.im,
-                &ctx->dc,
-                xtrans_overlay_transform_mode(inp)
-            );
-            overlay_dump(ctx->dc.cv.im, transformed);
+            XTransform const xtrans = xtrans_overlay_transform_mode(inp);
+            XImage* transformed = ximage_apply_xtrans(inp->ovr.im, dc, xtrans);
+            Rect const damage = ximage_calc_damage(transformed);
+            history_forward(ctx, history_new_item(dc->cv.im, damage));
+            ximage_blend(dc->cv.im, transformed);
             XDestroyImage(transformed);
 
             overlay_clear(&inp->ovr);
@@ -2070,6 +2038,7 @@ Rect tool_selection_on_release(
 
     overlay_clear(&inp->ovr);
     Rect damage = canvas_copy_region(inp->ovr.im, dc->cv.im, p, dims, p);
+    history_forward(ctx, history_new_item(dc->cv.im, damage));
 
     // move on BTN_MAIN, copy on BTN_COPY_SELECTION
     if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
@@ -2306,11 +2275,11 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     return True;
 }
 
-void history_forward(struct Ctx* ctx, struct HistItem hist_opt) {
+void history_forward(struct Ctx* ctx, struct HistItem hist) {
     trace("xpaint: history forward");
     // next history invalidated after user action
     historyarr_clear(&ctx->hist_nextarr);
-    arrpush(ctx->hist_prevarr, hist_opt);
+    arrpush(ctx->hist_prevarr, hist);
 }
 
 void history_apply(struct Ctx* ctx, struct HistItem* hist) {
@@ -2332,6 +2301,55 @@ void historyarr_clear(struct HistItem** histarr) {
         history_free(&(*histarr)[i]);
     }
     arrfree(*histarr);
+}
+
+usize ximage_data_len(XImage const* im) {
+    // FIXME is it correct?
+    return (usize)im->width * im->height * (im->depth / 8);
+}
+
+XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans) {
+    u32 const w = im->width;
+    u32 const h = im->height;
+
+    Pixmap src_pm =
+        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
+    XPutImage(dc->dp, src_pm, dc->screen_gc, im, 0, 0, 0, 0, w, h);
+    Pixmap dst_pm =
+        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
+
+    Picture src =
+        XRenderCreatePicture(dc->dp, src_pm, dc->sys.xrnd_pic_format, 0, NULL);
+    Picture dst =
+        XRenderCreatePicture(dc->dp, dst_pm, dc->sys.xrnd_pic_format, 0, NULL);
+
+    XTransform xtrans_pict = xtrans_set_picture_transform_hack(xtrans);
+    XRenderSetPictureTransform(dc->dp, src, &xtrans_pict);
+    XRenderComposite(dc->dp, PictOpSrc, src, None, dst, 0, 0, 0, 0, 0, 0, w, h);
+
+    XImage* result = XGetImage(dc->dp, dst_pm, 0, 0, w, h, AllPlanes, ZPixmap);
+
+    XRenderFreePicture(dc->dp, src);
+    XRenderFreePicture(dc->dp, dst);
+    XFreePixmap(dc->dp, src_pm);
+    XFreePixmap(dc->dp, dst_pm);
+
+    return result;
+}
+
+void ximage_blend(XImage* dest, XImage* overlay) {
+    for (i32 x = 0; x < overlay->width; ++x) {
+        for (i32 y = 0; y < overlay->height; ++y) {
+            argb ovr = XGetPixel(overlay, x, y);
+            if (ovr & ARGB_ALPHA) {
+                argb bg = XGetPixel(dest, x, y);
+                // make first argument opaque and use its opacity as third argument.
+                argb result =
+                    argb_blend(argb_normalize(ovr), bg, (ovr >> 0x18) & 0xFF);
+                ximage_put_checked(dest, x, y, result);
+            }
+        }
+    }
 }
 
 void ximage_clear(XImage* im) {
@@ -2393,6 +2411,18 @@ Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
 
     arrfree(queue_arr);
 
+    return damage;
+}
+
+Rect ximage_calc_damage(XImage* im) {
+    Rect damage = RNIL;
+    for (i32 i = 0; i < im->width; ++i) {
+        for (i32 j = 0; j < im->height; ++j) {
+            if (XGetPixel(im, i, j) != 0) {
+                damage = rect_expand(damage, (Rect) {i, j, i, j});
+            }
+        }
+    }
     return damage;
 }
 
@@ -2805,33 +2835,18 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     }
 }
 
+void canvas_scroll(struct Canvas* cv, Pair delta) {
+    cv->scroll.x += delta.x;
+    cv->scroll.y += delta.y;
+}
+
 void overlay_clear(struct InputOverlay* ovr) {
     ximage_clear(ovr->im);
     ovr->rect = RNIL;
 }
 
-void overlay_dump(XImage* dest, XImage* overlay) {
-    for (i32 x = 0; x < overlay->width; ++x) {
-        for (i32 y = 0; y < overlay->height; ++y) {
-            argb ovr = XGetPixel(overlay, x, y);
-            if (ovr & ARGB_ALPHA) {
-                argb bg = XGetPixel(dest, x, y);
-                // make first argument opaque and use its opacity as third argument.
-                argb result =
-                    argb_blend(argb_normalize(ovr), bg, (ovr >> 0x18) & 0xFF);
-                ximage_put_checked(dest, x, y, result);
-            }
-        }
-    }
-}
-
 void overlay_expand_rect(struct InputOverlay* ovr, Rect rect) {
     ovr->rect = rect_expand(ovr->rect, rect);
-}
-
-void canvas_scroll(struct Canvas* cv, Pair delta) {
-    cv->scroll.x += delta.x;
-    cv->scroll.y += delta.y;
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
@@ -3881,7 +3896,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         Rect final_damage = rect_expand(inp->damage, curr_damage);
         if (!IS_RNIL(final_damage) && inp->mode.t != InputT_Transform) {
             history_forward(ctx, history_new_item(dc->cv.im, final_damage));
-            overlay_dump(dc->cv.im, inp->ovr.im);
+            ximage_blend(dc->cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
         }
 
