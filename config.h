@@ -73,7 +73,10 @@ u32 const CANVAS_DEFAULT_HEIGHT = 700;
 i32 const CANVAS_MIN_ZOOM = -10;
 i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
 
-// ----- keymap. use ANY_MOD to ignore modifier, ANY_KEY to ignore key -----
+// ---------------------------- keymap ---------------------------------------
+// use ANY_MOD to ignore modifier
+// use ANY_KEY to ignore key
+// use ANY_MODE to ignore current mode
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
 Button const BTN_SEL_CIRC = {Button3};
@@ -94,23 +97,20 @@ Button const BTN_TRANS_RESIZE_PROPORTIONAL = {Button3, ShiftMask};
 // actions {allowed modes, {key, modifier mask}}
 Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
 Action const ACT_REVERT = {MF_Int, {XK_Z, ShiftMask | ControlMask}};
-Action const ACT_COPY_AREA = {MF_Int, {XK_c, ControlMask}};  // to clipboard
+Action const ACT_COPY_AREA = {ANY_MODE, {XK_c, ControlMask}};  // to clipboard
 Action const ACT_SWAP_COLOR = {MF_Int, {XK_x}};
-Action const ACT_ZOOM_IN = {MF_Int, {XK_equal, ControlMask}};
-Action const ACT_ZOOM_OUT = {MF_Int, {XK_minus, ControlMask}};
+Action const ACT_ZOOM_IN = {ANY_MODE, {XK_equal, ControlMask}};
+Action const ACT_ZOOM_OUT = {ANY_MODE, {XK_minus, ControlMask}};
 Action const ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up}};
 Action const ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down}};
 Action const ACT_SAVE_TO_FILE = {MF_Int | MF_Color, {XK_s, ControlMask}};
-Action const ACT_EXIT = {MF_Int | MF_Color, {XK_q}};
+Action const ACT_EXIT = {ANY_MODE, {XK_q}};
 Action const ACT_ADD_COLOR = {MF_Color, {XK_Up, ControlMask}};
 Action const ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right}};
 Action const ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left}};
 
 // mode switch
-Action const ACT_MODE_INTERACT = {
-    MF_Color,  // XXX list all modes
-    {XK_Escape}
-};  // return to interact
+Action const ACT_MODE_INTERACT = {ANY_MODE, {XK_Escape}};  // return to interact
 Action const ACT_MODE_COLOR = {MF_Int, {XK_c}};
 Action const ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
 

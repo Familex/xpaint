@@ -6,11 +6,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ANY_MOD UINT_MAX
-#define ANY_KEY UINT_MAX
+#define ANY_MOD  UINT_MAX
+#define ANY_KEY  UINT_MAX
+#define ANY_MODE UINT_MAX
 // default value for signed integers
-#define NIL     (-1)
-#define PNIL    ((Pair) {NIL, NIL})
+#define NIL      (-1)
+#define PNIL     ((Pair) {NIL, NIL})
 #define RNIL \
     ((Rect) {.l = INT32_MAX, .t = INT32_MAX, .r = INT32_MIN, .b = INT32_MIN})
 
@@ -89,7 +90,7 @@ typedef struct {
     enum {
         MF_Int = 0x1,  // interact
         MF_Color = 0x2,  // color
-        MF_Trans = 0x3,  // transform
+        MF_Trans = 0x4,  // transform
         // MF_Term managed manually because can use any key
     } mode;
     Key key;
