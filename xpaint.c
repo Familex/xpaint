@@ -559,6 +559,8 @@ static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
 static void canvas_scroll(struct Canvas* cv, Pair delta);
 static void overlay_clear(struct InputOverlay* ovr);
 static void overlay_expand_rect(struct InputOverlay* ovr, Rect rect);
+static struct InputOverlay get_transformed_overlay(struct DrawCtx* dc, struct Input const* inp);
+static void overlay_free(struct InputOverlay* ovr);
 
 static u32 statusline_height(struct DrawCtx const* dc);
 // window size - interface parts (e.g. statusline)
@@ -1868,12 +1870,11 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
 
     switch (inp->mode.t) {
         case InputT_Transform: {
-            XTransform const xtrans = xtrans_overlay_transform_mode(inp);
-            XImage* transformed = ximage_apply_xtrans(inp->ovr.im, dc, xtrans);
-            Rect const damage = ximage_calc_damage(transformed);
-            history_forward(ctx, history_new_item(dc->cv.im, damage));
-            ximage_blend(dc->cv.im, transformed);
-            XDestroyImage(transformed);
+            struct InputOverlay transformed = get_transformed_overlay(dc, inp);
+
+            history_forward(ctx, history_new_item(dc->cv.im, transformed.rect));
+            ximage_blend(dc->cv.im, transformed.im);
+            overlay_free(&transformed);
 
             overlay_clear(&inp->ovr);
             update_screen(ctx, PNIL);
@@ -1921,11 +1922,7 @@ char const* input_mode_as_str(enum InputTag mode_tag) {
 
 void input_free(struct Input* input) {
     input_mode_free(&input->mode);
-    if (input->ovr.im) {
-        XDestroyImage(input->ovr.im);
-        input->ovr.im = NULL;
-        input->ovr.rect = RNIL;
-    }
+    overlay_free(&input->ovr);
 }
 
 // clang-format off
@@ -2847,6 +2844,22 @@ void overlay_clear(struct InputOverlay* ovr) {
 
 void overlay_expand_rect(struct InputOverlay* ovr, Rect rect) {
     ovr->rect = rect_expand(ovr->rect, rect);
+}
+
+static struct InputOverlay
+get_transformed_overlay(struct DrawCtx* dc, struct Input const* inp) {
+    XTransform const xtrans = xtrans_overlay_transform_mode(inp);
+    XImage* im = ximage_apply_xtrans(inp->ovr.im, dc, xtrans);
+    Rect const rect = ximage_calc_damage(im);
+    return (struct InputOverlay) {.im = im, .rect = rect};
+}
+
+void overlay_free(struct InputOverlay* ovr) {
+    if (ovr->im) {
+        XDestroyImage(ovr->im);
+        ovr->im = NULL;
+    }
+    ovr->rect = RNIL;
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
@@ -4108,22 +4121,27 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         if (ctx->sel_buf.im != NULL) {
             XDestroyImage(ctx->sel_buf.im);
         }
+
         if (IS_RNIL(inp->ovr.rect)) {
             // copy all canvas
             i32 const w = ctx->dc.cv.im->width;
             i32 const h = ctx->dc.cv.im->height;
             ctx->sel_buf.im = XSubImage(ctx->dc.cv.im, 0, 0, w, h);
         } else {
-            // copy cropped overlay
-            Pair dims = rect_dims(inp->ovr.rect);
+            // copy overlay
+            struct InputOverlay transformed =
+                get_transformed_overlay(&ctx->dc, inp);
+            Pair const dims = rect_dims(transformed.rect);
             ctx->sel_buf.im = XSubImage(
-                inp->ovr.im,
-                inp->ovr.rect.l,
-                inp->ovr.rect.t,
+                transformed.im,
+                transformed.rect.l,
+                transformed.rect.t,
                 dims.x,
                 dims.y
             );
+            overlay_free(&transformed);
         }
+
         assert(ctx->sel_buf.im != NULL);
     }
     if (can_action(inp, curr, ACT_SWAP_COLOR)) {
