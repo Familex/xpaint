@@ -4500,10 +4500,17 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     } else if (e.target == atoms[A_Utf8string]) {
         switch (ctx->input.mode.t) {
+            case InputT_Console:
+                for (u32 i = 0; i < count; ++i) {
+                    // not letter, because utf-8 is multibyte enc
+                    char elem = (char)data_xdyn[i];
+                    cl_push(&ctx->input.mode.d.cl, elem);
+                }
+                update_statusline(ctx);
+                break;
             case InputT_Interact:
             case InputT_Transform:
             case InputT_Color:
-            case InputT_Console:
                 trace(
                     "xpaint: UTF8_STRING clipboard paste not"
                     " implemented for %s mode",
