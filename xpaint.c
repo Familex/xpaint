@@ -105,6 +105,7 @@ enum {
     A_Targets,
     A_Utf8string,
     A_ImagePng,
+    A_XSelData,
     A_WmProtocols,
     A_WmDeleteWindow,
     A_NetWmSyncRequest,
@@ -583,6 +584,8 @@ static void dc_cache_init(struct Ctx* ctx);
 static void dc_cache_free(struct DrawCtx* dc);
 // update Pixmaps for XRender interactions
 static void dc_cache_update(struct Ctx* ctx);
+
+static int trigger_clipboard_paste(struct DrawCtx* dc, Atom selection_target);
 
 static struct Ctx ctx_init(Display* dp);
 static void xextinit(Display* dp);
@@ -3484,6 +3487,17 @@ void dc_cache_update(struct Ctx* ctx) {
     dc_cache_update_pm(dc, dc->cache.overlay, inp->ovr.im);
 }
 
+int trigger_clipboard_paste(struct DrawCtx* dc, Atom selection_target) {
+    return XConvertSelection(
+        dc->dp,
+        atoms[A_Clipboard],
+        selection_target,
+        atoms[A_XSelData],
+        dc->window,
+        CurrentTime
+    );
+}
+
 void dc_cache_init(struct Ctx* ctx) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
@@ -3591,6 +3605,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         atoms[A_Targets] = XInternAtom(dp, "TARGETS", False);
         atoms[A_Utf8string] = XInternAtom(dp, "UTF8_STRING", False);
         atoms[A_ImagePng] = XInternAtom(dp, "image/png", False);
+        atoms[A_XSelData] = XInternAtom(dp, "XSEL_DATA", False);
         atoms[A_WmProtocols] = XInternAtom(dp, "WM_PROTOCOLS", False);
         atoms[A_WmDeleteWindow] = XInternAtom(dp, "WM_DELETE_WINDOW", False);
         atoms[A_NetWmSyncRequest] =
@@ -4024,7 +4039,10 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // else-if chain to filter keys
     if (mode->t == InputT_Console) {
         struct InputConsoleData* cl = &ctx->input.mode.d.cl;
-        if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
+        if (key_eq(curr, KEY_CL_CLIPBOARD_PASTE)) {
+            trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
+            // handled in selection_notify_hdlr
+        } else if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
             char* complt = cl->compls_arr[cl->compls_curr];
             while (*complt) {
                 arrpush(cl->cmdarr, *complt);
@@ -4108,6 +4126,22 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (can_action(inp, curr, ACT_REVERT)) {
         if (!history_move(ctx, True)) {
             trace("xpaint: can't revert history");
+        }
+    }
+    if (can_action(inp, curr, ACT_PASTE_IMAGE)) {
+        switch (mode->t) {
+            case InputT_Interact:
+                trigger_clipboard_paste(&ctx->dc, atoms[A_ImagePng]);
+                // handled in selection_notify_hdlr
+                break;
+            case InputT_Color:
+            case InputT_Console:
+                trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
+                // handled in selection_notify_hdlr
+                break;
+            case InputT_Transform:
+                trace("xpaint: can't paste in transform mode");
+                break;
         }
     }
     if (can_action(inp, curr, ACT_COPY_AREA)) {
@@ -4417,60 +4451,71 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
-    static Atom target = None;
-    trace("selection notify handler");
+    struct DrawCtx* dc = &ctx->dc;
+    struct InputOverlay* ovr = &ctx->input.ovr;
 
-    XSelectionEvent selection = event->xselection;
-    target = None;
+    XSelectionEvent e = event->xselection;
 
-    if (selection.property != None) {
-        Atom actual_type = 0;
-        i32 actual_format = 0;
-        u64 bytes_after = 0;
-        Atom* data_xdyn = NULL;
-        u64 count = 0;
-        XGetWindowProperty(
-            ctx->dc.dp,
-            ctx->dc.window,
-            atoms[A_Clipboard],
-            0,
-            LONG_MAX,
-            False,
-            AnyPropertyType,
-            &actual_type,
-            &actual_format,
-            &count,
-            &bytes_after,
-            (unsigned char**)&data_xdyn
-        );
+    if (e.requestor != dc->window || e.property == None) {
+        return HR_Ok;
+    }
 
-        if (selection.target == atoms[A_Targets]) {
-            for (u32 i = 0; i < count; ++i) {
-                Atom li = data_xdyn[i];
-                // leak
-                trace("Requested target: %s\n", XGetAtomName(ctx->dc.dp, li));
-                if (li == atoms[A_Utf8string]) {
-                    target = atoms[A_Utf8string];
-                    break;
-                }
-            }
-            if (target != None) {
-                XConvertSelection(
-                    ctx->dc.dp,
-                    atoms[A_Clipboard],
-                    target,
-                    atoms[A_Clipboard],
-                    ctx->dc.window,
-                    CurrentTime
+    Atom actual_type = 0;
+    i32 actual_format = 0;
+    u64 bytes_after = 0;
+    unsigned char* data_xdyn = NULL;
+    u64 count = 0;
+    XGetWindowProperty(
+        dc->dp,
+        e.requestor,
+        e.property,
+        0,
+        LONG_MAX,
+        False,
+        AnyPropertyType,
+        &actual_type,
+        &actual_format,
+        &count,
+        &bytes_after,
+        &data_xdyn
+    );
+
+    if (e.target == atoms[A_ImagePng]) {
+        // drop image type
+        XImage* im = read_file_from_memory(dc, data_xdyn, count, 0x00000000).im;
+        if (!im) {
+            trace("xpaint: failed to parse pasted image");
+        } else {
+            trace("xpaint: pasted image (%d, %d)", im->width, im->height);
+
+            overlay_clear(ovr);
+            ximage_blend(ovr->im, im);
+            ovr->rect = ximage_calc_damage(ovr->im);
+
+            XDeleteProperty(dc->dp, e.requestor, e.property);
+            input_mode_set(ctx, InputT_Transform);
+            update_screen(ctx, PNIL);
+
+            XDestroyImage(im);
+        }
+    } else if (e.target == atoms[A_Utf8string]) {
+        switch (ctx->input.mode.t) {
+            case InputT_Interact:
+            case InputT_Transform:
+            case InputT_Color:
+            case InputT_Console:
+                trace(
+                    "xpaint: UTF8_STRING clipboard paste not"
+                    " implemented for %s mode",
+                    input_mode_as_str(ctx->input.mode.t)
                 );
-            }
-        } else if (selection.target == target) {
-            // the data is in {data, count}
+                break;
         }
+        XDeleteProperty(dc->dp, e.requestor, e.property);
+    }
 
-        if (data_xdyn) {
-            XFree(data_xdyn);
-        }
+    if (data_xdyn) {
+        XFree(data_xdyn);
     }
 
     return HR_Ok;
