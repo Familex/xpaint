@@ -4452,6 +4452,7 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
 
 HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     struct DrawCtx* dc = &ctx->dc;
+    struct ToolCtx* tc = &CURR_TC(ctx);
     struct InputOverlay* ovr = &ctx->input.ovr;
 
     XSelectionEvent e = event->xselection;
@@ -4484,7 +4485,7 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         // drop image type
         XImage* im = read_file_from_memory(dc, data_xdyn, count, 0x00000000).im;
         if (!im) {
-            trace("xpaint: failed to parse pasted image");
+            show_message(ctx, "failed to parse pasted image");
         } else {
             trace("xpaint: pasted image (%d, %d)", im->width, im->height);
 
@@ -4508,9 +4509,34 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
                 update_statusline(ctx);
                 break;
+            case InputT_Color: {
+                char* begin = (char*)data_xdyn;
+                if (begin) {
+                    if (*begin == '#') {
+                        ++begin;  // skip # at beginning
+                    }
+                    u32 const len = strlen(begin);
+
+                    if (len == 6) {
+                        char* end = begin + 6;
+                        *tc_curr_col(tc) =
+                            strtoul(begin, &end, 16) | ARGB_ALPHA;
+                        update_statusline(ctx);
+                    } else if (len == 8) {
+                        // with alpha (rrggbbaa)
+                        char* end = begin + 8;
+                        u32 const input = strtoul(begin, &end, 16);
+                        // convert to argb
+                        *tc_curr_col(tc) =
+                            ((input >> 8) & 0xFFFFFF) | ((input & 0xFF) << 24);
+                        update_statusline(ctx);
+                    } else {
+                        show_message(ctx, "unexpected color format");
+                    }
+                }
+            } break;
             case InputT_Interact:
             case InputT_Transform:
-            case InputT_Color:
                 trace(
                     "xpaint: UTF8_STRING clipboard paste not"
                     " implemented for %s mode",
