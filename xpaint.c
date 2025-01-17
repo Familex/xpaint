@@ -101,15 +101,23 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
 
 enum {
+    A_Cardinal,
     A_Clipboard,
     A_Targets,
     A_Utf8string,
     A_ImagePng,
+    A_TextUriList,
     A_XSelData,
     A_WmProtocols,
     A_WmDeleteWindow,
     A_NetWmSyncRequest,
     A_NetWmSyncRequestCounter,
+    A_XDndAware,
+    A_XDndPosition,
+    A_XDndSelection,
+    A_XDndStatus,
+    A_XDndActionCopy,
+    A_XDndDrop,
     A_Last,
 };
 
@@ -441,6 +449,7 @@ static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
+static char* uri_to_path(char const* uri);
 
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
@@ -451,6 +460,8 @@ static XTransform xtrans_from_trans(Transform trans);
 static XTransform xtrans_mult(XTransform a, XTransform b);
 // HACK xrender missinterprets XTransform values
 static XTransform xtrans_set_picture_transform_hack(XTransform a);
+
+static void xwindow_set_cardinal(Display* dp, Window window, Atom key, u32 value);
 
 // needs to be 'free'd after use
 static char* str_new(char const* fmt, ...);
@@ -828,6 +839,30 @@ static Bool can_action(struct Input const* input, Key curr_key, Action act) {
     UNREACHABLE();
 }
 
+char* uri_to_path(char const* uri) {
+    char const prefix[] = "file://";
+    if (strncmp(uri, prefix, strlen(prefix)) != 0) {
+        return NULL;
+    }
+    uri += strlen(prefix);
+
+    char* result = ecalloc(strlen(uri) + 1, sizeof(char));
+
+    char* result_ptr = result;
+    for (char const* p = uri; *p; ++p) {
+        if (*p == '%' && *(p + 1) && *(p + 2)) {
+            char const hex[3] = {*(p + 1), *(p + 2), '\0'};
+            *result_ptr++ = (char)strtol(hex, NULL, 16);
+            p += 2;
+        } else {
+            *result_ptr++ = *p;
+        }
+    }
+    *result_ptr = '\0';
+
+    return result;
+}
+
 Rect rect_expand(Rect a, Rect b) {
     return (Rect) {
         .l = MIN(a.l, b.l),
@@ -913,6 +948,19 @@ XTransform xtrans_set_picture_transform_hack(XTransform a) {
     a.matrix[0][2] = XDoubleToFixed(-1.0 * XFixedToDouble(a.matrix[0][2]));
     a.matrix[1][2] = XDoubleToFixed(-1.0 * XFixedToDouble(a.matrix[1][2]));
     return a;
+}
+
+void xwindow_set_cardinal(Display* dp, Window window, Atom key, u32 value) {
+    XChangeProperty(
+        dp,
+        window,
+        key,
+        atoms[A_Cardinal],
+        32,
+        PropModeReplace,
+        (unsigned char*)&value,
+        1
+    );
 }
 
 char* str_new(char const* fmt, ...) {
@@ -1031,8 +1079,16 @@ void fnt_free(Display* dp, struct Fnt* fnt) {
 }
 
 struct IOCtx ioctx_new(char const* input) {
+    char const* uri_file_prefix = "file://";
+
     if (!strcmp(input, IOCTX_STDIO_STR)) {
         return (struct IOCtx) {.t = IO_Stdio};
+    }
+    if (!strncmp(input, uri_file_prefix, strlen(uri_file_prefix))) {
+        return (struct IOCtx) {
+            .t = IO_File,
+            .d.file.path_dyn = uri_to_path(input),
+        };
     }
     return (struct IOCtx) {
         .t = IO_File,
@@ -1255,8 +1311,14 @@ read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
         case IO_None: return (struct Image) {0};
         case IO_File: {
             int fd = open(ioctx->d.file.path_dyn, O_RDONLY);
+            if (fd == -1) {
+                return (struct Image) {0};
+            }
             off_t len = lseek(fd, 0, SEEK_END);
             void* data = mmap(0, len, PROT_READ, MAP_PRIVATE, fd, 0);
+            if (!data) {
+                return (struct Image) {0};
+            }
             struct Image result = read_file_from_memory(dc, data, len, bg);
 
             close(fd);
@@ -3601,10 +3663,12 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     /* atoms */ {
+        atoms[A_Cardinal] = XInternAtom(dp, "CARDINAL", False);
         atoms[A_Clipboard] = XInternAtom(dp, "CLIPBOARD", False);
         atoms[A_Targets] = XInternAtom(dp, "TARGETS", False);
         atoms[A_Utf8string] = XInternAtom(dp, "UTF8_STRING", False);
         atoms[A_ImagePng] = XInternAtom(dp, "image/png", False);
+        atoms[A_TextUriList] = XInternAtom(dp, "text/uri-list", False);
         atoms[A_XSelData] = XInternAtom(dp, "XSEL_DATA", False);
         atoms[A_WmProtocols] = XInternAtom(dp, "WM_PROTOCOLS", False);
         atoms[A_WmDeleteWindow] = XInternAtom(dp, "WM_DELETE_WINDOW", False);
@@ -3612,6 +3676,12 @@ void setup(Display* dp, struct Ctx* ctx) {
             XInternAtom(dp, "_NET_WM_SYNC_REQUEST", False);
         atoms[A_NetWmSyncRequestCounter] =
             XInternAtom(dp, "_NET_WM_SYNC_REQUEST_COUNTER", False);
+        atoms[A_XDndAware] = XInternAtom(dp, "XdndAware", False);
+        atoms[A_XDndPosition] = XInternAtom(dp, "XdndPosition", False);
+        atoms[A_XDndSelection] = XInternAtom(dp, "XdndSelection", False);
+        atoms[A_XDndStatus] = XInternAtom(dp, "XdndStatus", False);
+        atoms[A_XDndActionCopy] = XInternAtom(dp, "XdndActionCopy", False);
+        atoms[A_XDndDrop] = XInternAtom(dp, "XdndDrop", False);
     }
 
     /* xrender */ {
@@ -3671,6 +3741,8 @@ void setup(Display* dp, struct Ctx* ctx) {
 
         Atom protocols[] = {wm_delete_window, atoms[A_NetWmSyncRequest]};
         XSetWMProtocols(dp, ctx->dc.window, protocols, LENGTH(protocols));
+
+        xwindow_set_cardinal(dp, ctx->dc.window, atoms[A_XDndAware], 5);
     }
 
     /* _NET_WM_SYNC_REQUEST */ {
@@ -4450,10 +4522,18 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     return HR_Ok;
 }
 
+static void copy_image_to_transform_mode(struct Ctx* ctx, XImage* im) {
+    struct InputOverlay* ovr = &ctx->input.ovr;
+
+    overlay_clear(ovr);
+    ximage_blend(ovr->im, im);
+    ovr->rect = ximage_calc_damage(ovr->im);
+    input_mode_set(ctx, InputT_Transform);
+}
+
 HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
-    struct InputOverlay* ovr = &ctx->input.ovr;
 
     XSelectionEvent e = event->xselection;
 
@@ -4482,23 +4562,41 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     );
 
     if (e.target == atoms[A_ImagePng]) {
-        // drop image type
         XImage* im = read_file_from_memory(dc, data_xdyn, count, 0x00000000).im;
-        if (!im) {
-            show_message(ctx, "failed to parse pasted image");
-        } else {
-            trace("xpaint: pasted image (%d, %d)", im->width, im->height);
-
-            overlay_clear(ovr);
-            ximage_blend(ovr->im, im);
-            ovr->rect = ximage_calc_damage(ovr->im);
-
-            XDeleteProperty(dc->dp, e.requestor, e.property);
-            input_mode_set(ctx, InputT_Transform);
+        if (im) {
+            copy_image_to_transform_mode(ctx, im);
             update_screen(ctx, PNIL);
-
             XDestroyImage(im);
+        } else {
+            show_message(ctx, "failed to parse pasted image");
         }
+        XDeleteProperty(dc->dp, e.requestor, e.property);
+    } else if (e.target == atoms[A_TextUriList]) {
+        // last symbols always '\r\n' in valid uri-list
+        if (count >= 2 && data_xdyn[count - 2] == '\r') {
+            data_xdyn[count - 1] = '\0';
+            data_xdyn[count - 2] = '\0';
+        }
+        for (u32 i = 0; i < count; ++i) {
+            if (data_xdyn[i] == '\r' || data_xdyn[i] == '\n') {
+                data_xdyn[i] = '\0';
+                trace("xpaint: drag&drop only supports 1 file at a time");
+                break;
+            }
+        }
+
+        struct IOCtx ioctx = ioctx_new((char const*)data_xdyn);
+        XImage* im = read_image_io(dc, &ioctx, 0x00000000).im;
+        ioctx_free(&ioctx);
+
+        if (im) {
+            copy_image_to_transform_mode(ctx, im);
+            update_screen(ctx, PNIL);
+            XDestroyImage(im);
+        } else {
+            show_message(ctx, "failed to parse dragged image");
+        }
+        XDeleteProperty(dc->dp, e.requestor, e.property);
     } else if (e.target == atoms[A_Utf8string]) {
         switch (ctx->input.mode.t) {
             case InputT_Console:
@@ -4555,19 +4653,47 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
+    struct DrawCtx* dc = &ctx->dc;
     XClientMessageEvent* e = (XClientMessageEvent*)event;
-    if (e->message_type != atoms[A_WmProtocols]) {
-        return HR_Ok;
-    }
+    enum InputTag mode = ctx->input.mode.t;
 
-    if (e->data.l[0] == atoms[A_WmDeleteWindow]) {
-        return HR_Quit;
-    }
+    if (e->message_type == atoms[A_XDndPosition] && mode == InputT_Interact) {
+        XSendEvent(
+            dc->dp,
+            e->data.l[0],
+            False,
+            NoEventMask,
+            (XEvent*)&(XClientMessageEvent) {
+                .type = ClientMessage,
+                .window = e->data.l[0],
+                .message_type = atoms[A_XDndStatus],
+                .format = 32,
+                .data.l[0] = (long)dc->window,
+                .data.l[1] = 0,  // accept drop
+                .data.l[2] = 0,  // no rect
+                .data.l[3] = 0,
+                .data.l[4] = (long)atoms[A_XDndActionCopy],
+            }
+        );
+    } else if (e->message_type == atoms[A_XDndDrop] && mode == InputT_Interact) {
+        XConvertSelection(
+            dc->dp,
+            atoms[A_XDndSelection],
+            atoms[A_TextUriList],
+            atoms[A_XDndSelection],
+            dc->window,
+            CurrentTime
+        );
+    } else if (e->message_type == atoms[A_WmProtocols]) {
+        if (e->data.l[0] == atoms[A_WmDeleteWindow]) {
+            return HR_Quit;
+        }
 
-    if (e->data.l[0] == atoms[A_NetWmSyncRequest]) {
-        ctx->last_sync_request_value =
-            (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
-        return HR_Ok;
+        if (e->data.l[0] == atoms[A_NetWmSyncRequest]) {
+            ctx->last_sync_request_value =
+                (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
+            return HR_Ok;
+        }
     }
 
     return HR_Ok;
