@@ -3427,15 +3427,13 @@ void update_statusline(struct Ctx* ctx) {
     struct InputMode* mode = &ctx->input.mode;
     u32 const statusline_h = statusline_height(dc);
     Pair const clientarea = clientarea_size(dc);
+    Pair const line_dims = {(i32)dc->width, (i32)(statusline_h)};
 
-    fill_rect(
-        dc,
-        (Pair) {0, clientarea.y},
-        (Pair) {(i32)dc->width, (i32)statusline_h},
-        COL_BG(&ctx->dc, SchmNorm)
-    );
+    fill_rect(dc, (Pair) {0, clientarea.y}, line_dims, COL_BG(dc, SchmNorm));
+
     if (mode->t == InputT_Console) {
-        char const* command = mode->d.cl.cmdarr;
+        struct InputConsoleData* cl = &mode->d.cl;
+        char const* command = cl->cmdarr;
         usize const command_len = arrlen(command);
         // extra 2 for prompt and terminator
         char* cl_str_dyn = ecalloc(2 + command_len, sizeof(char));
@@ -3443,17 +3441,46 @@ void update_statusline(struct Ctx* ctx) {
         cl_str_dyn[command_len + 1] = '\0';
         memcpy(cl_str_dyn + 1, command, command_len);
         i32 const user_cmd_w =
-            (i32)get_string_width(&ctx->dc, cl_str_dyn, command_len + 1);
-        i32 const cmd_y = (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM);
-        draw_string(&ctx->dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
-        if (mode->d.cl.compls_arr) {
+            (i32)get_string_width(dc, cl_str_dyn, command_len + 1);
+        i32 const cmd_y = (i32)(dc->height - STATUSLINE_PADDING_BOTTOM);
+        draw_string(dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
+        if (cl->compls_arr) {
             draw_string(
-                &ctx->dc,
-                mode->d.cl.compls_arr[mode->d.cl.compls_curr],
+                dc,
+                cl->compls_arr[cl->compls_curr],
                 (Pair) {user_cmd_w, cmd_y},
                 SchmFocus,
                 False
             );
+            /* draw compls array */ {
+                u32 const list_pre_half = (STATUSLINE_COMPLS_LIST_MAX + 1) / 2;
+                u32 const len = arrlen(cl->compls_arr);
+
+                i32 const begin =
+                    MAX(0,
+                        MIN((i32)cl->compls_curr - (i32)list_pre_half,
+                            (i32)len - (i32)STATUSLINE_COMPLS_LIST_MAX));
+                i32 const end = MIN(len, begin + STATUSLINE_COMPLS_LIST_MAX);
+
+                for (i32 i = begin; i < end; ++i) {
+                    u32 const row_num = end - i;
+                    i32 const y = (i32)(clientarea.y - statusline_h * row_num);
+                    i32 const stry =
+                        (i32)(y + statusline_h - STATUSLINE_PADDING_BOTTOM);
+                    argb const bg_col = i != cl->compls_curr
+                        ? COL_BG(dc, SchmNorm)
+                        : COL_FG(dc, SchmNorm);
+
+                    fill_rect(dc, (Pair) {0, y}, line_dims, bg_col);
+                    draw_string(
+                        dc,
+                        cl->compls_arr[i],
+                        (Pair) {0, stry},
+                        SchmNorm,
+                        i == cl->compls_curr
+                    );
+                }
+            }
         }
         str_free(&cl_str_dyn);
     } else {
@@ -3486,19 +3513,15 @@ void update_statusline(struct Ctx* ctx) {
     }
 
     XdbeSwapBuffers(
-        ctx->dc.dp,
+        dc->dp,
         &(XdbeSwapInfo) {
-            .swap_window = ctx->dc.window,
+            .swap_window = dc->window,
             .swap_action = 0,
         },
         1
     );
 
-    XSyncSetCounter(
-        ctx->dc.dp,
-        ctx->sync_counter,
-        ctx->last_sync_request_value
-    );
+    XSyncSetCounter(dc->dp, ctx->sync_counter, ctx->last_sync_request_value);
 }
 
 // FIXME DRY
