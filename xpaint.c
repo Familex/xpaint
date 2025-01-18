@@ -2806,7 +2806,7 @@ Rect canvas_copy_region(
 ) {
     i32 const w = src->width;
     i32 const h = src->height;
-    assert(from.x > 0 && from.y > 0);
+    assert(from.x >= 0 && from.y >= 0);
     assert(from.x + dims.x <= w && from.y + dims.y <= h);
 
     // FIXME alloc only dims.x * dims.y
