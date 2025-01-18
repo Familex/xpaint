@@ -477,6 +477,7 @@ static void tc_free(struct ToolCtx* tc);
 static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
 static void fnt_free(Display* dp, struct Fnt* fnt);
 static struct IOCtx ioctx_new(char const* input);
+static struct IOCtx ioctx_copy(struct IOCtx const* ioctx);
 static void ioctx_set(struct IOCtx* ioctx, char const* input);
 static char const* ioctx_as_str(struct IOCtx const* ioctx);
 static void ioctx_free(struct IOCtx* ioctx);
@@ -500,6 +501,7 @@ static argb argb_normalize(argb c);
 static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
 static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
+static void image_free(struct Image* im);
 
 static ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd);
 static ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl);
@@ -564,7 +566,7 @@ static Rect canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, 
 static Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to);
 static void canvas_fill(XImage* im, argb col);
-static Bool canvas_load(struct Ctx* ctx, struct Image const* image);
+static Bool canvas_load(struct Ctx* ctx, struct Image* image);
 static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
@@ -1096,6 +1098,19 @@ struct IOCtx ioctx_new(char const* input) {
     };
 }
 
+struct IOCtx ioctx_copy(struct IOCtx const* ioctx) {
+    switch (ioctx->t) {
+        case IO_File:
+            return (struct IOCtx
+            ) {.t = ioctx->t,
+               .d.file.path_dyn = str_new("%s", ioctx->d.file.path_dyn)};
+        // no dynamic data
+        case IO_None:
+        case IO_Stdio: return *ioctx;
+    }
+    UNREACHABLE();
+}
+
 void ioctx_set(struct IOCtx* ioctx, char const* input) {
     ioctx_free(ioctx);
     *ioctx = ioctx_new(input);
@@ -1430,6 +1445,13 @@ Bool write_io(
     return result;
 }
 
+void image_free(struct Image* im) {
+    if (im->im) {
+        XDestroyImage(im->im);
+    }
+    *im = (struct Image) {0};
+}
+
 ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
     assert(cl_cmd);
     char* msg_to_show = NULL;  // counts as PCCR_Msg at func end
@@ -1495,9 +1517,9 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             if (!cl_cmd->d.save.path_dyn && ctx->out.t == IO_None) {
                 msg_to_show = str_new("can't save: no path provided");
             } else {
-                struct IOCtx const ioctx = cl_cmd->d.save.path_dyn
+                struct IOCtx ioctx = cl_cmd->d.save.path_dyn
                     ? ioctx_new(cl_cmd->d.save.path_dyn)
-                    : ctx->out;
+                    : ioctx_copy(&ctx->out);
                 msg_to_show = str_new(
                     write_io(
                         &ctx->dc,
@@ -1509,12 +1531,13 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                         : "failed save image to '%s'",
                     ioctx_as_str(&ioctx)
                 );
+                ioctx_free(&ioctx);
             }
         } break;
         case ClC_Load: {
-            struct IOCtx const ioctx = cl_cmd->d.load.path_dyn
+            struct IOCtx ioctx = cl_cmd->d.load.path_dyn
                 ? ioctx_new(cl_cmd->d.load.path_dyn)
-                : ctx->inp;
+                : ioctx_copy(&ctx->inp);
             struct Image im = read_image_io(&ctx->dc, &ioctx, 0);
 
             XImage* old_cv = ctx->dc.cv.im;
@@ -1526,12 +1549,14 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 msg_to_show =
                     str_new("image_loaded from '%s'", ioctx_as_str(&ioctx));
             } else {
+                image_free(&im);
                 history_free(&to_push);
                 msg_to_show = str_new(
                     "failed load image from '%s'",
                     ioctx_as_str(&ioctx)
                 );
             }
+            ioctx_free(&ioctx);
         } break;
         case ClC_Last: assert(!"invalid enum value");
     }
@@ -1597,7 +1622,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             ) {.t = ClCPrs_Ok,
                .d.ok.t = ClC_Set,
                .d.ok.d.set.t = ClCDS_Font,
-               .d.ok.d.set.d.font.name_dyn = str_new("%s", font)};
+               .d.ok.d.set.d.font.name_dyn = font ? str_new("%s", font) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
             char const* path = strtok(NULL, "");  // user can load NULL
@@ -1688,7 +1713,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         return (ClCPrsResult
         ) {.t = ClCPrs_Ok,
            .d.ok.t = ClC_Load,
-           .d.ok.d.load.path_dyn = str_new("%s", path)};
+           .d.ok.d.load.path_dyn = path ? str_new("%s", path) : NULL};
     }
 
     return cl_prs_invarg(str_new("%s", cmd), str_new("unknown command"), NULL);
@@ -2779,7 +2804,7 @@ Rect canvas_copy_region(
 ) {
     i32 const w = src->width;
     i32 const h = src->height;
-    assert(from.x >= 0 && from.y >= 0);
+    assert(from.x > 0 && from.y > 0);
     assert(from.x + dims.x <= w && from.y + dims.y <= h);
 
     // FIXME alloc only dims.x * dims.y
@@ -2819,7 +2844,7 @@ void canvas_fill(XImage* im, argb col) {
     }
 }
 
-static Bool canvas_load(struct Ctx* ctx, struct Image const* image) {
+static Bool canvas_load(struct Ctx* ctx, struct Image* image) {
     if (!image->im) {
         return False;
     }
