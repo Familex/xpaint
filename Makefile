@@ -62,7 +62,11 @@ check: ## check code with clang-tidy
 dev: clean ## generate dev files
 	bear -- $(MAKE) ./xpaint-d
 
-.PHONY: all help run clean install uninstall check dev
+valgrind: xpaint-d ## debug with valgrind
+	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
+		--suppressions=./.valgrind.supp $(ARGS) ./xpaint-d
+
+.PHONY: all help run clean install uninstall check dev valgrind
 
 #### compiler and linker flags
 

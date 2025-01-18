@@ -1131,6 +1131,7 @@ void ioctx_free(struct IOCtx* ioctx) {
         case IO_File: str_free(&ioctx->d.file.path_dyn); break;
         case IO_Stdio: break;
     }
+    *ioctx = (struct IOCtx) {0};
 }
 
 Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
@@ -1336,6 +1337,7 @@ read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
             }
             struct Image result = read_file_from_memory(dc, data, len, bg);
 
+            munmap(data, len);
             close(fd);
             return result;
         }
@@ -2850,6 +2852,7 @@ static Bool canvas_load(struct Ctx* ctx, struct Image* image) {
     }
     struct DrawCtx* dc = &ctx->dc;
 
+    overlay_free(&ctx->input.ovr);
     canvas_free(&dc->cv);
     dc->cv.im = image->im;
     dc->cv.type = image->type;
@@ -3964,7 +3967,7 @@ void run(struct Ctx* ctx) {
     };
 
     HdlrResult running = HR_Ok;
-    XEvent event;
+    XEvent event = {0};
 
     XSync(ctx->dc.dp, False);
     while (running != HR_Quit && !XNextEvent(ctx->dc.dp, &event)) {
@@ -4796,6 +4799,8 @@ void cleanup(struct Ctx* ctx) {
         fnt_free(ctx->dc.dp, &ctx->dc.fnt);
         canvas_free(&ctx->dc.cv);
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
+        XDestroyIC(ctx->dc.sys.xic);
+        XCloseIM(ctx->dc.sys.xim);
         XFreeGC(ctx->dc.dp, ctx->dc.gc);
         XFreeGC(ctx->dc.dp, ctx->dc.screen_gc);
         XFreeColormap(ctx->dc.dp, ctx->dc.sys.colmap);
