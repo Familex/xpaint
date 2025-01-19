@@ -1821,8 +1821,10 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
         case InputT_Transform: {
             struct InputOverlay transformed = get_transformed_overlay(dc, inp);
 
-            history_forward(ctx, history_new_item(dc->cv.im, transformed.rect));
-            ximage_blend(dc->cv.im, transformed.im);
+            if (!IS_RNIL(transformed.rect)) {
+                history_forward(ctx, history_new_item(dc->cv.im, transformed.rect));
+                ximage_blend(dc->cv.im, transformed.im);
+            }
             overlay_free(&transformed);
 
             overlay_clear(&inp->ovr);
