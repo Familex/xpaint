@@ -16,6 +16,8 @@ Checks: >
     , -bugprone-easily-swappable-parameters
     , -readability-function-cognitive-complexity
     , -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+    , -readability-avoid-nested-conditional-operator
+    , -bugprone-multi-level-implicit-pointer-conversion
 
 WarningsAsErrors: '*'
 ...

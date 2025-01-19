@@ -57,7 +57,7 @@ uninstall: ## uninstall application
 	rm -f $(PREFIX)/share/icons/hicolor/scalable/apps/xpaint.svg
 
 check: ## check code with clang-tidy
-	$(CLANGTIDY) $(SRC)
+	$(CLANGTIDY) --use-color $(SRC)
 
 dev: clean ## generate dev files
 	bear -- $(MAKE) ./xpaint-d

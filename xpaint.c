@@ -87,15 +87,15 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
     ((p_mode)->t != InputT_Transform \
          ? TRANSFORM_DEFAULT \
          : ((Transform) { \
-             .scale.x = (p_mode)->d.trans.curr.scale.x \
-                 * (p_mode)->d.trans.acc.scale.x, \
-             .scale.y = (p_mode)->d.trans.curr.scale.y \
-                 * (p_mode)->d.trans.acc.scale.y, \
-             .move.x = \
-                 (p_mode)->d.trans.curr.move.x + (p_mode)->d.trans.acc.move.x, \
-             .move.y = \
-                 (p_mode)->d.trans.curr.move.y + (p_mode)->d.trans.acc.move.y, \
-         }))
+               .scale.x = (p_mode)->d.trans.curr.scale.x \
+                   * (p_mode)->d.trans.acc.scale.x, \
+               .scale.y = (p_mode)->d.trans.curr.scale.y \
+                   * (p_mode)->d.trans.acc.scale.y, \
+               .move.x = (p_mode)->d.trans.curr.move.x \
+                   + (p_mode)->d.trans.acc.move.x, \
+               .move.y = (p_mode)->d.trans.curr.move.y \
+                   + (p_mode)->d.trans.acc.move.y, \
+           }))
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 #define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
@@ -1101,9 +1101,9 @@ struct IOCtx ioctx_new(char const* input) {
 struct IOCtx ioctx_copy(struct IOCtx const* ioctx) {
     switch (ioctx->t) {
         case IO_File:
-            return (struct IOCtx
-            ) {.t = ioctx->t,
-               .d.file.path_dyn = str_new("%s", ioctx->d.file.path_dyn)};
+            return (struct IOCtx) {.t = ioctx->t,
+                                   .d.file.path_dyn =
+                                       str_new("%s", ioctx->d.file.path_dyn)};
         // no dynamic data
         case IO_None:
         case IO_Stdio: return *ioctx;
@@ -1140,8 +1140,8 @@ Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p) {
 
 Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     return (Pair) {
-        .x = (i32)(x * ZOOM_C(dc) + dc->cv.scroll.x),
-        .y = (i32)(y * ZOOM_C(dc) + dc->cv.scroll.y),
+        .x = (i32)((x * ZOOM_C(dc)) + dc->cv.scroll.x),
+        .y = (i32)((y * ZOOM_C(dc)) + dc->cv.scroll.y),
     };
 }
 
@@ -1162,10 +1162,10 @@ Pair point_apply_trans(Pair p, Transform trans) {
 
     // m[2] is not used
     return (Pair) {
-        XFixedToDouble(m[0][0]) * p.x + XFixedToDouble(m[0][1]) * p.y
-            + XFixedToDouble(m[0][2]) * 1,
-        XFixedToDouble(m[1][0]) * p.x + XFixedToDouble(m[1][1]) * p.y
-            + XFixedToDouble(m[1][2]) * 1,
+        (i32)((XFixedToDouble(m[0][0]) * p.x) + (XFixedToDouble(m[0][1]) * p.y)
+              + (XFixedToDouble(m[0][2]) * 1)),
+        (i32)((XFixedToDouble(m[1][0]) * p.x) + (XFixedToDouble(m[1][1]) * p.y)
+              + (XFixedToDouble(m[1][2]) * 1)),
     };
 }
 
@@ -1188,8 +1188,8 @@ Pair dpt_to_pt(DPt p) {
 DPt dpt_rotate(DPt p, double deg) {
     double rad = deg * PI / 180.0;
     return (DPt) {
-        .x = cos(rad) * p.x - sin(rad) * p.y,
-        .y = sin(rad) * p.x + cos(rad) * p.y,
+        .x = (cos(rad) * p.x) - (sin(rad) * p.y),
+        .y = (sin(rad) * p.x) + (cos(rad) * p.y),
     };
 }
 
@@ -1573,10 +1573,10 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     }
     if (!strcmp(cmd, "echo")) {
         char const* user_msg = strtok(NULL, "");
-        return (ClCPrsResult
-        ) {.t = ClCPrs_Ok,
-           .d.ok.t = ClC_Echo,
-           .d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""))};
+        return (ClCPrsResult) {.t = ClCPrs_Ok,
+                               .d.ok.t = ClC_Echo,
+                               .d.ok.d.echo.msg_dyn =
+                                   str_new("%s", COALESCE(user_msg, ""))};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
         char const* prop = strtok(NULL, CL_DELIM);
@@ -1620,61 +1620,60 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             if (!font) {
                 return cl_prs_noarg(str_new("font"), NULL);
             }
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_Font,
-               .d.ok.d.set.d.font.name_dyn = font ? str_new("%s", font) : NULL};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_Font,
+                                   .d.ok.d.set.d.font.name_dyn =
+                                       font ? str_new("%s", font) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
             char const* path = strtok(NULL, "");  // user can load NULL
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_Inp,
-               .d.ok.d.set.d.inp.path_dyn = path ? str_new("%s", path) : NULL};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_Inp,
+                                   .d.ok.d.set.d.inp.path_dyn =
+                                       path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Out))) {
             char const* path = strtok(NULL, "");  // user can load NULL
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_Out,
-               .d.ok.d.set.d.out.path_dyn = path ? str_new("%s", path) : NULL};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_Out,
+                                   .d.ok.d.set.d.out.path_dyn =
+                                       path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
             char const* compression = strtok(NULL, CL_DELIM);
             if (!compression) {
                 return cl_prs_noarg(str_new("compression value"), NULL);
             }
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_PngCompression,
-               .d.ok.d.set.d.png_cpr.compression =
-                   (i32)strtol(compression, NULL, 0)};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_PngCompression,
+                                   .d.ok.d.set.d.png_cpr.compression =
+                                       (i32)strtol(compression, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
             char const* quality = strtok(NULL, CL_DELIM);
             if (!quality) {
                 return cl_prs_noarg(str_new("image quality"), NULL);
             }
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_JpgQuality,
-               .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_JpgQuality,
+                                   .d.ok.d.set.d.jpg_qlt.quality =
+                                       (i32)strtol(quality, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Spacing))) {
             char const* spacing = strtok(NULL, CL_DELIM);
             if (!spacing) {
                 return cl_prs_noarg(str_new("spacing"), NULL);
             }
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_Spacing,
-               .d.ok.d.set.d.spacing.val = strtoul(spacing, NULL, 0)};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_Spacing,
+                                   .d.ok.d.set.d.spacing.val =
+                                       strtoul(spacing, NULL, 0)};
         }
         return cl_prs_invarg(
             str_new("%s", prop),
@@ -1704,18 +1703,18 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             );
         }
         char const* path = strtok(NULL, "");  // include spaces
-        return (ClCPrsResult
-        ) {.t = ClCPrs_Ok,
-           .d.ok.t = ClC_Save,
-           .d.ok.d.save.im_type = type,
-           .d.ok.d.save.path_dyn = path ? str_new("%s", path) : NULL};
+        return (ClCPrsResult) {.t = ClCPrs_Ok,
+                               .d.ok.t = ClC_Save,
+                               .d.ok.d.save.im_type = type,
+                               .d.ok.d.save.path_dyn =
+                                   path ? str_new("%s", path) : NULL};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
         char const* path = strtok(NULL, "");  // path with spaces
-        return (ClCPrsResult
-        ) {.t = ClCPrs_Ok,
-           .d.ok.t = ClC_Load,
-           .d.ok.d.load.path_dyn = path ? str_new("%s", path) : NULL};
+        return (ClCPrsResult) {.t = ClCPrs_Ok,
+                               .d.ok.t = ClC_Load,
+                               .d.ok.d.load.path_dyn =
+                                   path ? str_new("%s", path) : NULL};
     }
 
     return cl_prs_invarg(str_new("%s", cmd), str_new("unknown command"), NULL);
@@ -1730,19 +1729,17 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
 }
 
 ClCPrsResult cl_prs_noarg(char* arg_desc_dyn, char* context_optdyn) {
-    return (ClCPrsResult
-    ) {.t = ClCPrs_ENoArg,
-       .d.noarg.arg_desc_dyn = arg_desc_dyn,
-       .d.noarg.context_optdyn = context_optdyn};
+    return (ClCPrsResult) {.t = ClCPrs_ENoArg,
+                           .d.noarg.arg_desc_dyn = arg_desc_dyn,
+                           .d.noarg.context_optdyn = context_optdyn};
 }
 
 ClCPrsResult
 cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_optdyn) {
-    return (ClCPrsResult
-    ) {.t = ClCPrs_EInvArg,
-       .d.invarg.arg_dyn = arg_dyn,
-       .d.invarg.error_dyn = error_dyn,
-       .d.invarg.context_optdyn = context_optdyn};
+    return (ClCPrsResult) {.t = ClCPrs_EInvArg,
+                           .d.invarg.arg_dyn = arg_dyn,
+                           .d.invarg.error_dyn = error_dyn,
+                           .d.invarg.context_optdyn = context_optdyn};
 }
 
 void cl_cmd_parse_res_free(ClCPrsResult* res) {
@@ -1900,7 +1897,8 @@ usize cl_compls_new(struct InputConsoleData* cl) {
             ClCDSv_Last,
             add_delim
         );
-    } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token comletion
+    } else if (strlen(tok1) == 0
+               || !last_char_is_space) {  // first token comletion
         cl_compls_update_helper(
             &result,
             tok1,
@@ -1982,8 +1980,8 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             inp->mode.d.col = (struct InputColorData) {.current_digit = 0};
             break;
         case InputT_Console:
-            inp->mode.d.cl = (struct InputConsoleData
-            ) {.cmdarr = NULL, .compls_valid = False};
+            inp->mode.d.cl = (struct InputConsoleData) {.cmdarr = NULL,
+                                                        .compls_valid = False};
             break;
         case InputT_Interact: break;
         case InputT_Transform:
@@ -2088,7 +2086,7 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     double const segment_rad = PI * 2 / MAX(1, arrlen(sc->items_arr));
     double const segment_deg = segment_rad / PI * 180;
     double const pointer_r =
-        sqrt(pointer_x_rel * pointer_x_rel + pointer_y_rel * pointer_y_rel);
+        sqrt((pointer_x_rel * pointer_x_rel) + (pointer_y_rel * pointer_y_rel));
 
     if (pointer_r > SEL_CIRC_OUTER_R_PX || pointer_r < SEL_CIRC_INNER_R_PX) {
         return NIL;
@@ -2351,11 +2349,10 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     }
 
     struct HistItem curr = arrpop(*hist_pop);
-    Rect curr_rect = (Rect
-    ) {curr.pivot.x,
-       curr.pivot.y,
-       curr.pivot.x + curr.patch->width,
-       curr.pivot.y + curr.patch->height};
+    Rect curr_rect = (Rect) {curr.pivot.x,
+                             curr.pivot.y,
+                             curr.pivot.x + curr.patch->width,
+                             curr.pivot.y + curr.patch->height};
 
     arrpush(*hist_save, history_new_item(ctx->dc.cv.im, curr_rect));
     history_apply(ctx, &curr);
@@ -2549,7 +2546,8 @@ Rect canvas_dash_rect(
 
         u32 iterations = 0;
         while (!PAIR_EQ(curr, to) && iterations < 10000000) {
-            Pair const lt = (Pair) {curr.x - (i32)w / 2, curr.y - (i32)w / 2};
+            Pair const lt =
+                (Pair) {curr.x - ((i32)w / 2), curr.y - ((i32)w / 2)};
             argb col = iterations / dash_w % 2 ? col1 : col2;
             Rect d = canvas_fill_rect(im, lt, (Pair) {(i32)w, (i32)w}, col);
             damage = rect_expand(damage, d);
@@ -2582,7 +2580,8 @@ Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
 
 // FIXME w unused (required because of circle_get_alpha_fn)
 static u8 canvas_brush_get_a(u32 w, double r, Pair p) {
-    double const curr_r = sqrt((p.x - r) * (p.x - r) + (p.y - r) * (p.y - r));
+    double const curr_r =
+        sqrt(((p.x - r) * (p.x - r)) + ((p.y - r) * (p.y - r)));
     return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
 }
 
@@ -2655,8 +2654,8 @@ Rect canvas_regular_poly(
     Rect damage = RNIL;
     DPt const inr_circmr = get_inr_circmr_cfs(n);
     DPt c = {
-        a.x + (b.x - a.x) * inr_circmr.x,
-        a.y + (b.y - a.y) * inr_circmr.x,
+        a.x + ((b.x - a.x) * inr_circmr.x),
+        a.y + ((b.y - a.y) * inr_circmr.x),
     };
     DPt curr = {
         (b.x - a.x) * inr_circmr.y,
@@ -2749,7 +2748,7 @@ Rect canvas_apply_drawer(
             return canvas_circle(im, tc, &canvas_brush_get_a, stroke_d, c);
         }
         case DS_Square: {
-            Pair c2 = (Pair) {c.x - (i32)w / 2, c.y - (i32)w / 2};
+            Pair c2 = (Pair) {c.x - ((i32)w / 2), c.y - ((i32)w / 2)};
             Pair dims = (Pair) {(i32)w, (i32)w};
             return canvas_fill_rect(im, c2, dims, *tc_curr_col(tc));
         }
@@ -2778,7 +2777,7 @@ Rect canvas_circle(
     u32 const t = c.y - (u32)r;
     for (i32 dx = 0; dx < d; ++dx) {
         for (i32 dy = 0; dy < d; ++dy) {
-            double const dr = (dx - r) * (dx - r) + (dy - r) * (dy - r);
+            double const dr = ((dx - r) * (dx - r)) + ((dy - r) * (dy - r));
             u32 const x = l + dx;
             u32 const y = t + dy;
             if (!BETWEEN(x, 0, im->width - 1) || !BETWEEN(y, 0, im->height - 1)
@@ -2815,14 +2814,14 @@ Rect canvas_copy_region(
         for (i32 y = 0; y < dims.y; ++y) {
             for (i32 x = 0; x < dims.x; ++x) {
                 if (get_or_set) {
-                    region_dyn[y * w + x] =
+                    region_dyn[(y * w) + x] =
                         XGetPixel(src, from.x + x, from.y + y);
                 } else {
                     ximage_put_checked(
                         dest,
                         to.x + x,
                         to.y + y,
-                        region_dyn[y * w + x]
+                        region_dyn[(y * w) + x]
                     );
                 }
             }
@@ -3114,13 +3113,13 @@ void draw_selection_circle(
                 0,
                 0,
                 (i32)(sc->x
-                      + cos(-segment_rad * (item + 0.5))
-                          * ((outer_r + inner_r) * 0.5)
-                      - image->width / 2.0),
+                      + (cos(-segment_rad * (item + 0.5))
+                         * ((outer_r + inner_r) * 0.5))
+                      - (image->width / 2.0)),
                 (i32)(sc->y
-                      + sin(-segment_rad * (item + 0.5))
-                          * ((outer_r + inner_r) * 0.5)
-                      - image->height / 2.0),
+                      + (sin(-segment_rad * (item + 0.5))
+                         * ((outer_r + inner_r) * 0.5))
+                      - (image->height / 2.0)),
                 image->width,
                 image->height
             );
@@ -3362,7 +3361,7 @@ static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
             return get_string_width(dc, "#FFFFFF", 7);
         case SLM_ColorList:
             return get_string_width(dc, "/", 1)
-                + get_int_width(dc, "%d", MAX_COLORS) * 2;
+                + (get_int_width(dc, "%d", MAX_COLORS) * 2);
     }
     UNREACHABLE();
     return 0;
@@ -3385,7 +3384,7 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
                 draw_int(
                     dc,
                     tc_name,
-                    (Pair) {(i32)x, c.y},
+                    (Pair) {x, c.y},
                     ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm,
                     False
                 );
@@ -3443,7 +3442,7 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
         } break;
         case SLM_ColorList: {
             // FIXME why it compiles
-            char col_count[digit_count(MAX_COLORS) * 2 + 1 + 1];
+            char col_count[(digit_count(MAX_COLORS) * 2) + 1 + 1];
             sprintf(col_count, "%d/%td", tc->curr_col + 1, arrlen(tc->colarr));
             draw_string(dc, col_count, c, SchmNorm, False);
         } break;
@@ -3492,7 +3491,8 @@ void update_statusline(struct Ctx* ctx) {
 
                 for (i32 i = begin; i < end; ++i) {
                     u32 const row_num = end - i;
-                    i32 const y = (i32)(clientarea.y - statusline_h * row_num);
+                    i32 const y =
+                        (i32)(clientarea.y - (statusline_h * row_num));
                     i32 const stry =
                         (i32)(y + statusline_h - STATUSLINE_PADDING_BOTTOM);
                     argb const bg_col = i != cl->compls_curr
@@ -3780,11 +3780,10 @@ void setup(Display* dp, struct Ctx* ctx) {
     XSetWMName(
         dp,
         ctx->dc.window,
-        &(XTextProperty
-        ) {.value = (unsigned char*)title,
-           .nitems = strlen(title),
-           .format = 8,
-           .encoding = atoms[A_Utf8string]}
+        &(XTextProperty) {.value = (unsigned char*)title,
+                          .nitems = strlen(title),
+                          .format = 8,
+                          .encoding = atoms[A_Utf8string]}
     );
 
     /* turn on protocol support */ {
@@ -4233,7 +4232,9 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } else if (key_eq(curr, KEY_CL_ERASE_CHAR)) {
             cl_pop(cl);
-        } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
+        } else if (!(iscntrl((u32)*lookup_buf))
+                   && (lookup_status == XLookupBoth
+                       || lookup_status == XLookupChars)) {
             for (i32 i = 0; i < text_len; ++i) {
                 cl_push(cl, (char)(lookup_buf[i] & 0xFF));
             }
@@ -4726,7 +4727,8 @@ HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
                 .data.l[4] = (long)atoms[A_XDndActionCopy],
             }
         );
-    } else if (e->message_type == atoms[A_XDndDrop] && mode == InputT_Interact) {
+    } else if (e->message_type == atoms[A_XDndDrop]
+               && mode == InputT_Interact) {
         XConvertSelection(
             dc->dp,
             atoms[A_XDndSelection],
