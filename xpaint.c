@@ -84,18 +84,13 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define OVERLAY_TRANSFORM(p_mode) \
-    ((p_mode)->t != InputT_Transform \
-         ? TRANSFORM_DEFAULT \
-         : ((Transform) { \
-               .scale.x = (p_mode)->d.trans.curr.scale.x \
-                   * (p_mode)->d.trans.acc.scale.x, \
-               .scale.y = (p_mode)->d.trans.curr.scale.y \
-                   * (p_mode)->d.trans.acc.scale.y, \
-               .move.x = (p_mode)->d.trans.curr.move.x \
-                   + (p_mode)->d.trans.acc.move.x, \
-               .move.y = (p_mode)->d.trans.curr.move.y \
-                   + (p_mode)->d.trans.acc.move.y, \
-           }))
+    ((p_mode)->t != InputT_Transform ? TRANSFORM_DEFAULT \
+                                     : ((Transform) { \
+                                           .scale.x = (p_mode)->d.trans.curr.scale.x * (p_mode)->d.trans.acc.scale.x, \
+                                           .scale.y = (p_mode)->d.trans.curr.scale.y * (p_mode)->d.trans.acc.scale.y, \
+                                           .move.x = (p_mode)->d.trans.curr.move.x + (p_mode)->d.trans.acc.move.x, \
+                                           .move.y = (p_mode)->d.trans.curr.move.y + (p_mode)->d.trans.acc.move.y, \
+                                       }))
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 #define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
@@ -650,12 +645,7 @@ i32 main(i32 argc, char** argv) {
     return EXIT_SUCCESS;
 }
 
-void main_die_if_no_val_for_arg(
-    char const* cmd_name,
-    i32 argc,
-    char** argv,
-    u32 pos
-) {
+void main_die_if_no_val_for_arg(char const* cmd_name, i32 argc, char** argv, u32 pos) {
     if (pos + 1 == argc || argv[pos + 1][0] == '-') {
         die("supply argument for %s", cmd_name);
     }
@@ -789,10 +779,8 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_FigRect: return (D) {pic_fig_rect_data, RES_SZ_FIGURE_RECTANGLE};
         case I_FigCirc: return (D) {pic_fig_circ_data, RES_SZ_FIGURE_CIRCLE};
         case I_FigTri: return (D) {pic_fig_tri_data, RES_SZ_FIGURE_TRIANGLE};
-        case I_FigFillOff:
-            return (D) {pic_fig_fill_off_data, RES_SZ_FIGURE_FILL_OFF};
-        case I_FigFillOn:
-            return (D) {pic_fig_fill_on_data, RES_SZ_FIGURE_FILL_ON};
+        case I_FigFillOff: return (D) {pic_fig_fill_off_data, RES_SZ_FIGURE_FILL_OFF};
+        case I_FigFillOn: return (D) {pic_fig_fill_on_data, RES_SZ_FIGURE_FILL_ON};
         default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
     }
 }
@@ -804,10 +792,7 @@ double brush_ease(double v) {
 Bool state_match(u32 a, u32 b) {
 // remove button masks (Button1Mask) and ignored masks
 #define CLEANMASK(p_mask) \
-    ((p_mask) \
-     & (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask \
-        | Mod5Mask) \
-     & ~IGNOREMOD)
+    ((p_mask) & (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask | Mod5Mask) & ~IGNOREMOD)
 
     return (a == ANY_MOD || b == ANY_MOD || CLEANMASK(a) == CLEANMASK(b));
 
@@ -819,13 +804,11 @@ Button get_btn(XButtonEvent const* e) {
 }
 
 Bool btn_eq(Button a, Button b) {
-    return state_match(a.mask, b.mask)
-        && (a.button == ANY_KEY || b.button == ANY_KEY || a.button == b.button);
+    return state_match(a.mask, b.mask) && (a.button == ANY_KEY || b.button == ANY_KEY || a.button == b.button);
 }
 
 Bool key_eq(Key a, Key b) {
-    return state_match(a.mask, b.mask)
-        && (a.sym == ANY_KEY || b.sym == ANY_KEY || a.sym == b.sym);
+    return state_match(a.mask, b.mask) && (a.sym == ANY_KEY || b.sym == ANY_KEY || a.sym == b.sym);
 }
 
 static Bool can_action(struct Input const* input, Key curr_key, Action act) {
@@ -890,16 +873,11 @@ XTransform xtrans_overlay_transform_mode(struct Input const* input) {
         result.matrix[1][2] -= XDoubleToFixed(input->ovr.rect.t);
 
         // apply scale transform
-        result = xtrans_mult(
-            result,
-            xtrans_from_trans((Transform) {.scale = scale})
-        );
+        result = xtrans_mult(result, xtrans_from_trans((Transform) {.scale = scale}));
 
         // move (0, 0) to pivot (scaled)
-        result.matrix[0][2] +=
-            XDoubleToFixed((double)input->ovr.rect.l / scale.x);
-        result.matrix[1][2] +=
-            XDoubleToFixed((double)input->ovr.rect.t / scale.y);
+        result.matrix[0][2] += XDoubleToFixed((double)input->ovr.rect.l / scale.x);
+        result.matrix[1][2] += XDoubleToFixed((double)input->ovr.rect.t / scale.y);
 
         // apply move transform (scaled)
         result.matrix[0][2] += XDoubleToFixed((double)move.x / scale.x);
@@ -934,10 +912,7 @@ XTransform xtrans_mult(XTransform a, XTransform b) {
         for (int j = 0; j < 3; j++) {
             result.matrix[i][j] = XDoubleToFixed(0);
             for (int k = 0; k < 3; k++) {
-                result.matrix[i][j] += XDoubleToFixed(
-                    XFixedToDouble(a.matrix[i][k])
-                    * XFixedToDouble(b.matrix[k][j])
-                );
+                result.matrix[i][j] += XDoubleToFixed(XFixedToDouble(a.matrix[i][k]) * XFixedToDouble(b.matrix[k][j]));
             }
         }
     }
@@ -953,16 +928,7 @@ XTransform xtrans_set_picture_transform_hack(XTransform a) {
 }
 
 void xwindow_set_cardinal(Display* dp, Window window, Atom key, u32 value) {
-    XChangeProperty(
-        dp,
-        window,
-        key,
-        atoms[A_Cardinal],
-        32,
-        PropModeReplace,
-        (unsigned char*)&value,
-        1
-    );
+    XChangeProperty(dp, window, key, atoms[A_Cardinal], 32, PropModeReplace, (unsigned char*)&value, 1);
 }
 
 char* str_new(char const* fmt, ...) {
@@ -1100,10 +1066,7 @@ struct IOCtx ioctx_new(char const* input) {
 
 struct IOCtx ioctx_copy(struct IOCtx const* ioctx) {
     switch (ioctx->t) {
-        case IO_File:
-            return (struct IOCtx) {.t = ioctx->t,
-                                   .d.file.path_dyn =
-                                       str_new("%s", ioctx->d.file.path_dyn)};
+        case IO_File: return (struct IOCtx) {.t = ioctx->t, .d.file.path_dyn = str_new("%s", ioctx->d.file.path_dyn)};
         // no dynamic data
         case IO_None:
         case IO_Stdio: return *ioctx;
@@ -1153,8 +1116,7 @@ Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
 }
 
 Bool point_in_rect(Pair p, Pair a1, Pair a2) {
-    return MIN(a1.x, a2.x) < p.x && p.x < MAX(a1.x, a2.x)
-        && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
+    return MIN(a1.x, a2.x) < p.x && p.x < MAX(a1.x, a2.x) && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
 }
 
 Pair point_apply_trans(Pair p, Transform trans) {
@@ -1162,10 +1124,8 @@ Pair point_apply_trans(Pair p, Transform trans) {
 
     // m[2] is not used
     return (Pair) {
-        (i32)((XFixedToDouble(m[0][0]) * p.x) + (XFixedToDouble(m[0][1]) * p.y)
-              + (XFixedToDouble(m[0][2]) * 1)),
-        (i32)((XFixedToDouble(m[1][0]) * p.x) + (XFixedToDouble(m[1][1]) * p.y)
-              + (XFixedToDouble(m[1][2]) * 1)),
+        (i32)((XFixedToDouble(m[0][0]) * p.x) + (XFixedToDouble(m[0][1]) * p.y) + (XFixedToDouble(m[0][2]) * 1)),
+        (i32)((XFixedToDouble(m[1][0]) * p.x) + (XFixedToDouble(m[1][1]) * p.y) + (XFixedToDouble(m[1][2]) * 1)),
     };
 }
 
@@ -1210,9 +1170,8 @@ enum ImageType file_type(u8 const* data, u32 len) {
         return IMT_Jpg;
     }
     // png header
-    if (len >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E
-        && data[3] == 0x47 && data[4] == 0x0D && data[5] == 0x0A
-        && data[6] == 0x1A && data[7] == 0x0A) {
+    if (len >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 && data[4] == 0x0D
+        && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A) {
         return IMT_Png;
     }
     return IMT_Unknown;
@@ -1282,17 +1241,11 @@ static u32 argb_to_abgr(argb v) {
     return a | blue << (2 * 8) | g | red;
 }
 
-static struct Image read_file_from_memory(
-    struct DrawCtx const* dc,
-    u8 const* data,
-    u32 len,
-    argb bg
-) {
+static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg) {
     i32 width = NIL;
     i32 height = NIL;
     i32 comp = NIL;
-    stbi_uc* image_data =
-        stbi_load_from_memory(data, (i32)len, &width, &height, &comp, 4);
+    stbi_uc* image_data = stbi_load_from_memory(data, (i32)len, &width, &height, &comp, 4);
     if (image_data == NULL) {
         return (struct Image) {0};
     }
@@ -1321,8 +1274,7 @@ static struct Image read_file_from_memory(
     return (struct Image) {.im = im, .type = file_type(data, len)};
 }
 
-struct Image
-read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
+struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg) {
     switch (ioctx->t) {
         case IO_None: return (struct Image) {0};
         case IO_File: {
@@ -1389,12 +1341,7 @@ static void ioctx_write_part(void* pctx, void* data, i32 size) {
     ctx->result_out = True;
 }
 
-Bool write_io(
-    struct DrawCtx* dc,
-    struct Input const* input,
-    enum ImageType type,
-    struct IOCtx const* ioctx
-) {
+Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx) {
     if (type == IMT_Unknown) {
         return False;
     }
@@ -1416,29 +1363,13 @@ Bool write_io(
         case IMT_Png: {
             stbi_write_png_compression_level = input->png_compression_level;
             struct IOCtxWriteCtx ioctx_write_ctx = {.ioctx = ioctx};
-            result = stbi_write_png_to_func(
-                &ioctx_write_part,
-                (void*)&ioctx_write_ctx,
-                w,
-                h,
-                4,
-                rgba_dyn,
-                0
-            );
+            result = stbi_write_png_to_func(&ioctx_write_part, (void*)&ioctx_write_ctx, w, h, 4, rgba_dyn, 0);
             result &= ioctx_write_ctx.result_out;
         } break;
         case IMT_Jpg: {
             i32 quality = input->jpg_quality_level;
             struct IOCtxWriteCtx ioctx_write_ctx = {.ioctx = ioctx};
-            result = stbi_write_jpg_to_func(
-                &ioctx_write_part,
-                (void*)&ioctx_write_ctx,
-                w,
-                h,
-                4,
-                rgba_dyn,
-                quality
-            );
+            result = stbi_write_jpg_to_func(&ioctx_write_part, (void*)&ioctx_write_ctx, w, h, 4, rgba_dyn, quality);
             result &= ioctx_write_ctx.result_out;
         } break;
         case IMT_Unknown: UNREACHABLE();
@@ -1477,28 +1408,23 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 case ClCDS_Inp: {
                     char const* path = cl_cmd->d.set.d.inp.path_dyn;
                     ioctx_set(&ctx->inp, path);
-                    msg_to_show =
-                        str_new("inp set to '%s'", ioctx_as_str(&ctx->inp));
+                    msg_to_show = str_new("inp set to '%s'", ioctx_as_str(&ctx->inp));
                 } break;
                 case ClCDS_Out: {
                     char const* path = cl_cmd->d.set.d.out.path_dyn;
                     ioctx_set(&ctx->out, path);
-                    msg_to_show =
-                        str_new("out set to '%s'", ioctx_as_str(&ctx->out));
+                    msg_to_show = str_new("out set to '%s'", ioctx_as_str(&ctx->out));
                 } break;
                 case ClCDS_PngCompression: {
-                    ctx->input.png_compression_level =
-                        cl_cmd->d.set.d.png_cpr.compression;
+                    ctx->input.png_compression_level = cl_cmd->d.set.d.png_cpr.compression;
                 } break;
                 case ClCDS_JpgQuality: {
-                    ctx->input.jpg_quality_level =
-                        cl_cmd->d.set.d.jpg_qlt.quality;
+                    ctx->input.jpg_quality_level = cl_cmd->d.set.d.jpg_qlt.quality;
                 } break;
                 case ClCDS_Spacing: {
                     if (TC_IS_DRAWER(&CURR_TC(ctx))) {
                         if (cl_cmd->d.set.d.spacing.val >= 1) {
-                            CURR_TC(ctx).d.drawer.spacing =
-                                cl_cmd->d.set.d.spacing.val;
+                            CURR_TC(ctx).d.drawer.spacing = cl_cmd->d.set.d.spacing.val;
                         } else {
                             msg_to_show = str_new("spacing must be >= 1");
                         }
@@ -1519,16 +1445,10 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             if (!cl_cmd->d.save.path_dyn && ctx->out.t == IO_None) {
                 msg_to_show = str_new("can't save: no path provided");
             } else {
-                struct IOCtx ioctx = cl_cmd->d.save.path_dyn
-                    ? ioctx_new(cl_cmd->d.save.path_dyn)
-                    : ioctx_copy(&ctx->out);
+                struct IOCtx ioctx =
+                    cl_cmd->d.save.path_dyn ? ioctx_new(cl_cmd->d.save.path_dyn) : ioctx_copy(&ctx->out);
                 msg_to_show = str_new(
-                    write_io(
-                        &ctx->dc,
-                        &ctx->input,
-                        cl_save_type_to_image_type(cl_cmd->d.save.im_type),
-                        &ioctx
-                    )
+                    write_io(&ctx->dc, &ctx->input, cl_save_type_to_image_type(cl_cmd->d.save.im_type), &ioctx)
                         ? "image saved to '%s'"
                         : "failed save image to '%s'",
                     ioctx_as_str(&ioctx)
@@ -1537,9 +1457,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             }
         } break;
         case ClC_Load: {
-            struct IOCtx ioctx = cl_cmd->d.load.path_dyn
-                ? ioctx_new(cl_cmd->d.load.path_dyn)
-                : ioctx_copy(&ctx->inp);
+            struct IOCtx ioctx = cl_cmd->d.load.path_dyn ? ioctx_new(cl_cmd->d.load.path_dyn) : ioctx_copy(&ctx->inp);
             struct Image im = read_image_io(&ctx->dc, &ioctx, 0);
 
             XImage* old_cv = ctx->dc.cv.im;
@@ -1548,15 +1466,11 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
 
             if (canvas_load(ctx, &im)) {
                 history_forward(ctx, to_push);
-                msg_to_show =
-                    str_new("image_loaded from '%s'", ioctx_as_str(&ioctx));
+                msg_to_show = str_new("image_loaded from '%s'", ioctx_as_str(&ioctx));
             } else {
                 image_free(&im);
                 history_free(&to_push);
-                msg_to_show = str_new(
-                    "failed load image from '%s'",
-                    ioctx_as_str(&ioctx)
-                );
+                msg_to_show = str_new("failed load image from '%s'", ioctx_as_str(&ioctx));
             }
             ioctx_free(&ioctx);
         } break;
@@ -1573,10 +1487,8 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
     }
     if (!strcmp(cmd, "echo")) {
         char const* user_msg = strtok(NULL, "");
-        return (ClCPrsResult) {.t = ClCPrs_Ok,
-                               .d.ok.t = ClC_Echo,
-                               .d.ok.d.echo.msg_dyn =
-                                   str_new("%s", COALESCE(user_msg, ""))};
+        return (ClCPrsResult
+        ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Echo, .d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""))};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
         char const* prop = strtok(NULL, CL_DELIM);
@@ -1593,11 +1505,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             }
             u32 const line_w = strtol(arg, NULL, 0);
             if (!BETWEEN(line_w, MIN_LW, MAX_LW)) {
-                return cl_prs_invarg(
-                    str_new("%s", arg),
-                    str_new("value must be in [%d .. %d]", MIN_LW, MAX_LW),
-                    NULL
-                );
+                return cl_prs_invarg(str_new("%s", arg), str_new("value must be in [%d .. %d]", MIN_LW, MAX_LW), NULL);
             }
             return (ClCPrsResult) {
                 .t = ClCPrs_Ok,
@@ -1608,12 +1516,10 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
             char const* arg = strtok(NULL, CL_DELIM);
-            return (ClCPrsResult
-            ) {.t = ClCPrs_Ok,
-               .d.ok.t = ClC_Set,
-               .d.ok.d.set.t = ClCDS_Col,
-               .d.ok.d.set.d.col.v =
-                   arg ? (strtol(arg, NULL, 16) & 0xFFFFFF) | 0xFF000000 : 0};
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_Col,
+                                   .d.ok.d.set.d.col.v = arg ? (strtol(arg, NULL, 16) & 0xFFFFFF) | 0xFF000000 : 0};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
             char const* font = strtok(NULL, CL_DELIM);
@@ -1623,24 +1529,21 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
                                    .d.ok.d.set.t = ClCDS_Font,
-                                   .d.ok.d.set.d.font.name_dyn =
-                                       font ? str_new("%s", font) : NULL};
+                                   .d.ok.d.set.d.font.name_dyn = font ? str_new("%s", font) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
             char const* path = strtok(NULL, "");  // user can load NULL
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
                                    .d.ok.d.set.t = ClCDS_Inp,
-                                   .d.ok.d.set.d.inp.path_dyn =
-                                       path ? str_new("%s", path) : NULL};
+                                   .d.ok.d.set.d.inp.path_dyn = path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Out))) {
             char const* path = strtok(NULL, "");  // user can load NULL
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
                                    .d.ok.d.set.t = ClCDS_Out,
-                                   .d.ok.d.set.d.out.path_dyn =
-                                       path ? str_new("%s", path) : NULL};
+                                   .d.ok.d.set.d.out.path_dyn = path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
             char const* compression = strtok(NULL, CL_DELIM);
@@ -1650,8 +1553,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
                                    .d.ok.d.set.t = ClCDS_PngCompression,
-                                   .d.ok.d.set.d.png_cpr.compression =
-                                       (i32)strtol(compression, NULL, 0)};
+                                   .d.ok.d.set.d.png_cpr.compression = (i32)strtol(compression, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
             char const* quality = strtok(NULL, CL_DELIM);
@@ -1661,8 +1563,7 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
                                    .d.ok.d.set.t = ClCDS_JpgQuality,
-                                   .d.ok.d.set.d.jpg_qlt.quality =
-                                       (i32)strtol(quality, NULL, 0)};
+                                   .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Spacing))) {
             char const* spacing = strtok(NULL, CL_DELIM);
@@ -1672,14 +1573,9 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
                                    .d.ok.d.set.t = ClCDS_Spacing,
-                                   .d.ok.d.set.d.spacing.val =
-                                       strtoul(spacing, NULL, 0)};
+                                   .d.ok.d.set.d.spacing.val = strtoul(spacing, NULL, 0)};
         }
-        return cl_prs_invarg(
-            str_new("%s", prop),
-            str_new("unknown prop"),
-            str_new("%s", cl_cmd_from_enum(ClC_Set))
-        );
+        return cl_prs_invarg(str_new("%s", prop), str_new("unknown prop"), str_new("%s", cl_cmd_from_enum(ClC_Set)));
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
         return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
@@ -1696,25 +1592,18 @@ static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
             }
         }
         if (type == ClCDSv_Last) {
-            return cl_prs_invarg(
-                str_new("%s", type_str),
-                str_new("unknown type"),
-                NULL
-            );
+            return cl_prs_invarg(str_new("%s", type_str), str_new("unknown type"), NULL);
         }
         char const* path = strtok(NULL, "");  // include spaces
         return (ClCPrsResult) {.t = ClCPrs_Ok,
                                .d.ok.t = ClC_Save,
                                .d.ok.d.save.im_type = type,
-                               .d.ok.d.save.path_dyn =
-                                   path ? str_new("%s", path) : NULL};
+                               .d.ok.d.save.path_dyn = path ? str_new("%s", path) : NULL};
     }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
         char const* path = strtok(NULL, "");  // path with spaces
-        return (ClCPrsResult) {.t = ClCPrs_Ok,
-                               .d.ok.t = ClC_Load,
-                               .d.ok.d.load.path_dyn =
-                                   path ? str_new("%s", path) : NULL};
+        return (ClCPrsResult
+        ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Load, .d.ok.d.load.path_dyn = path ? str_new("%s", path) : NULL};
     }
 
     return cl_prs_invarg(str_new("%s", cmd), str_new("unknown command"), NULL);
@@ -1729,13 +1618,11 @@ ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
 }
 
 ClCPrsResult cl_prs_noarg(char* arg_desc_dyn, char* context_optdyn) {
-    return (ClCPrsResult) {.t = ClCPrs_ENoArg,
-                           .d.noarg.arg_desc_dyn = arg_desc_dyn,
-                           .d.noarg.context_optdyn = context_optdyn};
+    return (ClCPrsResult
+    ) {.t = ClCPrs_ENoArg, .d.noarg.arg_desc_dyn = arg_desc_dyn, .d.noarg.context_optdyn = context_optdyn};
 }
 
-ClCPrsResult
-cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_optdyn) {
+ClCPrsResult cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_optdyn) {
     return (ClCPrsResult) {.t = ClCPrs_EInvArg,
                            .d.invarg.arg_dyn = arg_dyn,
                            .d.invarg.error_dyn = error_dyn,
@@ -1749,22 +1636,15 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
             switch (cl_cmd->t) {
                 case ClC_Set:
                     switch (cl_cmd->d.set.t) {
-                        case ClCDS_Font:
-                            free(cl_cmd->d.set.d.font.name_dyn);
-                            break;
-                        case ClCDS_Inp:
-                            free(cl_cmd->d.set.d.inp.path_dyn);
-                            break;
-                        case ClCDS_Out:
-                            free(cl_cmd->d.set.d.out.path_dyn);
-                            break;
+                        case ClCDS_Font: free(cl_cmd->d.set.d.font.name_dyn); break;
+                        case ClCDS_Inp: free(cl_cmd->d.set.d.inp.path_dyn); break;
+                        case ClCDS_Out: free(cl_cmd->d.set.d.out.path_dyn); break;
                         case ClCDS_LineW:
                         case ClCDS_Col:
                         case ClCDS_PngCompression:
                         case ClCDS_JpgQuality:
                         case ClCDS_Spacing:
-                        case ClCDS_Last:
-                            break;  // no default branch to enable warnings
+                        case ClCDS_Last: break;  // no default branch to enable warnings
                     }
                     break;
                 case ClC_Save: free(cl_cmd->d.save.path_dyn); break;
@@ -1854,8 +1734,7 @@ static void cl_compls_update_helper(
         usize offset = first_dismatch(enum_str, token);
         if (offset == strlen(token)) {
             // don't let completions stick with commands
-            char const* prefix =
-                add_delim && strlen(token) == 0 ? CL_DELIM : "";
+            char const* prefix = add_delim && strlen(token) == 0 ? CL_DELIM : "";
             char* complt = str_new("%s%s", prefix, enum_str + offset);
             arrpush(*result, complt);
         }
@@ -1867,8 +1746,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     char** result = NULL;
 
     usize const cl_buf_len = strlen(cl_buf_dyn);
-    Bool const last_char_is_space =
-        cl_buf_len != 0 && cl_buf_dyn[cl_buf_len - 1] == CL_DELIM[0];
+    Bool const last_char_is_space = cl_buf_len != 0 && cl_buf_dyn[cl_buf_len - 1] == CL_DELIM[0];
     // prepend delim to completions if not provided
     Bool const add_delim = cl_buf_len != 0 && !last_char_is_space;
 
@@ -1882,30 +1760,11 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     typedef char const* (*cast)(usize);
     // subcommands with own completions
     if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
-        cl_compls_update_helper(
-            &result,
-            tok2,
-            (cast)&cl_set_prop_from_enum,
-            ClCDS_Last,
-            add_delim
-        );
+        cl_compls_update_helper(&result, tok2, (cast)&cl_set_prop_from_enum, ClCDS_Last, add_delim);
     } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
-        cl_compls_update_helper(
-            &result,
-            tok2,
-            (cast)&cl_save_type_from_enum,
-            ClCDSv_Last,
-            add_delim
-        );
-    } else if (strlen(tok1) == 0
-               || !last_char_is_space) {  // first token comletion
-        cl_compls_update_helper(
-            &result,
-            tok1,
-            (cast)&cl_cmd_from_enum,
-            ClC_Last,
-            add_delim
-        );
+        cl_compls_update_helper(&result, tok2, (cast)&cl_save_type_from_enum, ClCDSv_Last, add_delim);
+    } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token comletion
+        cl_compls_update_helper(&result, tok1, (cast)&cl_cmd_from_enum, ClC_Last, add_delim);
     } else {
         free(cl_buf_dyn);
         return 0;
@@ -1976,13 +1835,8 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
     inp->mode.t = mode_tag;
 
     switch (inp->mode.t) {
-        case InputT_Color:
-            inp->mode.d.col = (struct InputColorData) {.current_digit = 0};
-            break;
-        case InputT_Console:
-            inp->mode.d.cl = (struct InputConsoleData) {.cmdarr = NULL,
-                                                        .compls_valid = False};
-            break;
+        case InputT_Color: inp->mode.d.col = (struct InputColorData) {.current_digit = 0}; break;
+        case InputT_Console: inp->mode.d.cl = (struct InputConsoleData) {.cmdarr = NULL, .compls_valid = False}; break;
         case InputT_Interact: break;
         case InputT_Transform:
             inp->mode.d.trans = (struct InputTransformData) {
@@ -2044,8 +1898,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y) {
             {.on_select = &sel_circ_figure_set_circle, .icon = I_FigCirc},
             {.on_select = &sel_circ_figure_set_rectangle, .icon = I_FigRect},
             {.on_select = &sel_circ_figure_set_triangle, .icon = I_FigTri},
-            {.on_select = &sel_circ_figure_toggle_fill,
-             .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn},
+            {.on_select = &sel_circ_figure_toggle_fill, .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn},
             {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
         };
         for (u32 i = 0; i < LENGTH(items); ++i) {
@@ -2085,8 +1938,7 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     }
     double const segment_rad = PI * 2 / MAX(1, arrlen(sc->items_arr));
     double const segment_deg = segment_rad / PI * 180;
-    double const pointer_r =
-        sqrt((pointer_x_rel * pointer_x_rel) + (pointer_y_rel * pointer_y_rel));
+    double const pointer_r = sqrt((pointer_x_rel * pointer_x_rel) + (pointer_y_rel * pointer_y_rel));
 
     if (pointer_r > SEL_CIRC_OUTER_R_PX || pointer_r < SEL_CIRC_INNER_R_PX) {
         return NIL;
@@ -2102,12 +1954,8 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     return (i32)(angle / segment_deg);
 }
 
-Rect tool_selection_on_release(
-    struct Ctx* ctx,
-    XButtonReleasedEvent const* event
-) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)
-        && !btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
+Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
+    if (!btn_eq(get_btn(event), BTN_MAIN) && !btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
         return RNIL;
     }
 
@@ -2139,8 +1987,7 @@ Rect tool_selection_on_release(
 }
 
 Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)
-        && !btn_eq(ctx->input.holding_button, BTN_COPY_SELECTION)) {
+    if (!btn_eq(ctx->input.holding_button, BTN_MAIN) && !btn_eq(ctx->input.holding_button, BTN_COPY_SELECTION)) {
         return RNIL;
     }
 
@@ -2187,10 +2034,7 @@ Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     return RNIL;
 }
 
-Rect tool_drawer_on_release(
-    struct Ctx* ctx,
-    XButtonReleasedEvent const* event
-) {
+Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     if (!btn_eq(get_btn(event), BTN_MAIN)) {
         return RNIL;
     }
@@ -2249,13 +2093,8 @@ Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
     return RNIL;
 }
 
-Rect tool_figure_on_release(
-    struct Ctx* ctx,
-    XButtonReleasedEvent const* event
-) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)
-        || (!ctx->input.is_dragging && !(state_match(event->state, ShiftMask))
-        )) {
+Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
+    if (!btn_eq(get_btn(event), BTN_MAIN) || (!ctx->input.is_dragging && !(state_match(event->state, ShiftMask)))) {
         return RNIL;
     }
 
@@ -2301,20 +2140,13 @@ Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     return ximage_flood_fill(inp->ovr.im, *tc_curr_col(tc), cur.x, cur.y);
 }
 
-Rect tool_picker_on_release(
-    struct Ctx* ctx,
-    XButtonReleasedEvent const* event
-) {
+Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     XImage* im = dc->cv.im;  // overlay always empty, grab from canvas
 
-    if (!point_in_rect(
-            pointer,
-            (Pair) {0, 0},
-            (Pair) {(i32)im->width, (i32)im->height}
-        )) {
+    if (!point_in_rect(pointer, (Pair) {0, 0}, (Pair) {(i32)im->width, (i32)im->height})) {
         return RNIL;
     }
 
@@ -2339,20 +2171,16 @@ struct HistItem history_new_item(XImage* im, Rect rect) {
 }
 
 Bool history_move(struct Ctx* ctx, Bool forward) {
-    struct HistItem** hist_pop =
-        forward ? &ctx->hist_nextarr : &ctx->hist_prevarr;
-    struct HistItem** hist_save =
-        forward ? &ctx->hist_prevarr : &ctx->hist_nextarr;
+    struct HistItem** hist_pop = forward ? &ctx->hist_nextarr : &ctx->hist_prevarr;
+    struct HistItem** hist_save = forward ? &ctx->hist_prevarr : &ctx->hist_nextarr;
 
     if (!arrlenu(*hist_pop)) {
         return False;
     }
 
     struct HistItem curr = arrpop(*hist_pop);
-    Rect curr_rect = (Rect) {curr.pivot.x,
-                             curr.pivot.y,
-                             curr.pivot.x + curr.patch->width,
-                             curr.pivot.y + curr.patch->height};
+    Rect curr_rect =
+        (Rect) {curr.pivot.x, curr.pivot.y, curr.pivot.x + curr.patch->width, curr.pivot.y + curr.patch->height};
 
     arrpush(*hist_save, history_new_item(ctx->dc.cv.im, curr_rect));
     history_apply(ctx, &curr);
@@ -2398,16 +2226,12 @@ XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans) {
     u32 const w = im->width;
     u32 const h = im->height;
 
-    Pixmap src_pm =
-        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
+    Pixmap src_pm = XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
     XPutImage(dc->dp, src_pm, dc->screen_gc, im, 0, 0, 0, 0, w, h);
-    Pixmap dst_pm =
-        XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
+    Pixmap dst_pm = XCreatePixmap(dc->dp, dc->window, w, h, dc->sys.vinfo.depth);
 
-    Picture src =
-        XRenderCreatePicture(dc->dp, src_pm, dc->sys.xrnd_pic_format, 0, NULL);
-    Picture dst =
-        XRenderCreatePicture(dc->dp, dst_pm, dc->sys.xrnd_pic_format, 0, NULL);
+    Picture src = XRenderCreatePicture(dc->dp, src_pm, dc->sys.xrnd_pic_format, 0, NULL);
+    Picture dst = XRenderCreatePicture(dc->dp, dst_pm, dc->sys.xrnd_pic_format, 0, NULL);
 
     XTransform xtrans_pict = xtrans_set_picture_transform_hack(xtrans);
     XRenderSetPictureTransform(dc->dp, src, &xtrans_pict);
@@ -2430,8 +2254,7 @@ void ximage_blend(XImage* dest, XImage* overlay) {
             if (ovr & ARGB_ALPHA) {
                 argb bg = XGetPixel(dest, x, y);
                 // make first argument opaque and use its opacity as third argument.
-                argb result =
-                    argb_blend(argb_normalize(ovr), bg, (ovr >> 0x18) & 0xFF);
+                argb result = argb_blend(argb_normalize(ovr), bg, (ovr >> 0x18) & 0xFF);
                 ximage_put_checked(dest, x, y, result);
             }
         }
@@ -2478,17 +2301,13 @@ Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
         for (i32 dir = 0; dir < 4; ++dir) {
             Pair d_curr = {curr.x + d_rows[dir], curr.y + d_cols[dir]};
 
-            if (d_curr.x < 0 || d_curr.y < 0 || d_curr.x >= im->width
-                || d_curr.y >= im->height) {
+            if (d_curr.x < 0 || d_curr.y < 0 || d_curr.x >= im->width || d_curr.y >= im->height) {
                 continue;
             }
 
             if (XGetPixel(im, d_curr.x, d_curr.y) == area_col) {
                 XPutPixel(im, d_curr.x, d_curr.y, targ_col);
-                damage = rect_expand(
-                    damage,
-                    (Rect) {d_curr.x, d_curr.y, d_curr.x, d_curr.y}
-                );
+                damage = rect_expand(damage, (Rect) {d_curr.x, d_curr.y, d_curr.x, d_curr.y});
 
                 arrpush(queue_arr, d_curr);
             }
@@ -2512,42 +2331,21 @@ Rect ximage_calc_damage(XImage* im) {
     return damage;
 }
 
-Rect canvas_dash_rect(
-    XImage* im,
-    Pair c,
-    Pair dims,
-    u32 w,
-    u32 dash_w,
-    argb col1,
-    argb col2
-) {
+Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col1, argb col2) {
     Rect damage = RNIL;
 
-    Pair const corners[] = {
-        c,
-        {c.x + dims.x, c.y},
-        {c.x + dims.x, c.y + dims.y},
-        {c.x, c.y + dims.y}
-    };
+    Pair const corners[] = {c, {c.x + dims.x, c.y}, {c.x + dims.x, c.y + dims.y}, {c.x, c.y + dims.y}};
 
     for (u32 i = 0; i < LENGTH(corners); ++i) {
         Pair curr = corners[i];
         Pair const to = corners[(i + 1) % LENGTH(corners)];
         Pair const delta = {to.x - curr.x, to.y - curr.y};
         assert(delta.x == 0 || delta.y == 0);
-        Pair const delta_sign = {
-            delta.x == 0      ? 0
-                : delta.x > 0 ? 1
-                              : -1,
-            delta.y == 0      ? 0
-                : delta.y > 0 ? 1
-                              : -1
-        };
+        Pair const delta_sign = {delta.x == 0 ? 0 : delta.x > 0 ? 1 : -1, delta.y == 0 ? 0 : delta.y > 0 ? 1 : -1};
 
         u32 iterations = 0;
         while (!PAIR_EQ(curr, to) && iterations < 10000000) {
-            Pair const lt =
-                (Pair) {curr.x - ((i32)w / 2), curr.y - ((i32)w / 2)};
+            Pair const lt = (Pair) {curr.x - ((i32)w / 2), curr.y - ((i32)w / 2)};
             argb col = iterations / dash_w % 2 ? col1 : col2;
             Rect d = canvas_fill_rect(im, lt, (Pair) {(i32)w, (i32)w}, col);
             damage = rect_expand(damage, d);
@@ -2567,8 +2365,7 @@ Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
     Bool const nx = dims.x < 0;
     Bool const ny = dims.y < 0;
     for (i32 x = c.x + (nx ? dims.x : 0); x < c.x + (nx ? 0 : dims.x); ++x) {
-        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y);
-             ++y) {
+        for (i32 y = c.y + (ny ? dims.y : 0); y < c.y + (ny ? 0 : dims.y); ++y) {
             if (ximage_put_checked(im, x, y, col)) {
                 damage = rect_expand(damage, (Rect) {x, y, x, y});
             }
@@ -2580,13 +2377,11 @@ Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
 
 // FIXME w unused (required because of circle_get_alpha_fn)
 static u8 canvas_brush_get_a(u32 w, double r, Pair p) {
-    double const curr_r =
-        sqrt(((p.x - r) * (p.x - r)) + ((p.y - r) * (p.y - r)));
+    double const curr_r = sqrt(((p.x - r) * (p.x - r)) + ((p.y - r) * (p.y - r)));
     return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
 }
 
-static Pair
-get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
+static Pair get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
     switch (type) {
         case Figure_Circle:
         case Figure_Rectangle:
@@ -2614,14 +2409,11 @@ Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2) {
         case Figure_Circle:
         case Figure_Rectangle:
         case Figure_Triangle: {
-            u32 sides = fig->curr == Figure_Triangle ? 3
-                : fig->curr == Figure_Rectangle      ? 4
-                                                     : 250;
+            u32 sides = fig->curr == Figure_Triangle ? 3 : fig->curr == Figure_Rectangle ? 4 : 250;
             Rect damage = canvas_regular_poly(im, tc, sides, p2, p1);
             if (fig->fill) {
                 Pair const im_dims = {im->width, im->height};
-                Pair const fill_pt =
-                    get_fig_fill_pt(fig->curr, p2, p1, im_dims);
+                Pair const fill_pt = get_fig_fill_pt(fig->curr, p2, p1, im_dims);
                 ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
             }
             return damage;
@@ -2644,13 +2436,7 @@ static DPt get_inr_circmr_cfs(u32 n) {
     return (DPt) {inradius, circumradius};
 }
 
-Rect canvas_regular_poly(
-    XImage* im,
-    struct ToolCtx* tc,
-    u32 n,
-    Pair a,
-    Pair b
-) {
+Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b) {
     Rect damage = RNIL;
     DPt const inr_circmr = get_inr_circmr_cfs(n);
     DPt c = {
@@ -2664,14 +2450,8 @@ Rect canvas_regular_poly(
     DPt prev = curr;
     for (u32 i = 0; i < n; ++i) {
         curr = dpt_rotate(curr, 360.0 / n);
-        Rect line_damage = canvas_line(
-            im,
-            tc,
-            DS_Square,
-            dpt_to_pt(dpt_add(c, prev)),
-            dpt_to_pt(dpt_add(c, curr)),
-            True
-        );
+        Rect line_damage =
+            canvas_line(im, tc, DS_Square, dpt_to_pt(dpt_add(c, prev)), dpt_to_pt(dpt_add(c, curr)), True);
         damage = rect_expand(damage, line_damage);
         prev = curr;
     }
@@ -2735,12 +2515,7 @@ Rect canvas_line(
     return damage;
 }
 
-Rect canvas_apply_drawer(
-    XImage* im,
-    struct ToolCtx* tc,
-    enum DrawerShape shape,
-    Pair c
-) {
+Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c) {
     u32 const w = tc->line_w;
     switch (shape) {
         case DS_Circle: {
@@ -2756,13 +2531,7 @@ Rect canvas_apply_drawer(
     return RNIL;
 }
 
-Rect canvas_circle(
-    XImage* im,
-    struct ToolCtx* tc,
-    circle_get_alpha_fn get_a,
-    u32 d,
-    Pair c
-) {
+Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c) {
     Rect damage = RNIL;
     argb const col = *tc_curr_col(tc);
     u32 const w = tc->line_w;
@@ -2780,29 +2549,20 @@ Rect canvas_circle(
             double const dr = ((dx - r) * (dx - r)) + ((dy - r) * (dy - r));
             u32 const x = l + dx;
             u32 const y = t + dy;
-            if (!BETWEEN(x, 0, im->width - 1) || !BETWEEN(y, 0, im->height - 1)
-                || dr > r_sq) {
+            if (!BETWEEN(x, 0, im->width - 1) || !BETWEEN(y, 0, im->height - 1) || dr > r_sq) {
                 continue;
             }
             argb const bg = XGetPixel(im, x, y);
-            argb const blended =
-                argb_blend(col, bg, get_a(w, r, (Pair) {dx, dy}));
+            argb const blended = argb_blend(col, bg, get_a(w, r, (Pair) {dx, dy}));
             XPutPixel(im, x, y, blended);
-            damage =
-                rect_expand(damage, (Rect) {(i32)x, (i32)y, (i32)x, (i32)y});
+            damage = rect_expand(damage, (Rect) {(i32)x, (i32)y, (i32)x, (i32)y});
         }
     }
 
     return damage;
 }
 
-Rect canvas_copy_region(
-    XImage* dest,
-    XImage* src,
-    Pair from,
-    Pair dims,
-    Pair to
-) {
+Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to) {
     i32 const w = src->width;
     i32 const h = src->height;
     assert(from.x >= 0 && from.y >= 0);
@@ -2814,15 +2574,9 @@ Rect canvas_copy_region(
         for (i32 y = 0; y < dims.y; ++y) {
             for (i32 x = 0; x < dims.x; ++x) {
                 if (get_or_set) {
-                    region_dyn[(y * w) + x] =
-                        XGetPixel(src, from.x + x, from.y + y);
+                    region_dyn[(y * w) + x] = XGetPixel(src, from.x + x, from.y + y);
                 } else {
-                    ximage_put_checked(
-                        dest,
-                        to.x + x,
-                        to.y + y,
-                        region_dyn[(y * w) + x]
-                    );
+                    ximage_put_checked(dest, to.x + x, to.y + y, region_dyn[(y * w) + x]);
                 }
             }
         }
@@ -2855,8 +2609,7 @@ static Bool canvas_load(struct Ctx* ctx, struct Image* image) {
     canvas_free(&dc->cv);
     dc->cv.im = image->im;
     dc->cv.type = image->type;
-    ctx->input.ovr.im =
-        XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
+    ctx->input.ovr.im = XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
     overlay_clear(&ctx->input.ovr);
     return True;
 }
@@ -2938,8 +2691,7 @@ void overlay_expand_rect(struct InputOverlay* ovr, Rect rect) {
     ovr->rect = rect_expand(ovr->rect, rect);
 }
 
-static struct InputOverlay
-get_transformed_overlay(struct DrawCtx* dc, struct Input const* inp) {
+static struct InputOverlay get_transformed_overlay(struct DrawCtx* dc, struct Input const* inp) {
     XTransform const xtrans = xtrans_overlay_transform_mode(inp);
     XImage* im = ximage_apply_xtrans(inp->ovr.im, dc, xtrans);
     Rect const rect = ximage_calc_damage(im);
@@ -2972,19 +2724,8 @@ Pair canvas_size(struct DrawCtx const* dc) {
     };
 }
 
-void draw_string(
-    struct DrawCtx* dc,
-    char const* str,
-    Pair c,
-    enum Schm sc,
-    Bool invert
-) {
-    XftDraw* d = XftDrawCreate(
-        dc->dp,
-        dc->back_buffer,
-        dc->sys.vinfo.visual,
-        dc->sys.colmap
-    );
+void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert) {
+    XftDraw* d = XftDrawCreate(dc->dp, dc->back_buffer, dc->sys.vinfo.visual, dc->sys.colmap);
     XftDrawStringUtf8(
         d,
         invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
@@ -3006,40 +2747,17 @@ void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
 // XXX always opaque
 int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col) {
     XSetForeground(dc->dp, dc->screen_gc, col | 0xFF000000);
-    return XFillRectangle(
-        dc->dp,
-        dc->back_buffer,
-        dc->screen_gc,
-        p.x,
-        p.y,
-        dim.x,
-        dim.y
-    );
+    return XFillRectangle(dc->dp, dc->back_buffer, dc->screen_gc, p.x, p.y, dim.x, dim.y);
 }
 
-int draw_line_ex(
-    struct DrawCtx* dc,
-    Pair from,
-    Pair to,
-    u32 w,
-    int line_style,
-    enum Schm sc,
-    Bool invert
-) {
+int draw_line_ex(struct DrawCtx* dc, Pair from, Pair to, u32 w, int line_style, enum Schm sc, Bool invert) {
     GC gc = dc->screen_gc;
     XSetForeground(dc->dp, gc, invert ? COL_BG(dc, sc) : COL_FG(dc, sc));
     XSetLineAttributes(dc->dp, gc, w, line_style, CapButt, JoinMiter);
     return XDrawLine(dc->dp, dc->back_buffer, gc, from.x, from.y, to.x, to.y);
 }
 
-int draw_line(
-    struct DrawCtx* dc,
-    Pair from,
-    Pair to,
-    u32 w,
-    enum Schm sc,
-    Bool invert
-) {
+int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool invert) {
     return draw_line_ex(dc, from, to, w, LineSolid, sc, invert);
 }
 
@@ -3074,14 +2792,7 @@ void draw_selection_circle(
     i32 const outer_r = (i32)SEL_CIRC_OUTER_R_PX;
     i32 const inner_r = (i32)SEL_CIRC_INNER_R_PX;
 
-    XSetLineAttributes(
-        dc->dp,
-        dc->screen_gc,
-        SEL_CIRC_LINE_W,
-        SEL_CIRC_LINE_STYLE,
-        CapNotLast,
-        JoinMiter
-    );
+    XSetLineAttributes(dc->dp, dc->screen_gc, SEL_CIRC_LINE_W, SEL_CIRC_LINE_STYLE, CapNotLast, JoinMiter);
 
     XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
     XFillArc(
@@ -3112,14 +2823,8 @@ void draw_selection_circle(
                 image,
                 0,
                 0,
-                (i32)(sc->x
-                      + (cos(-segment_rad * (item + 0.5))
-                         * ((outer_r + inner_r) * 0.5))
-                      - (image->width / 2.0)),
-                (i32)(sc->y
-                      + (sin(-segment_rad * (item + 0.5))
-                         * ((outer_r + inner_r) * 0.5))
-                      - (image->height / 2.0)),
+                (i32)(sc->x + (cos(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5)) - (image->width / 2.0)),
+                (i32)(sc->y + (sin(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5)) - (image->height / 2.0)),
                 image->width,
                 image->height
             );
@@ -3156,8 +2861,7 @@ void draw_selection_circle(
 
         if (arrlen(sc->items_arr) >= 2) {  // segment lines
             XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
-            for (u32 line_num = 0; line_num < arrlen(sc->items_arr);
-                 ++line_num) {
+            for (u32 line_num = 0; line_num < arrlen(sc->items_arr); ++line_num) {
                 XDrawLine(
                     dc->dp,
                     dc->window,
@@ -3204,12 +2908,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr) {
     struct Input* inp = &ctx->input;
 
     /* draw canvas */ {
-        fill_rect(
-            dc,
-            (Pair) {0, 0},
-            (Pair) {(i32)dc->width, (i32)dc->height},
-            WND_BACKGROUND
-        );
+        fill_rect(dc, (Pair) {0, 0}, (Pair) {(i32)dc->width, (i32)dc->height}, WND_BACKGROUND);
         /* put scaled image */ {
             dc_cache_update(ctx);
             //  https://stackoverflow.com/a/66896097
@@ -3238,11 +2937,9 @@ void update_screen(struct Ctx* ctx, Pair cur_scr) {
 
             XTransform const xtrans_zoom = xtrans_scale(ZOOM_C(dc));
 
-            XTransform xtrans_canvas =
-                xtrans_set_picture_transform_hack(xtrans_zoom);
-            XTransform xtrans_overlay = xtrans_set_picture_transform_hack(
-                xtrans_mult(xtrans_overlay_transform_mode(inp), xtrans_zoom)
-            );
+            XTransform xtrans_canvas = xtrans_set_picture_transform_hack(xtrans_zoom);
+            XTransform xtrans_overlay =
+                xtrans_set_picture_transform_hack(xtrans_mult(xtrans_overlay_transform_mode(inp), xtrans_zoom));
             XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_canvas);
             XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_overlay);
 
@@ -3281,19 +2978,12 @@ void update_screen(struct Ctx* ctx, Pair cur_scr) {
         Pair transformed[] = {
             point_apply_trans_pivot((Pair) {rect.l, rect.t}, trans, pivot),
             point_apply_trans_pivot((Pair) {rect.r + 1, rect.t}, trans, pivot),
-            point_apply_trans_pivot(
-                (Pair) {rect.r + 1, rect.b + 1},
-                trans,
-                pivot
-            ),
+            point_apply_trans_pivot((Pair) {rect.r + 1, rect.b + 1}, trans, pivot),
             point_apply_trans_pivot((Pair) {rect.l, rect.b + 1}, trans, pivot),
         };
         for (u32 i = 0; i < LENGTH(transformed); ++i) {
             Pair from = point_from_cv_to_scr(dc, transformed[i]);
-            Pair to = point_from_cv_to_scr(
-                dc,
-                transformed[(i + 1) % LENGTH(transformed)]
-            );
+            Pair to = point_from_cv_to_scr(dc, transformed[(i + 1) % LENGTH(transformed)]);
             draw_line(dc, from, to, 2, SchmNorm, True);
             draw_line_ex(dc, from, to, 2, LineOnOffDash, SchmNorm, False);
         }
@@ -3307,8 +2997,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr) {
         draw_dash_line(dc, (Pair) {rect.l, rect.t}, (Pair) {rect.r, rect.b}, 1);
     }
 
-    if (inp->is_dragging
-        && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE)) {
+    if (inp->is_dragging && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE)) {
         Pair const cur = point_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
 
         Pair const lt = point_from_cv_to_scr_xy(dc, 0, 0);
@@ -3330,13 +3019,11 @@ static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
 
     switch (module->t) {
         case SLM_Spacer: return module->d.spacer;
-        case SLM_Text:
-            return get_string_width(dc, module->d.text, strlen(module->d.text));
+        case SLM_Text: return get_string_width(dc, module->d.text, strlen(module->d.text));
         case SLM_ToolCtx: {
             u32 result = 0;
             for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                result += get_int_width(dc, "%d", tc_name)
-                    + STATUSLINE_MODULE_SPACING_SMALL_PX;
+                result += get_int_width(dc, "%d", tc_name) + STATUSLINE_MODULE_SPACING_SMALL_PX;
             }
             return result - STATUSLINE_MODULE_SPACING_SMALL_PX;
         }
@@ -3349,19 +3036,12 @@ static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
             return get_string_width(dc, tool_str, strlen(tool_str));
         }
         case SLM_ToolLineW: return get_int_width(dc, "%d", tc->line_w);
-        case SLM_ToolSpacing:
-            return get_int_width(
-                dc,
-                "%d",
-                TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 0
-            );
+        case SLM_ToolSpacing: return get_int_width(dc, "%d", TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 0);
         case SLM_ColorBox: return module->d.color_box_w;
         case SLM_ColorName:
             // XXX uses 'F' as overage character
             return get_string_width(dc, "#FFFFFF", 7);
-        case SLM_ColorList:
-            return get_string_width(dc, "/", 1)
-                + (get_int_width(dc, "%d", MAX_COLORS) * 2);
+        case SLM_ColorList: return get_string_width(dc, "/", 1) + (get_int_width(dc, "%d", MAX_COLORS) * 2);
     }
     UNREACHABLE();
     return 0;
@@ -3381,21 +3061,13 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
         case SLM_ToolCtx: {
             i32 x = c.x;
             for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                draw_int(
-                    dc,
-                    tc_name,
-                    (Pair) {x, c.y},
-                    ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm,
-                    False
-                );
-                x += (i32)(get_int_width(dc, "%d", tc_name)
-                           + STATUSLINE_MODULE_SPACING_SMALL_PX);
+                draw_int(dc, tc_name, (Pair) {x, c.y}, ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm, False);
+                x += (i32)(get_int_width(dc, "%d", tc_name) + STATUSLINE_MODULE_SPACING_SMALL_PX);
             }
         } break;
         case SLM_Mode: {
             char const* name = input_mode_as_str(mode->t);
-            enum Schm const schm =
-                mode->t == InputT_Interact ? SchmNorm : SchmFocus;
+            enum Schm const schm = mode->t == InputT_Interact ? SchmNorm : SchmFocus;
             draw_string(dc, name, c, schm, False);
         } break;
         case SLM_Tool: {
@@ -3427,17 +3099,9 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
             if (mode->t == InputT_Color) {
                 static u32 const hash_w = 1;
                 u32 const curr_dig = mode->d.col.current_digit;
-                char const col_digit_value[] =
-                    {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
-                u32 focus_offset =
-                    get_string_width(dc, col_value, curr_dig + hash_w);
-                draw_string(
-                    dc,
-                    col_digit_value,
-                    (Pair) {c.x + (i32)focus_offset, c.y},
-                    SchmFocus,
-                    False
-                );
+                char const col_digit_value[] = {[0] = col_value[curr_dig + hash_w], [1] = '\0'};
+                u32 focus_offset = get_string_width(dc, col_value, curr_dig + hash_w);
+                draw_string(dc, col_digit_value, (Pair) {c.x + (i32)focus_offset, c.y}, SchmFocus, False);
             }
         } break;
         case SLM_ColorList: {
@@ -3467,46 +3131,27 @@ void update_statusline(struct Ctx* ctx) {
         cl_str_dyn[0] = ':';
         cl_str_dyn[command_len + 1] = '\0';
         memcpy(cl_str_dyn + 1, command, command_len);
-        i32 const user_cmd_w =
-            (i32)get_string_width(dc, cl_str_dyn, command_len + 1);
+        i32 const user_cmd_w = (i32)get_string_width(dc, cl_str_dyn, command_len + 1);
         i32 const cmd_y = (i32)(dc->height - STATUSLINE_PADDING_BOTTOM);
         draw_string(dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
         if (cl->compls_arr) {
-            draw_string(
-                dc,
-                cl->compls_arr[cl->compls_curr],
-                (Pair) {user_cmd_w, cmd_y},
-                SchmFocus,
-                False
-            );
+            draw_string(dc, cl->compls_arr[cl->compls_curr], (Pair) {user_cmd_w, cmd_y}, SchmFocus, False);
             /* draw compls array */ {
                 u32 const list_pre_half = (STATUSLINE_COMPLS_LIST_MAX + 1) / 2;
                 u32 const len = arrlen(cl->compls_arr);
 
                 i32 const begin =
-                    MAX(0,
-                        MIN((i32)cl->compls_curr - (i32)list_pre_half,
-                            (i32)len - (i32)STATUSLINE_COMPLS_LIST_MAX));
+                    MAX(0, MIN((i32)cl->compls_curr - (i32)list_pre_half, (i32)len - (i32)STATUSLINE_COMPLS_LIST_MAX));
                 i32 const end = MIN(len, begin + STATUSLINE_COMPLS_LIST_MAX);
 
                 for (i32 i = begin; i < end; ++i) {
                     u32 const row_num = end - i;
-                    i32 const y =
-                        (i32)(clientarea.y - (statusline_h * row_num));
-                    i32 const stry =
-                        (i32)(y + statusline_h - STATUSLINE_PADDING_BOTTOM);
-                    argb const bg_col = i != cl->compls_curr
-                        ? COL_BG(dc, SchmNorm)
-                        : COL_FG(dc, SchmNorm);
+                    i32 const y = (i32)(clientarea.y - (statusline_h * row_num));
+                    i32 const stry = (i32)(y + statusline_h - STATUSLINE_PADDING_BOTTOM);
+                    argb const bg_col = i != cl->compls_curr ? COL_BG(dc, SchmNorm) : COL_FG(dc, SchmNorm);
 
                     fill_rect(dc, (Pair) {0, y}, line_dims, bg_col);
-                    draw_string(
-                        dc,
-                        cl->compls_arr[i],
-                        (Pair) {0, stry},
-                        SchmNorm,
-                        i == cl->compls_curr
-                    );
+                    draw_string(dc, cl->compls_arr[i], (Pair) {0, stry}, SchmNorm, i == cl->compls_curr);
                 }
             }
         }
@@ -3521,8 +3166,7 @@ void update_statusline(struct Ctx* ctx) {
                 SLModule const* module = &LEFT_MODULES[i];
                 draw_module(ctx, module, (Pair) {(i32)x, (i32)y});
 
-                x += get_module_width(ctx, module)
-                    + STATUSLINE_MODULE_SPACING_PX;
+                x += get_module_width(ctx, module) + STATUSLINE_MODULE_SPACING_PX;
             }
         }
 
@@ -3554,21 +3198,14 @@ void update_statusline(struct Ctx* ctx) {
 
 // FIXME DRY
 void show_message(struct Ctx* ctx, char const* msg) {
-    u32 const statusline_h =
-        ctx->dc.fnt.xfont->ascent + STATUSLINE_PADDING_BOTTOM;
+    u32 const statusline_h = ctx->dc.fnt.xfont->ascent + STATUSLINE_PADDING_BOTTOM;
     fill_rect(
         &ctx->dc,
         (Pair) {0, (i32)(ctx->dc.height - statusline_h)},
         (Pair) {(i32)ctx->dc.width, (i32)statusline_h},
         COL_BG(&ctx->dc, SchmNorm)
     );
-    draw_string(
-        &ctx->dc,
-        msg,
-        (Pair) {0, (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM)},
-        SchmNorm,
-        False
-    );
+    draw_string(&ctx->dc, msg, (Pair) {0, (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM)}, SchmNorm, False);
     XdbeSwapBuffers(
         ctx->dc.dp,
         &(XdbeSwapInfo) {
@@ -3590,8 +3227,7 @@ void dc_cache_update(struct Ctx* ctx) {
     assert(dc->cache.overlay && dc->cache.pm);
 
     // resize pixmaps if needed
-    if (dc->cache.dims.x != dc->cv.im->width
-        || dc->cache.dims.y != dc->cv.im->height) {
+    if (dc->cache.dims.x != dc->cv.im->width || dc->cache.dims.y != dc->cv.im->height) {
         dc_cache_free(dc);
         dc_cache_init(ctx);
     }
@@ -3601,14 +3237,7 @@ void dc_cache_update(struct Ctx* ctx) {
 }
 
 int trigger_clipboard_paste(struct DrawCtx* dc, Atom selection_target) {
-    return XConvertSelection(
-        dc->dp,
-        atoms[A_Clipboard],
-        selection_target,
-        atoms[A_XSelData],
-        dc->window,
-        CurrentTime
-    );
+    return XConvertSelection(dc->dp, atoms[A_Clipboard], selection_target, atoms[A_XSelData], dc->window, CurrentTime);
 }
 
 void dc_cache_init(struct Ctx* ctx) {
@@ -3618,21 +3247,9 @@ void dc_cache_init(struct Ctx* ctx) {
     assert(dc->cv.im->width == inp->ovr.im->width);
     assert(dc->cv.im->height == inp->ovr.im->height);
 
-    dc->cache.pm = XCreatePixmap(
-        dc->dp,
-        dc->window,
-        dc->cv.im->width,
-        dc->cv.im->height,
-        dc->sys.vinfo.depth
-    );
+    dc->cache.pm = XCreatePixmap(dc->dp, dc->window, dc->cv.im->width, dc->cv.im->height, dc->sys.vinfo.depth);
 
-    dc->cache.overlay = XCreatePixmap(
-        dc->dp,
-        dc->window,
-        inp->ovr.im->width,
-        inp->ovr.im->height,
-        dc->sys.vinfo.depth
-    );
+    dc->cache.overlay = XCreatePixmap(dc->dp, dc->window, inp->ovr.im->width, inp->ovr.im->height, dc->sys.vinfo.depth);
 
     dc->cache.dims.x = dc->cv.im->width;
     dc->cache.dims.y = dc->cv.im->height;
@@ -3723,10 +3340,8 @@ void setup(Display* dp, struct Ctx* ctx) {
         atoms[A_XSelData] = XInternAtom(dp, "XSEL_DATA", False);
         atoms[A_WmProtocols] = XInternAtom(dp, "WM_PROTOCOLS", False);
         atoms[A_WmDeleteWindow] = XInternAtom(dp, "WM_DELETE_WINDOW", False);
-        atoms[A_NetWmSyncRequest] =
-            XInternAtom(dp, "_NET_WM_SYNC_REQUEST", False);
-        atoms[A_NetWmSyncRequestCounter] =
-            XInternAtom(dp, "_NET_WM_SYNC_REQUEST_COUNTER", False);
+        atoms[A_NetWmSyncRequest] = XInternAtom(dp, "_NET_WM_SYNC_REQUEST", False);
+        atoms[A_NetWmSyncRequestCounter] = XInternAtom(dp, "_NET_WM_SYNC_REQUEST_COUNTER", False);
         atoms[A_XDndAware] = XInternAtom(dp, "XdndAware", False);
         atoms[A_XDndPosition] = XInternAtom(dp, "XdndPosition", False);
         atoms[A_XDndSelection] = XInternAtom(dp, "XdndSelection", False);
@@ -3736,8 +3351,7 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     /* xrender */ {
-        ctx->dc.sys.xrnd_pic_format =
-            XRenderFindStandardFormat(ctx->dc.dp, PictStandardARGB32);
+        ctx->dc.sys.xrnd_pic_format = XRenderFindStandardFormat(ctx->dc.dp, PictStandardARGB32);
         assert(ctx->dc.sys.xrnd_pic_format);
     }
 
@@ -3752,8 +3366,7 @@ void setup(Display* dp, struct Ctx* ctx) {
         die("unexpected screen depth (%d)", ctx->dc.sys.vinfo.depth);
     }
 
-    ctx->dc.sys.colmap =
-        XCreateColormap(dp, root, ctx->dc.sys.vinfo.visual, AllocNone);
+    ctx->dc.sys.colmap = XCreateColormap(dp, root, ctx->dc.sys.vinfo.visual, AllocNone);
 
     /* create window */
     ctx->dc.window = XCreateWindow(
@@ -3768,22 +3381,19 @@ void setup(Display* dp, struct Ctx* ctx) {
         InputOutput,
         ctx->dc.sys.vinfo.visual,
         CWColormap | CWBorderPixel | CWBackPixel | CWEventMask,
-        &(XSetWindowAttributes
-        ) {.colormap = ctx->dc.sys.colmap,
-           .border_pixel = 0,
-           .background_pixel = WND_BACKGROUND,
-           .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
-               | ExposureMask | PointerMotionMask | StructureNotifyMask}
+        &(XSetWindowAttributes) {.colormap = ctx->dc.sys.colmap,
+                                 .border_pixel = 0,
+                                 .background_pixel = WND_BACKGROUND,
+                                 .event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask | ExposureMask
+                                     | PointerMotionMask | StructureNotifyMask}
     );
     ctx->dc.screen_gc = XCreateGC(dp, ctx->dc.window, 0, 0);
 
     XSetWMName(
         dp,
         ctx->dc.window,
-        &(XTextProperty) {.value = (unsigned char*)title,
-                          .nitems = strlen(title),
-                          .format = 8,
-                          .encoding = atoms[A_Utf8string]}
+        &(XTextProperty
+        ) {.value = (unsigned char*)title, .nitems = strlen(title), .format = 8, .encoding = atoms[A_Utf8string]}
     );
 
     /* turn on protocol support */ {
@@ -3797,8 +3407,7 @@ void setup(Display* dp, struct Ctx* ctx) {
 
     /* _NET_WM_SYNC_REQUEST */ {
         XSyncIntToValue(&ctx->last_sync_request_value, 0);
-        ctx->sync_counter =
-            XSyncCreateCounter(dp, ctx->last_sync_request_value);
+        ctx->sync_counter = XSyncCreateCounter(dp, ctx->last_sync_request_value);
 
         XChangeProperty(
             dp,
@@ -3851,8 +3460,7 @@ void setup(Display* dp, struct Ctx* ctx) {
                         ctx->dc.sys.vinfo.visual,
                         ctx->dc.sys.colmap,
                         &SCHEMES[i][j],
-                        j ? &ctx->dc.schemes_dyn[i].bg
-                          : &ctx->dc.schemes_dyn[i].fg
+                        j ? &ctx->dc.schemes_dyn[i].bg : &ctx->dc.schemes_dyn[i].fg
                     )) {
                     die("can't alloc color");
                 };
@@ -3863,28 +3471,18 @@ void setup(Display* dp, struct Ctx* ctx) {
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
             struct IconData icon = get_icon_data(i);
-            struct Image im = read_file_from_memory(
-                &ctx->dc,
-                icon.data,
-                icon.len,
-                COL_BG(&ctx->dc, SchmNorm)
-            );
+            struct Image im = read_file_from_memory(&ctx->dc, icon.data, icon.len, COL_BG(&ctx->dc, SchmNorm));
             images[i] = im.im;
         }
     }
 
     /* canvas */ {
-        XGCValues canvas_gc_vals = {
-            .line_style = LineSolid,
-            .line_width = 5,
-            .cap_style = CapButt,
-            .fill_style = FillSolid
-        };
+        XGCValues canvas_gc_vals =
+            {.line_style = LineSolid, .line_width = 5, .cap_style = CapButt, .fill_style = FillSolid};
         ctx->dc.gc = XCreateGC(
             dp,
             ctx->dc.window,
-            GCForeground | GCBackground | GCFillStyle | GCLineStyle
-                | GCLineWidth | GCCapStyle | GCJoinStyle,
+            GCForeground | GCBackground | GCFillStyle | GCLineStyle | GCLineWidth | GCCapStyle | GCJoinStyle,
             &canvas_gc_vals
         );
         // read canvas data from file or create empty
@@ -3894,48 +3492,20 @@ void setup(Display* dp, struct Ctx* ctx) {
                 die("failed to read input file '%s'", ioctx_as_str(&ctx->inp));
             }
         } else {
-            Pixmap data = XCreatePixmap(
-                dp,
-                ctx->dc.window,
-                ctx->dc.width,
-                ctx->dc.height,
-                ctx->dc.sys.vinfo.depth
-            );
-            ctx->dc.cv.im = XGetImage(
-                dp,
-                data,
-                0,
-                0,
-                ctx->dc.width,
-                ctx->dc.height,
-                AllPlanes,
-                ZPixmap
-            );
+            Pixmap data = XCreatePixmap(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height, ctx->dc.sys.vinfo.depth);
+            ctx->dc.cv.im = XGetImage(dp, data, 0, 0, ctx->dc.width, ctx->dc.height, AllPlanes, ZPixmap);
             XFreePixmap(dp, data);
             // initial canvas color
             canvas_fill(ctx->dc.cv.im, CANVAS_BACKGROUND);
         }
         /* overlay */ {
-            ctx->input.ovr.im = XSubImage(
-                ctx->dc.cv.im,
-                0,
-                0,
-                ctx->dc.cv.im->width,
-                ctx->dc.cv.im->height
-            );
+            ctx->input.ovr.im = XSubImage(ctx->dc.cv.im, 0, 0, ctx->dc.cv.im->width, ctx->dc.cv.im->height);
             overlay_clear(&ctx->input.ovr);
         }
 
-        ctx->dc.width = CLAMP(
-            ctx->dc.cv.im->width,
-            WND_LAUNCH_MIN_SIZE.x,
-            WND_LAUNCH_MAX_SIZE.x
-        );
-        ctx->dc.height = CLAMP(
-            ctx->dc.cv.im->height + statusline_height(&ctx->dc),
-            WND_LAUNCH_MIN_SIZE.y,
-            WND_LAUNCH_MAX_SIZE.y
-        );
+        ctx->dc.width = CLAMP(ctx->dc.cv.im->width, WND_LAUNCH_MIN_SIZE.x, WND_LAUNCH_MAX_SIZE.x);
+        ctx->dc.height =
+            CLAMP(ctx->dc.cv.im->height + statusline_height(&ctx->dc), WND_LAUNCH_MIN_SIZE.y, WND_LAUNCH_MAX_SIZE.y);
         XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }
 
@@ -4035,8 +3605,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         transd->curr = TRANSFORM_DEFAULT;
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
-        if (selected_item != NIL
-            && ctx->sc.items_arr[selected_item].on_select) {
+        if (selected_item != NIL && ctx->sc.items_arr[selected_item].on_select) {
             ctx->sc.items_arr[selected_item].on_select(ctx);
         }
     } else if (tc->on_release) {
@@ -4100,14 +3669,8 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     Status lookup_status;
     KeySym key_sym = NoSymbol;
     char lookup_buf[32] = {0};
-    i32 const text_len = Xutf8LookupString(
-        ctx->dc.sys.xic,
-        &e,
-        lookup_buf,
-        sizeof(lookup_buf) - 1,
-        &key_sym,
-        &lookup_status
-    );
+    i32 const text_len =
+        Xutf8LookupString(ctx->dc.sys.xic, &e, lookup_buf, sizeof(lookup_buf) - 1, &key_sym, &lookup_status);
 
     if (lookup_status == XBufferOverflow) {
         trace("xpaint: input buffer overflow");
@@ -4126,8 +3689,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
     if (mode->t == InputT_Interact && BETWEEN(curr.sym, XK_Left, XK_Down)
-        && (state_match(curr.mask, ControlMask)
-            || state_match(curr.mask, ControlMask | ShiftMask))) {
+        && (state_match(curr.mask, ControlMask) || state_match(curr.mask, ControlMask | ShiftMask))) {
         u32 const value = e.state & ShiftMask ? 25 : 5;
         canvas_resize(
             ctx,
@@ -4191,14 +3753,10 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 } break;
                 case ClCPrs_ENoArg: {
                     if (res.d.noarg.context_optdyn) {
-                        cl_msg_to_show = str_new(
-                            "provide %s to '%s' command",
-                            res.d.noarg.arg_desc_dyn,
-                            res.d.noarg.context_optdyn
-                        );
-                    } else {
                         cl_msg_to_show =
-                            str_new("provide %s", res.d.noarg.arg_desc_dyn);
+                            str_new("provide %s to '%s' command", res.d.noarg.arg_desc_dyn, res.d.noarg.context_optdyn);
+                    } else {
+                        cl_msg_to_show = str_new("provide %s", res.d.noarg.arg_desc_dyn);
                     }
                 } break;
                 case ClCPrs_EInvArg: {
@@ -4210,11 +3768,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                             res.d.invarg.error_dyn
                         );
                     } else {
-                        cl_msg_to_show = str_new(
-                            "invalid arg '%s': %s",
-                            res.d.invarg.arg_dyn,
-                            res.d.invarg.error_dyn
-                        );
+                        cl_msg_to_show = str_new("invalid arg '%s': %s", res.d.invarg.arg_dyn, res.d.invarg.error_dyn);
                     }
                 } break;
             }
@@ -4232,9 +3786,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } else if (key_eq(curr, KEY_CL_ERASE_CHAR)) {
             cl_pop(cl);
-        } else if (!(iscntrl((u32)*lookup_buf))
-                   && (lookup_status == XLookupBoth
-                       || lookup_status == XLookupChars)) {
+        } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
             for (i32 i = 0; i < text_len; ++i) {
                 cl_push(cl, (char)(lookup_buf[i] & 0xFF));
             }
@@ -4263,18 +3815,11 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
                 // handled in selection_notify_hdlr
                 break;
-            case InputT_Transform:
-                trace("xpaint: can't paste in transform mode");
-                break;
+            case InputT_Transform: trace("xpaint: can't paste in transform mode"); break;
         }
     }
     if (can_action(inp, curr, ACT_COPY_AREA)) {
-        XSetSelectionOwner(
-            ctx->dc.dp,
-            atoms[A_Clipboard],
-            ctx->dc.window,
-            CurrentTime
-        );
+        XSetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard], ctx->dc.window, CurrentTime);
 
         if (ctx->sel_buf.im != NULL) {
             XDestroyImage(ctx->sel_buf.im);
@@ -4287,16 +3832,9 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             ctx->sel_buf.im = XSubImage(ctx->dc.cv.im, 0, 0, w, h);
         } else {
             // copy overlay
-            struct InputOverlay transformed =
-                get_transformed_overlay(&ctx->dc, inp);
+            struct InputOverlay transformed = get_transformed_overlay(&ctx->dc, inp);
             Pair const dims = rect_dims(transformed.rect);
-            ctx->sel_buf.im = XSubImage(
-                transformed.im,
-                transformed.rect.l,
-                transformed.rect.t,
-                dims.x,
-                dims.y
-            );
+            ctx->sel_buf.im = XSubImage(transformed.im, transformed.rect.l, transformed.rect.t, dims.x, dims.y);
             overlay_free(&transformed);
         }
 
@@ -4341,19 +3879,13 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (can_action(inp, curr, ACT_NEXT_COLOR)) {
         u32 const curr_col = CURR_TC(ctx).curr_col;
         u32 const col_num = arrlen(CURR_TC(ctx).colarr);
-        tc_set_curr_col_num(
-            &CURR_TC(ctx),
-            curr_col + 1 == col_num ? 0 : curr_col + 1
-        );
+        tc_set_curr_col_num(&CURR_TC(ctx), curr_col + 1 == col_num ? 0 : curr_col + 1);
     }
     if (can_action(inp, curr, ACT_PREV_COLOR)) {
         u32 const curr_col = CURR_TC(ctx).curr_col;
         u32 const col_num = arrlen(CURR_TC(ctx).colarr);
         assert(col_num != 0);
-        tc_set_curr_col_num(
-            &CURR_TC(ctx),
-            curr_col == 0 ? col_num - 1 : curr_col - 1
-        );
+        tc_set_curr_col_num(&CURR_TC(ctx), curr_col == 0 ? col_num - 1 : curr_col - 1);
     }
     if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
         if (write_io(&ctx->dc, inp, ctx->dc.cv.type, &ctx->out)) {
@@ -4392,14 +3924,10 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         struct timeval current_time;
         gettimeofday(&current_time, 0x0);
         // XXX mouse scroll and drag event are shared
-        u64 const elapsed_from_last =
-            current_time.tv_usec - ctx->input.last_proc_drag_ev_us;
+        u64 const elapsed_from_last = current_time.tv_usec - ctx->input.last_proc_drag_ev_us;
 
         if (btn_eq(inp->holding_button, BTN_SCROLL_DRAG)) {
-            canvas_scroll(
-                &ctx->dc.cv,
-                (Pair) {e->x - inp->prev_c.x, e->y - inp->prev_c.y}
-            );
+            canvas_scroll(&ctx->dc.cv, (Pair) {e->x - inp->prev_c.x, e->y - inp->prev_c.y});
             // last update will be in button_release_hdlr
             if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
                 ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
@@ -4408,16 +3936,10 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
             if (inp->mode.t == InputT_Transform) {
                 struct InputTransformData* transd = &inp->mode.d.trans;
-                Pair const cur_delta = {
-                    cur.x - inp->press_pt.x,
-                    cur.y - inp->press_pt.y
-                };
+                Pair const cur_delta = {cur.x - inp->press_pt.x, cur.y - inp->press_pt.y};
 
                 if (btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
-                    || btn_eq(
-                        inp->holding_button,
-                        BTN_TRANS_RESIZE_PROPORTIONAL
-                    )) {
+                    || btn_eq(inp->holding_button, BTN_TRANS_RESIZE_PROPORTIONAL)) {
                     // adjust scale to match cursor
 
                     Transform trans = transd->acc;
@@ -4426,17 +3948,10 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     Pair lt_trans = point_apply_trans_pivot(lt, trans, lt);
                     Pair rb_trans = point_apply_trans_pivot(rb, trans, lt);
                     Pair delta = {cur.x - rb_trans.x, cur.y - rb_trans.y};
-                    Pair dims = {
-                        rb_trans.x - lt_trans.x,
-                        rb_trans.y - lt_trans.y
-                    };
-                    DPt scale = {
-                        ((double)dims.x + delta.x) / dims.x,
-                        ((double)dims.y + delta.y) / dims.y
-                    };
+                    Pair dims = {rb_trans.x - lt_trans.x, rb_trans.y - lt_trans.y};
+                    DPt scale = {((double)dims.x + delta.x) / dims.x, ((double)dims.y + delta.y) / dims.y};
 
-                    transd->curr.scale =
-                        btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
+                    transd->curr.scale = btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
                         ? scale
                         : (DPt) {MAX(scale.x, scale.y), MAX(scale.x, scale.y)};
                 } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
@@ -4481,8 +3996,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     struct DrawCtx* dc = &ctx->dc;
 
-    if (dc->width == event->xconfigure.width
-        && dc->height == event->xconfigure.height) {
+    if (dc->width == event->xconfigure.width && dc->height == event->xconfigure.height) {
         // configure notify calls on move events too
         return HR_Ok;
     }
@@ -4507,8 +4021,7 @@ HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     XSelectionRequestEvent request = event->xselectionrequest;
 
-    if (XGetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard]) != ctx->dc.window
-        || request.selection != atoms[A_Clipboard]
+    if (XGetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard]) != ctx->dc.window || request.selection != atoms[A_Clipboard]
         || request.property == None) {
         return HR_Ok;
     }
@@ -4528,14 +4041,8 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (request.target == atoms[A_ImagePng]) {
         u8* rgb_dyn = ximage_to_rgb(ctx->sel_buf.im, False);
         i32 png_data_size = NIL;
-        stbi_uc* png_imdyn = stbi_write_png_to_mem(
-            rgb_dyn,
-            0,
-            ctx->sel_buf.im->width,
-            ctx->sel_buf.im->height,
-            3,
-            &png_data_size
-        );
+        stbi_uc* png_imdyn =
+            stbi_write_png_to_mem(rgb_dyn, 0, ctx->sel_buf.im->width, ctx->sel_buf.im->height, 3, &png_data_size);
         if (png_imdyn != NULL) {
             XChangeProperty(
                 request.display,
@@ -4548,10 +4055,7 @@ HdlrResult selection_request_hdlr(struct Ctx* ctx, XEvent* event) {
                 png_data_size
             );
         } else {
-            trace(
-                "selection request handler: stbi error: %s",
-                stbi_failure_reason()
-            );
+            trace("selection request handler: stbi error: %s", stbi_failure_reason());
         }
 
         free(rgb_dyn);
@@ -4669,16 +4173,14 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 
                     if (len == 6) {
                         char* end = begin + 6;
-                        *tc_curr_col(tc) =
-                            strtoul(begin, &end, 16) | ARGB_ALPHA;
+                        *tc_curr_col(tc) = strtoul(begin, &end, 16) | ARGB_ALPHA;
                         update_statusline(ctx);
                     } else if (len == 8) {
                         // with alpha (rrggbbaa)
                         char* end = begin + 8;
                         u32 const input = strtoul(begin, &end, 16);
                         // convert to argb
-                        *tc_curr_col(tc) =
-                            ((input >> 8) & 0xFFFFFF) | ((input & 0xFF) << 24);
+                        *tc_curr_col(tc) = ((input >> 8) & 0xFFFFFF) | ((input & 0xFF) << 24);
                         update_statusline(ctx);
                     } else {
                         show_message(ctx, "unexpected color format");
@@ -4727,8 +4229,7 @@ HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
                 .data.l[4] = (long)atoms[A_XDndActionCopy],
             }
         );
-    } else if (e->message_type == atoms[A_XDndDrop]
-               && mode == InputT_Interact) {
+    } else if (e->message_type == atoms[A_XDndDrop] && mode == InputT_Interact) {
         XConvertSelection(
             dc->dp,
             atoms[A_XDndSelection],
@@ -4743,8 +4244,7 @@ HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
         }
 
         if (e->data.l[0] == atoms[A_NetWmSyncRequest]) {
-            ctx->last_sync_request_value =
-                (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
+            ctx->last_sync_request_value = (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
             return HR_Ok;
         }
     }
@@ -4791,8 +4291,7 @@ void cleanup(struct Ctx* ctx) {
                         ctx->dc.dp,
                         ctx->dc.sys.vinfo.visual,
                         ctx->dc.sys.colmap,
-                        j ? &ctx->dc.schemes_dyn[i].bg
-                          : &ctx->dc.schemes_dyn[i].fg
+                        j ? &ctx->dc.schemes_dyn[i].bg : &ctx->dc.schemes_dyn[i].fg
                     );
                 }
             }
