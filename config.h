@@ -29,17 +29,17 @@ XRenderColor const SCHEMES[SchmLast][2] = {
 
 // see types.h for definitions
 SLModule const LEFT_MODULES[] = {
-    {SLM_ToolCtx},
-    {SLM_Mode},
-    {SLM_Tool},
+    {SLM_ToolCtx, .d = {0}},
+    {SLM_Mode, .d = {0}},
+    {SLM_Tool, .d = {0}},
     {SLM_Text, .d.text = "| w: "},
-    {SLM_ToolLineW},
+    {SLM_ToolLineW, .d = {0}},
 };
 
 SLModule const RIGHT_MODULES[] = {
     {SLM_ColorBox, .d.color_box_w = 24},
-    {SLM_ColorName},
-    {SLM_ColorList},
+    {SLM_ColorName, .d = {0}},
+    {SLM_ColorList, .d = {0}},
 };
 
 u32 const STATUSLINE_MODULE_SPACING_PX = 5;
@@ -74,24 +74,21 @@ i32 const CANVAS_MIN_ZOOM = -10;
 i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
 
 // ---------------------------- keymap ---------------------------------------
-// use ANY_MOD to ignore modifier
-// use ANY_KEY to ignore key
-// use ANY_MODE to ignore current mode
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
-Button const BTN_SEL_CIRC = {Button3};
+Button const BTN_SEL_CIRC = {Button3, NO_MOD};
 Button const BTN_CANVAS_RESIZE = {Button3, ControlMask};
-Button const BTN_SCROLL_DRAG = {Button2};
-Button const BTN_SCROLL_UP = {Button4};
-Button const BTN_SCROLL_DOWN = {Button5};
+Button const BTN_SCROLL_DRAG = {Button2, NO_MOD};
+Button const BTN_SCROLL_UP = {Button4, NO_MOD};
+Button const BTN_SCROLL_DOWN = {Button5, NO_MOD};
 Button const BTN_SCROLL_LEFT = {Button4, ShiftMask};
 Button const BTN_SCROLL_RIGHT = {Button5, ShiftMask};
 Button const BTN_ZOOM_IN = {Button4, ControlMask};
 Button const BTN_ZOOM_OUT = {Button5, ControlMask};
 // by default area moves
 Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
-Button const BTN_TRANS_MOVE = {Button1};
-Button const BTN_TRANS_RESIZE = {Button3};
+Button const BTN_TRANS_MOVE = {Button1, NO_MOD};
+Button const BTN_TRANS_RESIZE = {Button3, NO_MOD};
 Button const BTN_TRANS_RESIZE_PROPORTIONAL = {Button3, ShiftMask};
 
 // actions {allowed modes, {key, modifier mask}}
@@ -99,26 +96,26 @@ Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
 Action const ACT_REVERT = {MF_Int, {XK_Z, ShiftMask | ControlMask}};
 Action const ACT_COPY_AREA = {ANY_MODE, {XK_c, ControlMask}};  // to clipboard
 Action const ACT_PASTE_IMAGE = {ANY_MODE, {XK_v, ControlMask}};
-Action const ACT_SWAP_COLOR = {MF_Int, {XK_x}};
+Action const ACT_SWAP_COLOR = {MF_Int, {XK_x, NO_MOD}};
 Action const ACT_ZOOM_IN = {ANY_MODE, {XK_equal, ControlMask}};
 Action const ACT_ZOOM_OUT = {ANY_MODE, {XK_minus, ControlMask}};
-Action const ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up}};
-Action const ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down}};
+Action const ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up, NO_MOD}};
+Action const ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down, NO_MOD}};
 Action const ACT_SAVE_TO_FILE = {MF_Int | MF_Color, {XK_s, ControlMask}};
-Action const ACT_EXIT = {ANY_MODE, {XK_q}};
+Action const ACT_EXIT = {ANY_MODE, {XK_q, NO_MOD}};
 Action const ACT_ADD_COLOR = {MF_Color, {XK_Up, ControlMask}};
-Action const ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right}};
-Action const ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left}};
+Action const ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right, NO_MOD}};
+Action const ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left, NO_MOD}};
 
 // mode switch
-Action const ACT_MODE_INTERACT = {ANY_MODE, {XK_Escape}};  // return to interact
-Action const ACT_MODE_COLOR = {MF_Int, {XK_c}};
+Action const ACT_MODE_INTERACT = {ANY_MODE, {XK_Escape, NO_MOD}};  // return to interact
+Action const ACT_MODE_COLOR = {MF_Int, {XK_c, NO_MOD}};
 Action const ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
 
 // only in console mode
-Key const KEY_CL_REQ_COMPLT = {XK_Tab};
-Key const KEY_CL_NEXT_COMPLT = {XK_Tab};
-Key const KEY_CL_APPLY_COMPLT = {XK_Return};
-Key const KEY_CL_ERASE_CHAR = {XK_BackSpace};
-Key const KEY_CL_RUN = {XK_Return};
+Key const KEY_CL_REQ_COMPLT = {XK_Tab, NO_MOD};
+Key const KEY_CL_NEXT_COMPLT = {XK_Tab, NO_MOD};
+Key const KEY_CL_APPLY_COMPLT = {XK_Return, NO_MOD};
+Key const KEY_CL_ERASE_CHAR = {XK_BackSpace, NO_MOD};
+Key const KEY_CL_RUN = {XK_Return, NO_MOD};
 Key const KEY_CL_CLIPBOARD_PASTE = {XK_v, ControlMask};

@@ -564,7 +564,7 @@ static void canvas_fill(XImage* im, argb col);
 static Bool canvas_load(struct Ctx* ctx, struct Image* image);
 static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
-static void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height);
+static void canvas_resize(struct Ctx* ctx, u32 new_width, u32 new_height);
 static void canvas_scroll(struct Canvas* cv, Pair delta);
 static void overlay_clear(struct InputOverlay* ovr);
 static void overlay_expand_rect(struct InputOverlay* ovr, Rect rect);
@@ -646,7 +646,7 @@ i32 main(i32 argc, char** argv) {
 }
 
 void main_die_if_no_val_for_arg(char const* cmd_name, i32 argc, char** argv, u32 pos) {
-    if (pos + 1 == argc || argv[pos + 1][0] == '-') {
+    if ((i32)pos + 1 == argc || argv[pos + 1][0] == '-') {
         die("supply argument for %s", cmd_name);
     }
 }
@@ -1187,8 +1187,8 @@ u8* ximage_to_rgb(XImage const* image, Bool rgba) {
         return NULL;
     }
     i32 ii = 0;
-    for (i32 y = 0; y < h; ++y) {
-        for (i32 x = 0; x < w; ++x) {
+    for (i32 y = 0; y < (i32)h; ++y) {
+        for (i32 x = 0; x < (i32)w; ++x) {
             u64 pixel = XGetPixel((XImage*)image, x, y);
             data[ii + 0] = (pixel & 0xFF0000) >> 16U;
             data[ii + 1] = (pixel & 0xFF00) >> 8U;
@@ -1480,7 +1480,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
     return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
 }
 
-static ClCPrsResult cl_cmd_parse_helper(struct Ctx* ctx, char* cl) {
+static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx, char* cl) {
     char const* cmd = strtok(cl, CL_DELIM);
     if (!cmd) {
         return cl_prs_noarg(str_new("command"), NULL);
@@ -1722,14 +1722,14 @@ enum ImageType cl_save_type_to_image_type(enum ClCDSv t) {
 static void cl_compls_update_helper(
     char*** result,
     char const* token,
-    char const* (*enum_to_str)(usize),
-    usize enum_last,
+    char const* (*enum_to_str)(i32),
+    i32 enum_last,
     Bool add_delim
 ) {
     if (!token || !enum_to_str || !result) {
         return;
     }
-    for (u32 e = 0; e < enum_last; ++e) {
+    for (i32 e = 0; e < enum_last; ++e) {
         char const* enum_str = enum_to_str(e);
         usize offset = first_dismatch(enum_str, token);
         if (offset == strlen(token)) {
@@ -1757,7 +1757,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
 
     cl_compls_free(cl);
 
-    typedef char const* (*cast)(usize);
+    typedef char const* (*cast)(i32);
     // subcommands with own completions
     if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
         cl_compls_update_helper(&result, tok2, (cast)&cl_set_prop_from_enum, ClCDS_Last, add_delim);
@@ -2279,7 +2279,7 @@ void ximage_clear(XImage* im) {
 }
 
 Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
-    if (x >= im->width || y >= im->height) {
+    if ((i32)x >= im->width || (i32)y >= im->height) {
         return False;
     }
 
@@ -2387,7 +2387,7 @@ Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
 }
 
 // FIXME w unused (required because of circle_get_alpha_fn)
-static u8 canvas_brush_get_a(u32 w, double r, Pair p) {
+static u8 canvas_brush_get_a(__attribute__((unused)) u32 w, double r, Pair p) {
     double const curr_r = sqrt(((p.x - r) * (p.x - r)) + ((p.y - r) * (p.y - r)));
     return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
 }
@@ -2553,13 +2553,13 @@ Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u3
     }
     double const r = d / 2.0;
     double const r_sq = r * r;
-    u32 const l = c.x - (u32)r;
-    u32 const t = c.y - (u32)r;
-    for (i32 dx = 0; dx < d; ++dx) {
-        for (i32 dy = 0; dy < d; ++dy) {
+    i32 const l = c.x - (i32)r;
+    i32 const t = c.y - (i32)r;
+    for (i32 dx = 0; dx < (i32)d; ++dx) {
+        for (i32 dy = 0; dy < (i32)d; ++dy) {
             double const dr = ((dx - r) * (dx - r)) + ((dy - r) * (dy - r));
-            u32 const x = l + dx;
-            u32 const y = t + dy;
+            i32 const x = l + dx;
+            i32 const y = t + dy;
             if (!BETWEEN(x, 0, im->width - 1) || !BETWEEN(y, 0, im->height - 1) || dr > r_sq) {
                 continue;
             }
@@ -2649,7 +2649,7 @@ void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
     );
 }
 
-void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
+void canvas_resize(struct Ctx* ctx, u32 new_width, u32 new_height) {
     if (new_width <= 0 || new_height <= 0) {
         trace("resize_canvas: invalid canvas size");
         return;
@@ -2662,10 +2662,10 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
     // resize overlay too
     XImage* old_overlay = inp->ovr.im;
     inp->ovr.im = XSubImage(inp->ovr.im, 0, 0, new_width, new_height);
-    inp->ovr.rect.l = MIN(new_width, inp->ovr.rect.l);
-    inp->ovr.rect.r = MIN(new_width, inp->ovr.rect.r);
-    inp->ovr.rect.t = MIN(new_height, inp->ovr.rect.t);
-    inp->ovr.rect.b = MIN(new_height, inp->ovr.rect.b);
+    inp->ovr.rect.l = MIN(new_width, (u32)inp->ovr.rect.l);
+    inp->ovr.rect.r = MIN(new_width, (u32)inp->ovr.rect.r);
+    inp->ovr.rect.t = MIN(new_height, (u32)inp->ovr.rect.t);
+    inp->ovr.rect.b = MIN(new_height, (u32)inp->ovr.rect.b);
     XDestroyImage(old_overlay);
 
     // FIXME can fill color be changed?
@@ -2678,7 +2678,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
         canvas_fill_rect(
             dc->cv.im,
             (Pair) {(i32)old_width, 0},
-            (Pair) {(i32)(new_width - old_width), new_height},
+            (Pair) {(i32)(new_width - old_width), (i32)new_height},
             CANVAS_BACKGROUND
         );
     }
@@ -2686,7 +2686,7 @@ void canvas_resize(struct Ctx* ctx, i32 new_width, i32 new_height) {
         canvas_fill_rect(
             dc->cv.im,
             (Pair) {0, (i32)old_height},
-            (Pair) {new_width, (i32)(new_height - old_height)},
+            (Pair) {(i32)new_width, (i32)(new_height - old_height)},
             CANVAS_BACKGROUND
         );
     }
@@ -3037,7 +3037,7 @@ static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
         case SLM_Text: return get_string_width(dc, module->d.text, strlen(module->d.text));
         case SLM_ToolCtx: {
             u32 result = 0;
-            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+            for (u32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
                 result += get_int_width(dc, "%d", tc_name) + STATUSLINE_MODULE_SPACING_SMALL_PX;
             }
             return result - STATUSLINE_MODULE_SPACING_SMALL_PX;
@@ -3075,8 +3075,9 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
         } break;
         case SLM_ToolCtx: {
             i32 x = c.x;
-            for (i32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                draw_int(dc, tc_name, (Pair) {x, c.y}, ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm, False);
+            for (u32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
+                enum Schm const schm = ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm;
+                draw_int(dc, (i32)tc_name, (Pair) {x, c.y}, schm, False);
                 x += (i32)(get_int_width(dc, "%d", tc_name) + STATUSLINE_MODULE_SPACING_SMALL_PX);
             }
         } break;
@@ -3163,10 +3164,10 @@ void update_statusline(struct Ctx* ctx) {
                     u32 const row_num = end - i;
                     i32 const y = (i32)(clientarea.y - (statusline_h * row_num));
                     i32 const stry = (i32)(y + statusline_h - STATUSLINE_PADDING_BOTTOM);
-                    argb const bg_col = i != cl->compls_curr ? COL_BG(dc, SchmNorm) : COL_FG(dc, SchmNorm);
+                    argb const bg_col = i != (i32)cl->compls_curr ? COL_BG(dc, SchmNorm) : COL_FG(dc, SchmNorm);
 
                     fill_rect(dc, (Pair) {0, y}, line_dims, bg_col);
-                    draw_string(dc, cl->compls_arr[i], (Pair) {0, stry}, SchmNorm, i == cl->compls_curr);
+                    draw_string(dc, cl->compls_arr[i], (Pair) {0, stry}, SchmNorm, i == (i32)cl->compls_curr);
                 }
             }
         }
@@ -3332,7 +3333,7 @@ void setup(Display* dp, struct Ctx* ctx) {
     assert(ctx);
 
     /* init arrays */ {
-        for (i32 i = 0; i < TCS_NUM; ++i) {
+        for (u32 i = 0; i < TCS_NUM; ++i) {
             struct ToolCtx tc = {
                 .colarr = NULL,
                 .curr_col = 0,
@@ -3519,15 +3520,18 @@ void setup(Display* dp, struct Ctx* ctx) {
         }
 
         ctx->dc.width = CLAMP(ctx->dc.cv.im->width, WND_LAUNCH_MIN_SIZE.x, WND_LAUNCH_MAX_SIZE.x);
-        ctx->dc.height =
-            CLAMP(ctx->dc.cv.im->height + statusline_height(&ctx->dc), WND_LAUNCH_MIN_SIZE.y, WND_LAUNCH_MAX_SIZE.y);
+        ctx->dc.height = CLAMP(
+            ctx->dc.cv.im->height + (i32)statusline_height(&ctx->dc),
+            WND_LAUNCH_MIN_SIZE.y,
+            WND_LAUNCH_MAX_SIZE.y
+        );
         XResizeWindow(dp, ctx->dc.window, ctx->dc.width, ctx->dc.height);
     }
 
     // draw cache
     dc_cache_init(ctx);
 
-    for (i32 i = 0; i < TCS_NUM; ++i) {
+    for (u32 i = 0; i < TCS_NUM; ++i) {
         tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
     }
 
@@ -3647,7 +3651,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     return HR_Ok;
 }
 
-HdlrResult destroy_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult destroy_notify_hdlr(__attribute__((unused)) struct Ctx* ctx, __attribute__((unused)) XEvent* event) {
     return HR_Ok;
 }
 
@@ -3720,7 +3724,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
     // change selected color digit with pressed key
     if (mode->t == InputT_Color && strlen(lookup_buf) == 1) {
-        u32 val = lookup_buf[0]
+        i32 val = lookup_buf[0]
             - (BETWEEN(lookup_buf[0], '0', '9')       ? '0'
                    : BETWEEN(lookup_buf[0], 'a', 'f') ? ('a' - 10)
                    : BETWEEN(lookup_buf[0], 'A', 'F') ? ('A' - 10)
@@ -3920,7 +3924,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     return HR_Ok;
 }
 
-HdlrResult mapping_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+HdlrResult mapping_notify_hdlr(__attribute__((unused)) struct Ctx* ctx, XEvent* event) {
     XRefreshKeyboardMapping(&event->xmapping);
     return HR_Ok;
 }
@@ -4009,15 +4013,16 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 }
 
 HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
+    XConfigureEvent const e = event->xconfigure;
     struct DrawCtx* dc = &ctx->dc;
 
-    if (dc->width == event->xconfigure.width && dc->height == event->xconfigure.height) {
+    if ((i32)dc->width == e.width && (i32)dc->height == e.height) {
         // configure notify calls on move events too
         return HR_Ok;
     }
 
-    dc->width = event->xconfigure.width;
-    dc->height = event->xconfigure.height;
+    dc->width = e.width;
+    dc->height = e.height;
     // backbuffer resizes automatically
 
     Pair const cv_size = canvas_size(dc);
@@ -4254,11 +4259,11 @@ HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
             CurrentTime
         );
     } else if (e->message_type == atoms[A_WmProtocols]) {
-        if (e->data.l[0] == atoms[A_WmDeleteWindow]) {
+        if ((Atom)e->data.l[0] == atoms[A_WmDeleteWindow]) {
             return HR_Quit;
         }
 
-        if (e->data.l[0] == atoms[A_NetWmSyncRequest]) {
+        if ((Atom)e->data.l[0] == atoms[A_NetWmSyncRequest]) {
             ctx->last_sync_request_value = (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
             return HR_Ok;
         }
@@ -4291,7 +4296,7 @@ void cleanup(struct Ctx* ctx) {
     }
     /* Selection circle */ { sel_circ_free_and_hide(&ctx->sc); }
     /* ToolCtx */ {
-        for (i32 i = 0; i < TCS_NUM; ++i) {
+        for (u32 i = 0; i < TCS_NUM; ++i) {
             tc_free(&ctx->tcarr[i]);
         }
         arrfree(ctx->tcarr);

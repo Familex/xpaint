@@ -6,8 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define NO_MOD   0
 #define ANY_MOD  UINT_MAX
 #define ANY_KEY  UINT_MAX
+#define NO_MODE  0
 #define ANY_MODE UINT_MAX
 // default value for signed integers
 #define NIL      (-1)
