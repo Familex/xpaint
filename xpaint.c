@@ -1980,10 +1980,10 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
     overlay_expand_rect(&inp->ovr, damage);
 
     if (!IS_RNIL(damage)) {
-        history_forward(ctx, history_new_item(dc->cv.im, damage));
-
         // move on BTN_MAIN, copy on BTN_COPY_SELECTION
         if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
+            history_forward(ctx, history_new_item(dc->cv.im, damage));
+
             argb bg_col = CANVAS_BACKGROUND;  // FIXME set in runtime?
             canvas_fill_rect(dc->cv.im, p, dims, bg_col);
         }
