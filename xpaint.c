@@ -1973,19 +1973,26 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
     Pair p = {MIN(begin_x, end_x), MIN(begin_y, end_y)};
     Pair dims = (Pair) {MAX(begin_x, end_x) - p.x, MAX(begin_y, end_y) - p.y};
 
+    inp->damage = RNIL;
     overlay_clear(&inp->ovr);
-    Rect damage = canvas_copy_region(inp->ovr.im, dc->cv.im, p, dims, p);
-    history_forward(ctx, history_new_item(dc->cv.im, damage));
 
-    // move on BTN_MAIN, copy on BTN_COPY_SELECTION
-    if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
-        argb bg_col = CANVAS_BACKGROUND;  // FIXME set in runtime?
-        canvas_fill_rect(dc->cv.im, p, dims, bg_col);
+    Rect damage = canvas_copy_region(inp->ovr.im, dc->cv.im, p, dims, p);
+    overlay_expand_rect(&inp->ovr, damage);
+
+    if (!IS_RNIL(damage)) {
+        history_forward(ctx, history_new_item(dc->cv.im, damage));
+
+        // move on BTN_MAIN, copy on BTN_COPY_SELECTION
+        if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
+            argb bg_col = CANVAS_BACKGROUND;  // FIXME set in runtime?
+            canvas_fill_rect(dc->cv.im, p, dims, bg_col);
+        }
+
+        input_mode_set(ctx, InputT_Transform);
     }
 
-    input_mode_set(ctx, InputT_Transform);
-
-    return damage;
+    // all actions already done above
+    return RNIL;
 }
 
 Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
@@ -2003,7 +2010,9 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     i32 const w = end_x - begin_x;
     i32 const h = end_y - begin_y;
 
+    inp->damage = RNIL;
     overlay_clear(&inp->ovr);
+
     return canvas_dash_rect(
         inp->ovr.im,
         (Pair) {begin_x, begin_y},
@@ -2569,6 +2578,10 @@ Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to
     i32 const h = src->height;
     assert(from.x >= 0 && from.y >= 0);
     assert(from.x + dims.x <= w && from.y + dims.y <= h);
+
+    if (dims.x == 0 || dims.y == 0) {
+        return RNIL;
+    }
 
     // FIXME alloc only dims.x * dims.y
     u32* region_dyn = (u32*)ecalloc(w * h, sizeof(u32));
@@ -3615,7 +3628,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         overlay_expand_rect(&inp->ovr, curr_damage);
 
         Rect final_damage = rect_expand(inp->damage, curr_damage);
-        if (!IS_RNIL(final_damage) && inp->mode.t != InputT_Transform) {
+        if (!IS_RNIL(final_damage)) {
             history_forward(ctx, history_new_item(dc->cv.im, final_damage));
             ximage_blend(dc->cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
