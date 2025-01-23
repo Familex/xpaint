@@ -547,7 +547,7 @@ static usize ximage_data_len(XImage const* im);
 static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
 static void ximage_blend(XImage* dest, XImage* overlay);
 static void ximage_clear(XImage* im);
-static Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col);
+static Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static Rect ximage_calc_damage(XImage* im);
 
@@ -2278,8 +2278,8 @@ void ximage_clear(XImage* im) {
     memset(im->data, 0x0, data_size);
 }
 
-Bool ximage_put_checked(XImage* im, u32 x, u32 y, argb col) {
-    if ((i32)x >= im->width || (i32)y >= im->height) {
+Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col) {
+    if (x >= im->width || y >= im->height || x < 0 || y < 0) {
         return False;
     }
 
