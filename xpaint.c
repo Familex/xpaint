@@ -2025,12 +2025,14 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     inp->damage = RNIL;
     overlay_clear(&inp->ovr);
 
+    u32 const line_w = (u32)MAX(1, ceil(1.5 / ZOOM_C(dc)));
+
     return canvas_dash_rect(
         inp->ovr.im,
         (Pair) {begin_x, begin_y},
-        (Pair) {w, h},
-        2,
-        4,
+        (Pair) {w - 1, h - 1},  // inclusive
+        line_w,
+        line_w * 2,
         COL_BG(dc, SchmNorm),
         COL_FG(dc, SchmNorm)
     );
