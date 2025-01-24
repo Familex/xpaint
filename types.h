@@ -8,6 +8,7 @@
 
 #define NO_MOD   0
 #define ANY_MOD  UINT_MAX
+#define NO_KEY   XK_VoidSymbol
 #define ANY_KEY  UINT_MAX
 #define NO_MODE  0
 #define ANY_MODE UINT_MAX

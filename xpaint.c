@@ -1731,10 +1731,11 @@ static void cl_compls_update_helper(
     }
     for (i32 e = 0; e < enum_last; ++e) {
         char const* enum_str = enum_to_str(e);
-        usize offset = first_dismatch(enum_str, token);
-        if (offset == strlen(token)) {
+        usize const token_len = strlen(token);
+        usize const offset = first_dismatch(enum_str, token);
+        if (offset == token_len && (offset < strlen(enum_str))) {
             // don't let completions stick with commands
-            char const* prefix = add_delim && strlen(token) == 0 ? CL_DELIM : "";
+            char const* prefix = add_delim && (token_len == 0) ? CL_DELIM : "";
             char* complt = str_new("%s%s", prefix, enum_str + offset);
             arrpush(*result, complt);
         }
@@ -1800,6 +1801,9 @@ void cl_compls_free(struct InputConsoleData* cl) {
 void cl_push(struct InputConsoleData* cl, char c) {
     arrpush(cl->cmdarr, c);
     cl_compls_free(cl);
+    if (CONSOLE_AUTO_COMPLETIONS) {
+        cl_compls_new(cl);
+    }
 }
 
 void cl_pop(struct InputConsoleData* cl) {
@@ -1811,6 +1815,9 @@ void cl_pop(struct InputConsoleData* cl) {
         arrpoputf8(cl->cmdarr);
     }
     cl_compls_free(cl);
+    if (CONSOLE_AUTO_COMPLETIONS) {
+        cl_compls_new(cl);
+    }
 }
 
 void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
@@ -1838,7 +1845,12 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
 
     switch (inp->mode.t) {
         case InputT_Color: inp->mode.d.col = (struct InputColorData) {.current_digit = 0}; break;
-        case InputT_Console: inp->mode.d.cl = (struct InputConsoleData) {.cmdarr = NULL, .compls_valid = False}; break;
+        case InputT_Console: {
+            inp->mode.d.cl = (struct InputConsoleData) {.cmdarr = NULL, .compls_valid = False};
+            if (CONSOLE_AUTO_COMPLETIONS) {
+                cl_compls_new(&inp->mode.d.cl);
+            }
+        } break;
         case InputT_Interact: break;
         case InputT_Transform:
             inp->mode.d.trans = (struct InputTransformData) {

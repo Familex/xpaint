@@ -73,6 +73,8 @@ u32 const CANVAS_DEFAULT_HEIGHT = 700;
 i32 const CANVAS_MIN_ZOOM = -10;
 i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
 
+Bool const CONSOLE_AUTO_COMPLETIONS = True;
+
 // ---------------------------- keymap ---------------------------------------
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
@@ -113,7 +115,7 @@ Action const ACT_MODE_COLOR = {MF_Int, {XK_c, NO_MOD}};
 Action const ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
 
 // only in console mode
-Key const KEY_CL_REQ_COMPLT = {XK_Tab, NO_MOD};
+Key const KEY_CL_REQ_COMPLT = {NO_KEY, NO_MOD};
 Key const KEY_CL_NEXT_COMPLT = {XK_Tab, NO_MOD};
 Key const KEY_CL_APPLY_COMPLT = {XK_Return, NO_MOD};
 Key const KEY_CL_ERASE_CHAR = {XK_BackSpace, NO_MOD};
