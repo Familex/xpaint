@@ -23,6 +23,9 @@
 #include <sys/unistd.h>
 
 // libs
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+
 #define INCBIN_PREFIX
 #define INCBIN_STYLE INCBIN_STYLE_SNAKE
 #include "lib/incbin.h"
@@ -35,6 +38,8 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "lib/stb_image_write.h"
 #undef STB_IMAGE_WRITE_IMPLEMENTATION
+
+#pragma GCC diagnostic pop
 
 #include "config.h"
 #include "types.h"
