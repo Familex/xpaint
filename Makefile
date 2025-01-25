@@ -75,8 +75,8 @@ RELEASE_FLAGS = -flto -O2 -DNDEBUG
 DEBUG_FLAGS = -g -fsanitize=address -static-libasan
 DEBUG_NO_SYMBOLS_FLAGS = -O0 -DNDEBUG -Wno-error
 
-INCS = $(shell pkg-config --cflags x11 xft)
-LIBS = $(shell pkg-config --libs x11 xext xft xrender) -lm
+INCS = $(shell pkg-config --cflags x11 xext xft xrender fontconfig)
+LIBS = $(shell pkg-config --libs x11 xext xft xrender fontconfig) -lm
 DEFINES = -DVERSION=\"$(VERSION)\" \
 	$(shell \
 		for res in ./res/* ; do \
