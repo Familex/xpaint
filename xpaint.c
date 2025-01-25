@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L  // Enable POSIX.1-2008 features
+
 #include <X11/X.h>
 #include <X11/Xatom.h>  // XA_*
 #include <X11/Xft/Xft.h>
@@ -692,7 +694,7 @@ Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv) {
             main_show_help_message(stdout);
             exit(0);
         } else {
-            fprintf(stderr, "Unknown argument '%s'\n", argv[i]);
+            (void)fprintf(stderr, "Unknown argument '%s'\n", argv[i]);
             result = False;
         }
     }
@@ -701,7 +703,7 @@ Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv) {
 }
 
 void main_show_help_message(FILE* out) {
-    fprintf(
+    (void)fprintf(
         out,
         "Usage: xpaint [OPTIONS] [FILE]\n"
         "\n"
@@ -719,11 +721,11 @@ void main_show_help_message(FILE* out) {
 void die(char const* errstr, ...) {
     va_list ap;
 
-    fprintf(stderr, "xpaint: ");
+    (void)fprintf(stderr, "xpaint: ");
     va_start(ap, errstr);
-    vfprintf(stderr, errstr, ap);
+    (void)vfprintf(stderr, errstr, ap);
     va_end(ap);
-    fprintf(stderr, "\n");
+    (void)fprintf(stderr, "\n");
     exit(EXIT_FAILURE);
 }
 
@@ -732,8 +734,8 @@ void trace(char const* fmt, ...) {
         va_list ap;
 
         va_start(ap, fmt);
-        vfprintf(stdout, fmt, ap);
-        fprintf(stdout, "\n");
+        (void)vfprintf(stdout, fmt, ap);
+        (void)fprintf(stdout, "\n");
         va_end(ap);
     }
 }
@@ -757,8 +759,8 @@ void arrpoputf8(char const* strarr) {
         return;
     }
 
-    char cp = arrpop(strarr);
-    while (arrlen(strarr) && ((cp & 0x80) && !(cp & 0x40))) {
+    unsigned char cp = arrpop(strarr);
+    while (arrlen(strarr) && (cp & 0x80U) && !(cp & 0x40U)) {
         cp = arrpop(strarr);
     }
 }
@@ -949,7 +951,8 @@ char* str_new_va(char const* fmt, va_list args) {
     va_copy(ap2, args);
     usize len = vsnprintf(NULL, 0, fmt, args);
     char* result = ecalloc(len + 1, sizeof(char));
-    vsnprintf(result, len + 1, fmt, ap2);
+    i32 print_res = vsnprintf(result, len + 1, fmt, ap2);
+    assert(print_res);
     va_end(ap2);
     return result;
 }
@@ -1283,7 +1286,7 @@ struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, 
     switch (ioctx->t) {
         case IO_None: return (struct Image) {0};
         case IO_File: {
-            int fd = open(ioctx->d.file.path_dyn, O_RDONLY);
+            int fd = open(ioctx->d.file.path_dyn, O_RDONLY | O_CLOEXEC, 0644);
             if (fd == -1) {
                 return (struct Image) {0};
             }
@@ -1333,14 +1336,26 @@ static void ioctx_write_part(void* pctx, void* data, i32 size) {
     switch (ctx->ioctx->t) {
         case IO_None: break;
         case IO_File: {
-            FILE* fd = fopen(ctx->ioctx->d.file.path_dyn, "a");
+            FILE* fd = fopen(ctx->ioctx->d.file.path_dyn, "ae");
             if (!fd) {
+                trace("xpaint: failed to open file");
                 return;
             }
-            fwrite(data, sizeof(char), size, fd);
-            fclose(fd);
+            if (!fwrite(data, sizeof(char), size, fd)) {
+                trace("xpaint: failed to write to file");
+                return;
+            }
+            if (fclose(fd) == EOF) {
+                trace("xpaint: failed to close file");
+                return;
+            }
         } break;
-        case IO_Stdio: fwrite(data, sizeof(char), size, stdout); break;
+        case IO_Stdio: {
+            if (!fwrite(data, sizeof(char), size, stdout)) {
+                trace("xpaint: failed to write to stdout");
+                return;
+            }
+        } break;
     }
 
     ctx->result_out = True;
@@ -1361,7 +1376,8 @@ Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type
 
     // FIXME ask before delete/override?
     if (ioctx->t == IO_File) {
-        remove(ioctx->d.file.path_dyn);
+        // no check for file existence
+        (void)remove(ioctx->d.file.path_dyn);
     }
 
     switch (type) {
@@ -2585,7 +2601,7 @@ Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u3
             argb const bg = XGetPixel(im, x, y);
             argb const blended = argb_blend(col, bg, get_a(w, r, (Pair) {dx, dy}));
             XPutPixel(im, x, y, blended);
-            damage = rect_expand(damage, (Rect) {(i32)x, (i32)y, (i32)x, (i32)y});
+            damage = rect_expand(damage, (Rect) {x, y, x, y});
         }
     }
 
@@ -2803,7 +2819,7 @@ void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w) {
 u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
     static u32 const MAX_BUF = 50;
     char buf[MAX_BUF];
-    snprintf(buf, MAX_BUF, format, i);
+    (void)snprintf(buf, MAX_BUF, format, i);
     return get_string_width(dc, buf, strlen(buf));
 }
 
@@ -3128,7 +3144,7 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
             static u32 const col_value_size = 1 + 6;
 
             char col_value[col_value_size + 1];
-            sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
+            (void)sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
             draw_string(dc, col_value, c, SchmNorm, False);
             // draw focused digit
             if (mode->t == InputT_Color) {
@@ -3142,7 +3158,7 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
         case SLM_ColorList: {
             // FIXME why it compiles
             char col_count[(digit_count(MAX_COLORS) * 2) + 1 + 1];
-            sprintf(col_count, "%d/%td", tc->curr_col + 1, arrlen(tc->colarr));
+            (void)sprintf(col_count, "%d/%td", tc->curr_col + 1, arrlen(tc->colarr));
             draw_string(dc, col_count, c, SchmNorm, False);
         } break;
     }
@@ -3343,7 +3359,7 @@ void xextinit(Display* dp) {
     }
     if (!XSyncInitialize(dp, &maj, &min)) {
         // not critical if xserver doesn't support this
-        fprintf(stderr, "no SYNC Extention support\n");
+        (void)fprintf(stderr, "no SYNC Extention support\n");
     }
 }
 
@@ -3704,7 +3720,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         return HR_Ok;
     }
 
-    Status lookup_status;
+    Status lookup_status = 0;
     KeySym key_sym = NoSymbol;
     char lookup_buf[32] = {0};
     i32 const text_len =
@@ -4050,8 +4066,8 @@ HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     // if canvas fits in client area
     if (cv_size.x <= clientarea.x && cv_size.y <= clientarea.y) {
         // place canvas to center of screen
-        dc->cv.scroll.x = (i32)(clientarea.x - cv_size.x) / 2;
-        dc->cv.scroll.y = (i32)(clientarea.y - cv_size.y) / 2;
+        dc->cv.scroll.x = (clientarea.x - cv_size.x) / 2;
+        dc->cv.scroll.y = (clientarea.y - cv_size.y) / 2;
     }
 
     return HR_Ok;
