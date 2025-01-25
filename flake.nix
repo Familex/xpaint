@@ -46,6 +46,7 @@
           default = pkgs.mkShell.override {} {
             inputsFrom = [self'.packages.default];
             packages = with pkgs; [
+              pkg-config
               util-linux
               gnumake
               clang-tools
