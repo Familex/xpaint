@@ -979,8 +979,7 @@ char* str_new_va(char const* fmt, va_list args) {
     va_copy(ap2, args);
     usize len = vsnprintf(NULL, 0, fmt, args);
     char* result = ecalloc(len + 1, sizeof(char));
-    i32 print_res = vsnprintf(result, len + 1, fmt, ap2);
-    assert(print_res);
+    (void)vsnprintf(result, len + 1, fmt, ap2);
     va_end(ap2);
     return result;
 }
