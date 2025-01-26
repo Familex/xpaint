@@ -92,6 +92,7 @@ Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
 Button const BTN_TRANS_MOVE = {Button1, NO_MOD};
 Button const BTN_TRANS_RESIZE = {Button3, NO_MOD};
 Button const BTN_TRANS_RESIZE_PROPORTIONAL = {Button3, ShiftMask};
+Button const BTN_TRANS_ROTATE = {Button3, ControlMask | ShiftMask};
 
 // actions {allowed modes, {key, modifier mask}}
 Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};

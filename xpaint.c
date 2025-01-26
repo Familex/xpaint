@@ -91,13 +91,7 @@ INCBIN(u8, pic_unknown, "res/unknown.png");
 #define COL_FG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].fg.pixel | 0xFF000000)
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define OVERLAY_TRANSFORM(p_mode) \
-    ((p_mode)->t != InputT_Transform ? TRANSFORM_DEFAULT \
-                                     : ((Transform) { \
-                                           .scale.x = (p_mode)->d.trans.curr.scale.x * (p_mode)->d.trans.acc.scale.x, \
-                                           .scale.y = (p_mode)->d.trans.curr.scale.y * (p_mode)->d.trans.acc.scale.y, \
-                                           .move.x = (p_mode)->d.trans.curr.move.x + (p_mode)->d.trans.acc.move.x, \
-                                           .move.y = (p_mode)->d.trans.curr.move.y + (p_mode)->d.trans.acc.move.y, \
-                                       }))
+    ((p_mode)->t != InputT_Transform ? TRANSFORM_DEFAULT : trans_add((p_mode)->d.trans.curr, (p_mode)->d.trans.acc))
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 #define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
@@ -155,6 +149,7 @@ struct Image {
 typedef struct {
     Pair move;
     DPt scale;  // (1, 1) for no scale change
+    double rotate;
 } Transform;
 
 struct Ctx;
@@ -456,12 +451,14 @@ static char* uri_to_path(char const* uri);
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
 
+static Transform trans_add(Transform a, Transform b);
 static XTransform xtrans_overlay_transform_mode(struct Input const* input);
-static XTransform xtrans_scale(double z);
+static XTransform xtrans_scale(double x, double y);
+static XTransform xtrans_move(double x, double y);
+static XTransform xtrans_rotate(double a);
 static XTransform xtrans_from_trans(Transform trans);
-static XTransform xtrans_mult(XTransform a, XTransform b);
-// HACK xrender missinterprets XTransform values
-static XTransform xtrans_set_picture_transform_hack(XTransform a);
+static XTransform xtrans_mult(XTransform a, XTransform b); // transformations are applied from right to left
+static XTransform xtrans_invert(XTransform a);
 
 static void xwindow_set_cardinal(Display* dp, Window window, Atom key, u32 value);
 
@@ -868,49 +865,70 @@ Pair rect_dims(Rect a) {
     return (Pair) {a.r - a.l, a.b - a.t};
 }
 
-XTransform xtrans_overlay_transform_mode(struct Input const* input) {
-    XTransform result = xtrans_from_trans(TRANSFORM_DEFAULT);
-
-    if (input->mode.t == InputT_Transform) {
-        Pair const move = OVERLAY_TRANSFORM(&input->mode).move;
-        DPt const scale = OVERLAY_TRANSFORM(&input->mode).scale;
-
-        // move pivot to (0, 0)
-        result.matrix[0][2] -= XDoubleToFixed(input->ovr.rect.l);
-        result.matrix[1][2] -= XDoubleToFixed(input->ovr.rect.t);
-
-        // apply scale transform
-        result = xtrans_mult(result, xtrans_from_trans((Transform) {.scale = scale}));
-
-        // move (0, 0) to pivot (scaled)
-        result.matrix[0][2] += XDoubleToFixed((double)input->ovr.rect.l / scale.x);
-        result.matrix[1][2] += XDoubleToFixed((double)input->ovr.rect.t / scale.y);
-
-        // apply move transform (scaled)
-        result.matrix[0][2] += XDoubleToFixed((double)move.x / scale.x);
-        result.matrix[1][2] += XDoubleToFixed((double)move.y / scale.y);
-    }
-
-    return result;
+Transform trans_add(Transform a, Transform b) {
+    return ((Transform) {.scale.x = a.scale.x * b.scale.x,
+                         .scale.y = a.scale.y * b.scale.y,
+                         .move.x = a.move.x + b.move.x,
+                         .move.y = a.move.y + b.move.y,
+                         .rotate = a.rotate + b.rotate});
 }
 
-XTransform xtrans_scale(double z) {
+XTransform xtrans_overlay_transform_mode(struct Input const* input) {
+    if (input->mode.t != InputT_Transform) {
+        return xtrans_from_trans(TRANSFORM_DEFAULT);
+    }
+
+    Transform const trans = OVERLAY_TRANSFORM(&input->mode);
+    Pair const move = trans.move;
+    DPt const scale = trans.scale;
+    double const rotate = trans.rotate;
+    Pair const corner = {input->ovr.rect.l, input->ovr.rect.t};
+
+    // actual overlay corner always at (0, 0)
+    return xtrans_mult(
+        xtrans_mult(
+            xtrans_mult(
+                xtrans_mult(
+                    xtrans_move(move.x, move.y),  //
+                    xtrans_move(corner.x, corner.y)
+                ),
+                xtrans_scale(scale.x, scale.y)
+            ),
+            xtrans_rotate(rotate)
+        ),
+        xtrans_move(-corner.x, -corner.y)
+    );
+}
+
+XTransform xtrans_scale(double x, double y) {
     return (XTransform
-    ) {{{XDoubleToFixed(z), XDoubleToFixed(0), XDoubleToFixed(0)},
-        {XDoubleToFixed(0), XDoubleToFixed(z), XDoubleToFixed(0)},
-        {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)}}};
+    ) {{{XDoubleToFixed(x), XDoubleToFixed(0.0), XDoubleToFixed(0.0)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(y), XDoubleToFixed(0.0)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(0.0), XDoubleToFixed(1.0)}}};
+}
+
+XTransform xtrans_move(double x, double y) {
+    return (XTransform
+    ) {{{XDoubleToFixed(1.0), XDoubleToFixed(0.0), XDoubleToFixed(x)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(1.0), XDoubleToFixed(y)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(0.0), XDoubleToFixed(1.0)}}};
+}
+
+XTransform xtrans_rotate(double a) {
+    return (XTransform
+    ) {{{XDoubleToFixed(cos(a)), XDoubleToFixed(-sin(a)), XDoubleToFixed(0.0)},
+        {XDoubleToFixed(sin(a)), XDoubleToFixed(cos(a)), XDoubleToFixed(0.0)},
+        {XDoubleToFixed(0.0), XDoubleToFixed(0.0), XDoubleToFixed(1.0)}}};
 }
 
 XTransform xtrans_from_trans(Transform trans) {
-    // move -> scale
-
-    // clang-format off
-    return (XTransform) {{
-        {XDoubleToFixed(trans.scale.x), XDoubleToFixed(0.0), XDoubleToFixed(trans.move.x)},
-        {XDoubleToFixed(0.0), XDoubleToFixed(trans.scale.y), XDoubleToFixed(trans.move.y)},
-        {XDoubleToFixed(0.0), XDoubleToFixed(0.0), XDoubleToFixed(1.0)},
-    }};
-    // clang-format on
+    return xtrans_mult(
+        xtrans_mult(
+            xtrans_move(trans.move.x, trans.move.y),  //
+            xtrans_scale(trans.scale.x, trans.scale.y)
+        ),
+        xtrans_rotate(trans.rotate)
+    );
 }
 
 XTransform xtrans_mult(XTransform a, XTransform b) {
@@ -926,12 +944,22 @@ XTransform xtrans_mult(XTransform a, XTransform b) {
     return result;
 }
 
-XTransform xtrans_set_picture_transform_hack(XTransform a) {
-    a.matrix[0][0] = XDoubleToFixed(1.0 / XFixedToDouble(a.matrix[0][0]));
-    a.matrix[1][1] = XDoubleToFixed(1.0 / XFixedToDouble(a.matrix[1][1]));
-    a.matrix[0][2] = XDoubleToFixed(-1.0 * XFixedToDouble(a.matrix[0][2]));
-    a.matrix[1][2] = XDoubleToFixed(-1.0 * XFixedToDouble(a.matrix[1][2]));
-    return a;
+XTransform xtrans_invert(XTransform a) {
+    double m[3][3] = {0};
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            m[i][j] = XFixedToDouble(a.matrix[i][j]);
+        }
+    }
+
+    double const inv_det = 1.0 / (m[0][0] * m[1][1] - m[0][1] * m[1][0]);
+
+    XFixed const r02 = XDoubleToFixed((m[0][1] * m[1][2] - m[1][1] * m[0][2]) * inv_det);
+    XFixed const r12 = XDoubleToFixed((m[1][0] * m[0][2] - m[0][0] * m[1][2]) * inv_det);
+    return (XTransform
+    ) {{{XDoubleToFixed(m[1][1] * inv_det), XDoubleToFixed(-m[0][1] * inv_det), r02},
+        {XDoubleToFixed(-m[1][0] * inv_det), XDoubleToFixed(m[0][0] * inv_det), r12},
+        {XDoubleToFixed(0.0), XDoubleToFixed(0.0), XDoubleToFixed(1.0)}}};
 }
 
 void xwindow_set_cardinal(Display* dp, Window window, Atom key, u32 value) {
@@ -2279,7 +2307,8 @@ XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans) {
     Picture src = XRenderCreatePicture(dc->dp, src_pm, dc->sys.xrnd_pic_format, 0, NULL);
     Picture dst = XRenderCreatePicture(dc->dp, dst_pm, dc->sys.xrnd_pic_format, 0, NULL);
 
-    XTransform xtrans_pict = xtrans_set_picture_transform_hack(xtrans);
+    // HACK xtrans_invert, because XRENDER missinterprets XTransform values
+    XTransform xtrans_pict = xtrans_invert(xtrans);
     XRenderSetPictureTransform(dc->dp, src, &xtrans_pict);
     XRenderComposite(dc->dp, PictOpSrc, src, None, dst, 0, 0, 0, 0, 0, 0, w, h);
 
@@ -2985,11 +3014,11 @@ void update_screen(struct Ctx* ctx, Pair cur_scr) {
                 &(XRenderPictureAttributes) {.subwindow_mode = IncludeInferiors}
             );
 
-            XTransform const xtrans_zoom = xtrans_scale(ZOOM_C(dc));
+            XTransform const xtrans_zoom = xtrans_scale(ZOOM_C(dc), ZOOM_C(dc));
 
-            XTransform xtrans_canvas = xtrans_set_picture_transform_hack(xtrans_zoom);
-            XTransform xtrans_overlay =
-                xtrans_set_picture_transform_hack(xtrans_mult(xtrans_overlay_transform_mode(inp), xtrans_zoom));
+            // HACK xtrans_invert, because XRENDER missinterprets XTransform values
+            XTransform xtrans_canvas = xtrans_invert(xtrans_zoom);
+            XTransform xtrans_overlay = xtrans_invert(xtrans_mult(xtrans_zoom, xtrans_overlay_transform_mode(inp)));
             XRenderSetPictureTransform(dc->dp, cv_pict, &xtrans_canvas);
             XRenderSetPictureTransform(dc->dp, overlay_pict, &xtrans_overlay);
 
@@ -3652,10 +3681,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         canvas_change_zoom(dc, inp->prev_c, -1);
     } else if (inp->mode.t == InputT_Transform) {
         struct InputTransformData* transd = &inp->mode.d.trans;
-        transd->acc.move.x += transd->curr.move.x;
-        transd->acc.move.y += transd->curr.move.y;
-        transd->acc.scale.x *= transd->curr.scale.x;
-        transd->acc.scale.y *= transd->curr.scale.y;
+        transd->acc = trans_add(transd->acc, transd->curr);
         transd->curr = TRANSFORM_DEFAULT;
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
@@ -4008,6 +4034,8 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     transd->curr.scale = btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
                         ? scale
                         : (DPt) {MAX(scale.x, scale.y), MAX(scale.x, scale.y)};
+                } else if (btn_eq(inp->holding_button, BTN_TRANS_ROTATE)) {
+                    transd->curr.rotate = cur_delta.y / 100.0;
                 } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
                     transd->curr.move = cur_delta;
                 }
