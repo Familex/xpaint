@@ -878,25 +878,13 @@ XTransform xtrans_overlay_transform_mode(struct Input const* input) {
         return xtrans_from_trans(TRANSFORM_DEFAULT);
     }
 
-    Transform const trans = OVERLAY_TRANSFORM(&input->mode);
-    Pair const move = trans.move;
-    DPt const scale = trans.scale;
-    double const rotate = trans.rotate;
-    Pair const corner = {input->ovr.rect.l, input->ovr.rect.t};
-
     // actual overlay corner always at (0, 0)
     return xtrans_mult(
         xtrans_mult(
-            xtrans_mult(
-                xtrans_mult(
-                    xtrans_move(move.x, move.y),  //
-                    xtrans_move(corner.x, corner.y)
-                ),
-                xtrans_scale(scale.x, scale.y)
-            ),
-            xtrans_rotate(rotate)
+            xtrans_move(input->ovr.rect.l, input->ovr.rect.t),
+            xtrans_from_trans(OVERLAY_TRANSFORM(&input->mode))
         ),
-        xtrans_move(-corner.x, -corner.y)
+        xtrans_move(-input->ovr.rect.l, -input->ovr.rect.t)
     );
 }
 
