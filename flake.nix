@@ -28,6 +28,7 @@
                 xorg.libX11
                 xorg.libXft
                 xorg.libXext
+                pkg-config
               ];
 
               buildPhase = "${make} ${name}";
@@ -46,7 +47,6 @@
           default = pkgs.mkShell.override {} {
             inputsFrom = [self'.packages.default];
             packages = with pkgs; [
-              pkg-config
               util-linux
               gnumake
               clang-tools
