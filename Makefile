@@ -62,9 +62,12 @@ check: ## check code with clang-tidy
 dev: clean ## generate dev files
 	bear -- $(MAKE) ./xpaint-d
 
-valgrind: xpaint-d ## debug with valgrind
+valgrind: ## debug with valgrind
+	# sanitizer breaks valgrind
+	$(MAKE) DEBUG_FLAGS="$(DEBUG_FLAGS) -fno-sanitize=address" clean xpaint-d
+	mv ./xpaint-d ./xpaint-d-no-asan
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
-		--suppressions=./.valgrind.supp $(ARGS) ./xpaint-d
+		--suppressions=./.valgrind.supp $(ARGS) ./xpaint-d-no-asan
 
 .PHONY: all help run clean install uninstall check dev valgrind
 
