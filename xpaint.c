@@ -3397,6 +3397,12 @@ void setup(Display* dp, struct Ctx* ctx) {
         }
     }
 
+    /* init fontconfig */ {
+        if (!FcInit()) {
+            die("failed to initialize fontconfig");
+        }
+    }
+
     /* atoms */ {
         atoms[A_Cardinal] = XInternAtom(dp, "CARDINAL", False);
         atoms[A_Clipboard] = XInternAtom(dp, "CLIPBOARD", False);
@@ -4416,4 +4422,5 @@ void cleanup(struct Ctx* ctx) {
         XFreeColormap(ctx->dc.dp, ctx->dc.sys.colmap);
         XDestroyWindow(ctx->dc.dp, ctx->dc.window);
     }
+    /* fontconfig */ { FcFini(); }
 }
