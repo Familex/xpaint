@@ -71,7 +71,7 @@ valgrind: xpaint-d ## debug with valgrind
 #### compiler and linker flags
 
 LANG_FLAGS = -std=c99 -pedantic -Wall -Wextra -Werror
-RELEASE_FLAGS = -flto -O2 -DNDEBUG
+RELEASE_FLAGS = -flto=auto -O2 -DNDEBUG
 DEBUG_FLAGS = -g -fsanitize=address -static-libasan
 DEBUG_NO_SYMBOLS_FLAGS = -O0 -DNDEBUG -Wno-error
 
