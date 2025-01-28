@@ -20,6 +20,7 @@ double const CANVAS_ZOOM_SPEED = 1.2;  // must be > 1.0
 // state bits to ignore when matching key or button events.
 // use `xmodmap` to check your keyboard modifier map.
 u32 const IGNOREMOD = Mod2Mask;
+u32 const AltMask = Mod1Mask;
 
 XRenderColor const SCHEMES[SchmLast][2] = {
     // fg, bg (rgba premultiplied)
@@ -67,6 +68,8 @@ argb const SEL_TOOL_SELECTION_FG = 0xFF181818;
 u32 const TOOLS_DEFAULT_LINE_W = 5;
 u32 const TOOLS_BRUSH_DEFAULT_SPACING = 1;  // '1' to disable. must be >= 1
 
+double const TFM_MODE_ROTATE_SENSITIVITY = 0.01;
+
 argb const CANVAS_BACKGROUND = 0xFFAA0000;
 u32 const CANVAS_DEFAULT_WIDTH = 1000;
 u32 const CANVAS_DEFAULT_HEIGHT = 700;
@@ -90,9 +93,11 @@ Button const BTN_ZOOM_OUT = {Button5, ControlMask};
 // by default area moves
 Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
 Button const BTN_TRANS_MOVE = {Button1, NO_MOD};
-Button const BTN_TRANS_RESIZE = {Button3, NO_MOD};
-Button const BTN_TRANS_RESIZE_PROPORTIONAL = {Button3, ShiftMask};
-Button const BTN_TRANS_ROTATE = {Button3, ControlMask | ShiftMask};
+Button const BTN_TRANS_MOVE_LOCK = {Button1, ShiftMask};
+Button const BTN_TRANS_SCALE = {Button3, AltMask};
+Button const BTN_TRANS_SCALE_UNIFORM = {Button3, AltMask | ShiftMask};
+Button const BTN_TRANS_ROTATE = {Button3, ControlMask};
+Button const BTN_TRANS_ROTATE_SNAP = {Button3, ControlMask | ShiftMask};
 
 // actions {allowed modes, {key, modifier mask}}
 Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};

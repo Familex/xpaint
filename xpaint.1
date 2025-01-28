@@ -237,14 +237,20 @@ Make selection with selection tool and drag it with this button to copy area (in
 .B BTN_TRANS_MOVE <LeftMouse>
 Move canvas or selection in transform mode.
 .TP
-.B BTN_TRANS_RESIZE <RightMouse>
+.B BTN_TRANS_MOVE_LOCK <S-LeftMouse>
+Move canvas or selection along thes axes in transform mode.
+.TP
+.B BTN_TRANS_SCALE <A-RightMouse>
 Scale canvas or selection in transform mode.
 .TP
-.B BTN_TRANS_RESIZE_PROPORTIONAL <S-RightMouse>
+.B BTN_TRANS_SCALE_UNIFORM <A-S-RightMouse>
 Scale canvas or selection in transform mode (maintain aspect ratio).
 .TP
-.B BTN_TRANS_ROTATE <C-S-RightMouse>
+.B BTN_TRANS_ROTATE <C-RightMouse>
 Rotate canvas or selection in transform mode by moving mouse along the y axis.
+.TP
+.B BTN_TRANS_ROTATE_SNAP <C-S-RightMouse>
+Rotate canvas or selection with 45 degrees snapping in transform mode by moving mouse along the y axis.
 
 .SH NOTE
 All listed keys are in vim notation.

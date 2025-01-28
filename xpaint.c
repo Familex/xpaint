@@ -3063,7 +3063,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr) {
         draw_dash_line(dc, (Pair) {rect.l, rect.t}, (Pair) {rect.r, rect.b}, 1);
     }
 
-    if (inp->is_dragging && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE)) {
+    if (inp->is_dragging && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
 
         Pair const lt = point_from_cv_to_scr_xy(dc, 0, 0);
@@ -3651,10 +3651,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     struct Input* inp = &ctx->input;
     Button e_btn = get_btn(e);
 
-    if (btn_eq(e_btn, BTN_CANVAS_RESIZE)) {
-        Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
-        canvas_resize(ctx, cur.x, cur.y);
-    } else if (btn_eq(e_btn, BTN_SCROLL_UP)) {
+    if (btn_eq(e_btn, BTN_SCROLL_UP)) {
         canvas_scroll(&dc->cv, (Pair) {0, 10});
     } else if (btn_eq(e_btn, BTN_SCROLL_DOWN)) {
         canvas_scroll(&dc->cv, (Pair) {0, -10});
@@ -3670,6 +3667,9 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         struct InputTransformData* transd = &inp->mode.d.trans;
         transd->acc = trans_add(transd->acc, transd->curr);
         transd->curr = TRANSFORM_DEFAULT;
+    } else if (btn_eq(e_btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
+        Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
+        canvas_resize(ctx, cur.x, cur.y);
     } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items_arr[selected_item].on_select) {
@@ -4005,8 +4005,8 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 struct InputTransformData* transd = &inp->mode.d.trans;
                 Pair const cur_delta = {cur.x - inp->press_pt.x, cur.y - inp->press_pt.y};
 
-                if (btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
-                    || btn_eq(inp->holding_button, BTN_TRANS_RESIZE_PROPORTIONAL)) {
+                if (btn_eq(inp->holding_button, BTN_TRANS_SCALE)
+                    || btn_eq(inp->holding_button, BTN_TRANS_SCALE_UNIFORM)) {
                     // adjust scale to match cursor
 
                     Transform trans = transd->acc;
@@ -4018,13 +4018,52 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     Pair dims = {rb_trans.x - lt_trans.x, rb_trans.y - lt_trans.y};
                     DPt scale = {((double)dims.x + delta.x) / dims.x, ((double)dims.y + delta.y) / dims.y};
 
-                    transd->curr.scale = btn_eq(inp->holding_button, BTN_TRANS_RESIZE)
+                    transd->curr.scale = btn_eq(inp->holding_button, BTN_TRANS_SCALE)
                         ? scale
                         : (DPt) {MAX(scale.x, scale.y), MAX(scale.x, scale.y)};
-                } else if (btn_eq(inp->holding_button, BTN_TRANS_ROTATE)) {
-                    transd->curr.rotate = cur_delta.y / 100.0;
+                } else if (btn_eq(inp->holding_button, BTN_TRANS_ROTATE)
+                           | btn_eq(inp->holding_button, BTN_TRANS_ROTATE_SNAP)) {
+                    double const snap_interval = PI / 4;  // 45 degrees in radians
+
+                    double angle_delta = cur_delta.y * TFM_MODE_ROTATE_SENSITIVITY;
+
+                    if (btn_eq(inp->holding_button, BTN_TRANS_ROTATE_SNAP)) {
+                        // Snap to nearest 45° increment relative to accumulated rotation
+                        double const total_angle = transd->acc.rotate + angle_delta;
+                        double const snapped_total = round(total_angle / snap_interval) * snap_interval;
+                        angle_delta = snapped_total - transd->acc.rotate;
+                    }
+
+                    transd->curr.rotate = angle_delta;
                 } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
                     transd->curr.move = cur_delta;
+                } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE_LOCK)) {
+                    Pair snapped = cur_delta;
+                    double const angle_threshold = 0.4142;  // tan(22.5°)
+                    i32 const min_move = 2;  // Minimum pixels to trigger snapping
+
+                    double const dx = snapped.x;
+                    double const dy = snapped.y;
+                    double const adx = fabs(dx);
+                    double const ady = fabs(dy);
+
+                    if (adx + ady >= min_move) {
+                        i32 const sx = dx < 0 ? -1 : 1;
+                        i32 const sy = dy < 0 ? -1 : 1;
+                        double const max_ad = fmax(adx, ady);
+                        double const ratio = fmin(adx, ady) / max_ad;
+
+                        if (ratio < angle_threshold) {
+                            // Axis lock
+                            snapped = (adx > ady) ? (Pair) {sx * (int)max_ad, 0} : (Pair) {0, sy * (int)max_ad};
+                        } else {
+                            // Diagonal lock (45°)
+                            i32 const mag = (int)round(max_ad);
+                            snapped = (Pair) {sx * mag, sy * mag};
+                        }
+                    }
+
+                    transd->curr.move = snapped;
                 }
 
                 update_screen(ctx, (Pair) {e->x, e->y});
