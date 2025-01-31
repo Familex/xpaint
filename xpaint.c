@@ -1981,6 +1981,10 @@ void sel_circ_free_and_hide(struct SelectionCircle* sel_circ) {
 }
 
 i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
+    if (sc == NULL || sc->items_arr == NULL) {
+        return NIL;
+    }
+
     i32 const pointer_x_rel = x - sc->x;
     i32 const pointer_y_rel = y - sc->y;
     if (pointer_x_rel == 0 && pointer_y_rel == 0) {
@@ -3632,7 +3636,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
     if (inp->mode.t == InputT_Transform) {
         // do nothing
-    } else if (btn_eq(get_btn(e), BTN_SEL_CIRC)) {
+    } else if (btn_eq(get_btn(e), BTN_SEL_CIRC) && !ctx->input.is_holding) {
         sel_circ_init_and_show(ctx, e->x, e->y);
     } else if (tc->on_press) {
         Rect const damage = tc->on_press(ctx, e);
