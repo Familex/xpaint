@@ -318,6 +318,7 @@ struct Ctx {
             union SCI_Arg {
                 enum ToolTag tool;  // in interaction mode
                 enum FigureType figure;  // in interaction mode with figure tool
+                argb col;  // in color mode
             } arg;
             void (*on_select)(struct Ctx*, union SCI_Arg);
             enum Icon icon;
@@ -503,6 +504,7 @@ static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 static argb argb_blend(argb a, argb b, u8 c);
 // receives premultiplied argb value
 static argb argb_normalize(argb c);
+static argb argb_from_hsl(double hue, double sat, double light);
 static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
 static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
@@ -530,7 +532,7 @@ static void input_mode_free(struct InputMode* input_mode);
 static char const* input_mode_as_str(enum InputTag mode_tag);
 static void input_free(struct Input* input);
 
-static void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y);
+static void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y);
 static void sel_circ_free_and_hide(struct SelectionCircle* sel_circ);
 static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
 
@@ -1267,6 +1269,46 @@ argb argb_normalize(argb const c) {
     return ARGB_ALPHA | red << 16 | green << 8 | blue;
 }
 
+argb argb_from_hsl(double hue, double sat, double light) {
+    assert(hue >= 0.0 && hue <= 1.0);
+    assert(sat >= 0.0 && sat <= 1.0);
+    assert(light >= 0.0 && light <= 1.0);
+
+    double const h = hue * 6.0;
+    double const c = (1.0 - fabs((2.0 * light) - 1.0)) * sat;
+    double const x = c * (1.0 - fabs(fmod(h, 2.0) - 1.0));
+    double const m = light - (c / 2.0);
+
+    double r = 0;
+    double g = 0;
+    double b = 0;
+
+    if (h < 1.0) {
+        r = c;
+        g = x;
+    } else if (h < 2.0) {
+        r = x;
+        g = c;
+    } else if (h < 3.0) {
+        g = c;
+        b = x;
+    } else if (h < 4.0) {
+        g = x;
+        b = c;
+    } else if (h < 5.0) {
+        r = x;
+        b = c;
+    } else {
+        r = c;
+        b = x;
+    }
+
+    u32 const ri = (u32)((r + m) * 255.0);
+    u32 const gi = (u32)((g + m) * 255.0);
+    u32 const bi = (u32)((b + m) * 255.0);
+    return (0xFF << 24) | (ri << 16) | (gi << 8) | bi;
+}
+
 static u32 argb_to_abgr(argb v) {
     u32 const a = v & ARGB_ALPHA;
     u8 const red = (v & 0x00FF0000) >> (2 * 8);
@@ -1941,8 +1983,11 @@ static void sel_circ_on_select_figure(struct Ctx* ctx, union SCI_Arg arg) {
     assert(tc->t == Tool_Figure);
     tc->d.fig.curr = arg.figure;
 }
+static void sel_circ_on_select_col(struct Ctx* ctx, union SCI_Arg arg) {
+    *tc_curr_col(&CURR_TC(ctx)) = arg.col;
+}
 
-void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y) {
+void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
     sel_circ_free_and_hide(&ctx->sc);
 
     struct ToolCtx* tc = &CURR_TC(ctx);
@@ -1953,10 +1998,65 @@ void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y) {
 
     switch (ctx->input.mode.t) {
         case InputT_Transform:
-        case InputT_Color:
         case InputT_Console: break;
+        case InputT_Color: {
+            sc->draw_separators = False;
+
+            if (btn_eq(button, BTN_SEL_CIRC)) {
+                for (u32 hue_int = 0; hue_int < SEL_CIRC_COLOR_ITEMS; ++hue_int) {
+                    double hue = (double)hue_int / SEL_CIRC_COLOR_ITEMS;
+                    argb col = argb_from_hsl(hue, 1.0, 0.5);
+                    struct Item item = {
+                        .arg.col = col,
+                        .on_select = &sel_circ_on_select_col,
+                        .col_outer = col,
+                        .col_inner = COL_BG(&ctx->dc, SchmNorm),
+                    };
+                    arrpush(sc->items_arr, item);
+                }
+            } else {
+                argb base_col = *tc_curr_col(tc);
+                for (u32 i = 0; i < SEL_CIRC_COLOR_ITEMS; ++i) {
+                    double t = (double)i / SEL_CIRC_COLOR_ITEMS;
+                    argb col = 0xFF000000;
+
+                    double const span_grey = 0.15;
+                    double const span_white = 0.2;
+                    double const span_bright = 0.5;
+                    double const span_dark = 0.75;
+                    double const span_black = 1.0;
+
+                    if (t < span_grey) {
+                        t = t / span_grey;
+                        u8 const grey = (u8)(t * 255.0);
+                        col = 0xFF000000 | (grey << 16) | (grey << 8) | grey;
+                    } else if (t < span_white) {
+                        t = (t - span_grey) / (span_white - span_grey);
+                        col = argb_blend(0xFFFFFFFF, base_col | 0x00FFFFFF, (u8)((1.0 - t) * 255.0));
+                    } else if (t < span_bright) {
+                        t = (t - span_white) / (span_bright - span_white);
+                        col = argb_blend(base_col | 0x00FFFFFF, base_col, (u8)((1.0 - t) * 255.0));
+                    } else if (t < span_dark) {
+                        t = (t - span_bright) / (span_dark - span_bright);
+                        col = argb_blend(base_col, base_col & 0xFF7F7F7F, (u8)((1.0 - t) * 255.0));
+                    } else {
+                        t = (t - span_dark) / (span_black - span_dark);
+                        col = argb_blend(base_col & 0xFF7F7F7F, 0xFF000000, (u8)((1.0 - t) * 255.0));
+                    }
+
+                    struct Item item = {
+                        .arg.col = col,
+                        .on_select = &sel_circ_on_select_col,
+                        .col_outer = col,
+                        .col_inner = COL_BG(&ctx->dc, SchmNorm),
+                    };
+                    arrpush(sc->items_arr, item);
+                }
+            }
+        } break;
         case InputT_Interact: {
             sc->draw_separators = True;
+
             switch (tc->t) {
                 case Tool_Selection:
                 case Tool_Pencil:
@@ -2925,12 +3025,12 @@ void draw_selection_circle(
 
             argb const col_outer = sc->items_arr[item].col_outer;
             if (col_outer) {
-                fill_arc(dc, outer_c, outer_dims, item * segment_deg, segment_deg, col_outer);
+                fill_arc(dc, outer_c, outer_dims, item * segment_deg, segment_deg + (1.0 / 64.0), col_outer);
             }
 
             argb const col_inner = sc->items_arr[item].col_inner;
             if (col_inner) {
-                fill_arc(dc, inner_c, inner_dims, item * segment_deg, segment_deg, col_inner);
+                fill_arc(dc, inner_c, inner_dims, item * segment_deg, segment_deg + (1.0 / 64.0), col_inner);
             }
         }
 
@@ -3626,11 +3726,12 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     XButtonPressedEvent* e = (XButtonPressedEvent*)event;
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct Input* inp = &ctx->input;
+    Button const button = get_btn(e);
 
     if (inp->mode.t == InputT_Transform) {
         // do nothing
-    } else if (btn_eq(get_btn(e), BTN_SEL_CIRC) && !ctx->input.is_holding) {
-        sel_circ_init_and_show(ctx, e->x, e->y);
+    } else if ((btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE)) && !ctx->input.is_holding) {
+        sel_circ_init_and_show(ctx, button, e->x, e->y);
     } else if (tc->on_press) {
         Rect const damage = tc->on_press(ctx, e);
         overlay_expand_rect(&inp->ovr, damage);
@@ -3641,7 +3742,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
     ctx->input.press_pt = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
-    ctx->input.holding_button = get_btn(e);
+    ctx->input.holding_button = button;
     ctx->input.is_holding = True;
 
     return HR_Ok;
@@ -3673,7 +3774,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (btn_eq(e_btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
         canvas_resize(ctx, cur.x, cur.y);
-    } else if (btn_eq(e_btn, BTN_SEL_CIRC)) {
+    } else if (btn_eq(e_btn, BTN_SEL_CIRC) || btn_eq(e_btn, BTN_SEL_CIRC_ALTERNATIVE)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items_arr[selected_item].on_select) {
             struct Item* item = &ctx->sc.items_arr[selected_item];
