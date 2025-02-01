@@ -683,21 +683,21 @@ Bool main_process_args(struct Ctx* ctx, i32 argc, char** argv) {
         } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
             main_die_if_no_val_for_arg("-o or --output", argc, argv, i);
             ioctx_set(&ctx->out, argv[++i]);
-        } else if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--width")) {
-            main_die_if_no_val_for_arg("-w or --width", argc, argv, i);
+        } else if (!strcmp(argv[i], "-W") || !strcmp(argv[i], "--width")) {
+            main_die_if_no_val_for_arg("-W or --width", argc, argv, i);
             // ctx.dc.width == ctx.dc.cv.im->width at program start
             ctx->dc.width = strtol(argv[++i], NULL, 0);
             if (!ctx->dc.width) {
                 die("canvas width must be positive number");
             }
-        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--height")) {
-            main_die_if_no_val_for_arg("-h or --height", argc, argv, i);
+        } else if (!strcmp(argv[i], "-H") || !strcmp(argv[i], "--height")) {
+            main_die_if_no_val_for_arg("-H or --height", argc, argv, i);
             // ctx.dc.height == ctx.dc.cv.im->height at program start
             ctx->dc.height = strtol(argv[++i], NULL, 0);
             if (!ctx->dc.height) {
                 die("canvas height must be positive number");
             }
-        } else if (!strcmp(argv[i], "--help")) {
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             main_show_help_message(stdout);
             exit(0);
         } else {
@@ -715,11 +715,11 @@ void main_show_help_message(FILE* out) {
         "Usage: xpaint [OPTIONS] [FILE]\n"
         "\n"
         "Options:\n"
-        "      --help                   Print help message\n"
+        "  -h, --help                   Print help message\n"
         "  -V, --version                Print version\n"
         "  -v, --verbose                Use verbose output\n"
-        "  -w, --width <canvas width>   Set canvas width\n"
-        "  -h, --height <canvas height> Set canvas height\n"
+        "  -W, --width <canvas width>   Set canvas width\n"
+        "  -H, --height <canvas height> Set canvas height\n"
         "  -i, --input <file path>      Set load file\n"
         "  -o, --output <file path>     Set save file\n"
     );
