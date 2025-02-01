@@ -83,7 +83,7 @@ Bool const CONSOLE_AUTO_COMPLETIONS = True;
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
 Button const BTN_SEL_CIRC = {Button3, NO_MOD};
-Button const BTN_SEL_CIRC_ALTERNATIVE = {Button3, ControlMask};
+Button const BTN_SEL_CIRC_ALTERNATIVE = {Button3, AltMask};
 Button const BTN_CANVAS_RESIZE = {Button3, ControlMask};
 Button const BTN_SCROLL_DRAG = {Button2, NO_MOD};
 Button const BTN_SCROLL_UP = {Button4, NO_MOD};
