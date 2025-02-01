@@ -58,7 +58,6 @@ INCBIN(u8, pic_fig_circ, "res/figure-circle.png");
 INCBIN(u8, pic_fig_tri, "res/figure-triangle.png");
 INCBIN(u8, pic_fig_fill_on, "res/figure-fill-on.png");
 INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
-INCBIN(u8, pic_unknown, "res/unknown.png");
 
 /*
  * -opt vars are nullable (optional)
@@ -118,6 +117,7 @@ enum {
 };
 
 enum Icon {
+    I_None,
     I_Select,
     I_Pencil,
     I_Fill,
@@ -789,8 +789,11 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_FigTri: return (D) {pic_fig_tri_data, RES_SZ_FIGURE_TRIANGLE};
         case I_FigFillOff: return (D) {pic_fig_fill_off_data, RES_SZ_FIGURE_FILL_OFF};
         case I_FigFillOn: return (D) {pic_fig_fill_on_data, RES_SZ_FIGURE_FILL_ON};
-        default: return (D) {pic_unknown_data, RES_SZ_UNKNOWN};
+
+        case I_Last:
+        case I_None: return (D) {NULL, 0};
     }
+    UNREACHABLE();
 }
 
 double brush_ease(double v) {
@@ -3538,8 +3541,10 @@ void setup(Display* dp, struct Ctx* ctx) {
     /* static images */ {
         for (i32 i = 0; i < I_Last; ++i) {
             struct IconData icon = get_icon_data(i);
-            struct Image im = read_file_from_memory(&ctx->dc, icon.data, icon.len, COL_BG(&ctx->dc, SchmNorm));
-            images[i] = im.im;
+            if (icon.data) {
+                struct Image im = read_file_from_memory(&ctx->dc, icon.data, icon.len, COL_BG(&ctx->dc, SchmNorm));
+                images[i] = im.im;
+            }
         }
     }
 
