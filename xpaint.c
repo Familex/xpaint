@@ -311,12 +311,14 @@ struct Ctx {
     } *hist_prevarr, *hist_nextarr;
 
     struct SelectionCircle {
-        Bool is_active;
         i32 x;
         i32 y;
+        Bool draw_separators;
         struct Item {
             void (*on_select)(struct Ctx*);
             enum Icon icon;
+            argb col_outer;
+            argb col_inner;
         }* items_arr;
     } sc;
 
@@ -579,6 +581,8 @@ static u32 statusline_height(struct DrawCtx const* dc);
 // window size - interface parts (e.g. statusline)
 static Pair clientarea_size(struct DrawCtx const* dc);
 static Pair canvas_size(struct DrawCtx const* dc);
+static void draw_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col);
+static void fill_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col);
 static void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert);
 static void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert);
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col);
@@ -1943,33 +1947,49 @@ void sel_circ_init_and_show(struct Ctx* ctx, i32 x, i32 y) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct SelectionCircle* sc = &ctx->sc;
 
-    if (tc->t == Tool_Figure) {
-        struct Item items[] = {
-            {.on_select = &sel_circ_figure_set_circle, .icon = I_FigCirc},
-            {.on_select = &sel_circ_figure_set_rectangle, .icon = I_FigRect},
-            {.on_select = &sel_circ_figure_set_triangle, .icon = I_FigTri},
-            {.on_select = &sel_circ_figure_toggle_fill, .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn},
-            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
-        };
-        for (u32 i = 0; i < LENGTH(items); ++i) {
-            arrpush(sc->items_arr, items[i]);
-        }
-    } else {
-        struct Item items[] = {
-            {.on_select = &sel_circ_set_tool_selection, .icon = I_Select},
-            {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
-            {.on_select = &sel_circ_set_tool_fill, .icon = I_Fill},
-            {.on_select = &sel_circ_set_tool_picker, .icon = I_Picker},
-            {.on_select = &sel_circ_set_tool_brush, .icon = I_Brush},
-            {.on_select = &sel_circ_set_tool_figure, .icon = I_Figure},
-        };
-        for (u32 i = 0; i < LENGTH(items); ++i) {
-            arrpush(sc->items_arr, items[i]);
-        }
+    sc->x = x;
+    sc->y = y;
+
+    switch (ctx->input.mode.t) {
+        case InputT_Transform:
+        case InputT_Color:
+        case InputT_Console: break;
+        case InputT_Interact: {
+            sc->draw_separators = True;
+            switch (tc->t) {
+                case Tool_Selection:
+                case Tool_Pencil:
+                case Tool_Fill:
+                case Tool_Picker:
+                case Tool_Brush: {
+                    struct Item items[] = {
+                        {.on_select = &sel_circ_set_tool_selection, .icon = I_Select},
+                        {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
+                        {.on_select = &sel_circ_set_tool_fill, .icon = I_Fill},
+                        {.on_select = &sel_circ_set_tool_picker, .icon = I_Picker},
+                        {.on_select = &sel_circ_set_tool_brush, .icon = I_Brush},
+                        {.on_select = &sel_circ_set_tool_figure, .icon = I_Figure},
+                    };
+                    for (u32 i = 0; i < LENGTH(items); ++i) {
+                        arrpush(sc->items_arr, items[i]);
+                    }
+                } break;
+                case Tool_Figure: {
+                    struct Item items[] = {
+                        {.on_select = &sel_circ_figure_set_circle, .icon = I_FigCirc},
+                        {.on_select = &sel_circ_figure_set_rectangle, .icon = I_FigRect},
+                        {.on_select = &sel_circ_figure_set_triangle, .icon = I_FigTri},
+                        {.on_select = &sel_circ_figure_toggle_fill, .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn
+                        },
+                        {.on_select = &sel_circ_set_tool_pencil, .icon = I_Pencil},
+                    };
+                    for (u32 i = 0; i < LENGTH(items); ++i) {
+                        arrpush(sc->items_arr, items[i]);
+                    }
+                } break;
+            }
+        } break;
     }
-    ctx->sc.x = x;
-    ctx->sc.y = y;
-    ctx->sc.is_active = True;
 }
 
 void sel_circ_free_and_hide(struct SelectionCircle* sel_circ) {
@@ -1977,7 +1997,6 @@ void sel_circ_free_and_hide(struct SelectionCircle* sel_circ) {
         arrfree(sel_circ->items_arr);
         sel_circ->items_arr = NULL;
     }
-    sel_circ->is_active = False;
 }
 
 i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
@@ -2794,6 +2813,16 @@ Pair canvas_size(struct DrawCtx const* dc) {
     };
 }
 
+void draw_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col) {
+    XSetForeground(dc->dp, dc->screen_gc, col);
+    XDrawArc(dc->dp, dc->window, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
+}
+
+void fill_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col) {
+    XSetForeground(dc->dp, dc->screen_gc, col);
+    XFillArc(dc->dp, dc->window, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
+}
+
 void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert) {
     XftDraw* d = XftDrawCreate(dc->dp, dc->back_buffer, dc->sys.vinfo.visual, dc->sys.colmap);
     XftDrawStringUtf8(
@@ -2855,81 +2884,64 @@ void draw_selection_circle(
     i32 const pointer_x,
     i32 const pointer_y
 ) {
-    if (!sc->is_active) {
+    if (sc->items_arr == NULL || arrlen(sc->items_arr) == 0) {
         return;
     }
 
     i32 const outer_r = (i32)SEL_CIRC_OUTER_R_PX;
     i32 const inner_r = (i32)SEL_CIRC_INNER_R_PX;
+    Pair const outer_c = {sc->x - outer_r, sc->y - outer_r};
+    Pair const outer_dims = {outer_r * 2, outer_r * 2};
+    Pair const inner_c = {sc->x - inner_r, sc->y - inner_r};
+    Pair const inner_dims = {inner_r * 2, inner_r * 2};
 
     XSetLineAttributes(dc->dp, dc->screen_gc, SEL_CIRC_LINE_W, SEL_CIRC_LINE_STYLE, CapNotLast, JoinMiter);
-
-    XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
-    XFillArc(
-        dc->dp,
-        dc->window,
-        dc->screen_gc,
-        sc->x - outer_r,
-        sc->y - outer_r,
-        outer_r * 2,
-        outer_r * 2,
-        0,
-        360 * 64
-    );
+    fill_arc(dc, outer_c, outer_dims, 0.0, 360.0, COL_BG(dc, SchmNorm));
 
     {
         double const segment_rad = PI * 2 / MAX(1, arrlen(sc->items_arr));
         double const segment_deg = segment_rad / PI * 180;
 
-        // item images
+        // item's properties
         for (u32 item = 0; item < arrlen(sc->items_arr); ++item) {
             XImage* image = images[sc->items_arr[item].icon];
-            assert(image != NULL);
+            if (image) {
+                XPutImage(
+                    dc->dp,
+                    dc->window,
+                    dc->screen_gc,
+                    image,
+                    0,
+                    0,
+                    (i32)(sc->x + (cos(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5))
+                          - (image->width / 2.0)),
+                    (i32)(sc->y + (sin(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5))
+                          - (image->height / 2.0)),
+                    image->width,
+                    image->height
+                );
+            }
 
-            XPutImage(
-                dc->dp,
-                dc->window,
-                dc->screen_gc,
-                image,
-                0,
-                0,
-                (i32)(sc->x + (cos(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5)) - (image->width / 2.0)),
-                (i32)(sc->y + (sin(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5)) - (image->height / 2.0)),
-                image->width,
-                image->height
-            );
+            argb const col_outer = sc->items_arr[item].col_outer;
+            if (col_outer) {
+                fill_arc(dc, outer_c, outer_dims, item * segment_deg, segment_deg, col_outer);
+            }
+
+            argb const col_inner = sc->items_arr[item].col_inner;
+            if (col_inner) {
+                fill_arc(dc, inner_c, inner_dims, item * segment_deg, segment_deg, col_inner);
+            }
         }
 
         // selected item fill
         i32 const current_item = sel_circ_curr_item(sc, pointer_x, pointer_y);
         if (current_item != NIL) {
-            XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmFocus));
-            XFillArc(
-                dc->dp,
-                dc->window,
-                dc->screen_gc,
-                sc->x - outer_r,
-                sc->y - outer_r,
-                outer_r * 2,
-                outer_r * 2,
-                (i32)(current_item * segment_deg) * 64,
-                (i32)segment_deg * 64
-            );
-            XSetForeground(dc->dp, dc->screen_gc, COL_BG(dc, SchmNorm));
-            XFillArc(
-                dc->dp,
-                dc->window,
-                dc->screen_gc,
-                sc->x - inner_r,
-                sc->y - inner_r,
-                inner_r * 2,
-                inner_r * 2,
-                (i32)(current_item * segment_deg) * 64,
-                (i32)segment_deg * 64
-            );
+            fill_arc(dc, outer_c, outer_dims, current_item * segment_deg, segment_deg, COL_BG(dc, SchmFocus));
+            fill_arc(dc, inner_c, inner_dims, current_item * segment_deg, segment_deg, COL_BG(dc, SchmNorm));
         }
 
-        if (arrlen(sc->items_arr) >= 2) {  // segment lines
+        // separators
+        if (sc->draw_separators && arrlen(sc->items_arr) >= 2) {
             XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
             for (u32 line_num = 0; line_num < arrlen(sc->items_arr); ++line_num) {
                 XDrawLine(
@@ -2946,30 +2958,8 @@ void draw_selection_circle(
     }
 
     /* lines */ {
-        XSetForeground(dc->dp, dc->screen_gc, COL_FG(dc, SchmNorm));
-        XDrawArc(
-            dc->dp,
-            dc->window,
-            dc->screen_gc,
-            sc->x - inner_r,
-            sc->y - inner_r,
-            inner_r * 2,
-            inner_r * 2,
-            0,
-            360 * 64
-        );
-
-        XDrawArc(
-            dc->dp,
-            dc->window,
-            dc->screen_gc,
-            sc->x - outer_r,
-            sc->y - outer_r,
-            outer_r * 2,
-            outer_r * 2,
-            0,
-            360 * 64
-        );
+        draw_arc(dc, inner_c, inner_dims, 0.0, 360.0, COL_FG(dc, SchmNorm));
+        draw_arc(dc, outer_c, outer_dims, 0.0, 360.0, COL_FG(dc, SchmNorm));
     }
 }
 
