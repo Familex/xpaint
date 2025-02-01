@@ -1,27 +1,19 @@
-.TH XPAINT 1 xpaint VERSION
+.TH XPAINT 1 xpaint VERSION "Modal Image Editor"
 
 .SH NAME
-xpaint \- simple X paint
+xpaint \- a lightweight modal X11 image editor
 
 .SH SYNOPSIS
 .B xpaint
-.RB [\fIOPTIONS\fP]
-.RB [\fIFILE\fP]
+[\fIOPTIONS\fP] [\fIFILE\fP]
 
 .SH DESCRIPTION
-
-xpaint is used to interactively modify image files.
+xpaint is a lightweight modal image editor combining keyboard-driven efficiency with precision drawing tools. Its hybrid interface supports pixel-perfect editing, infinite undo/redo, and contextual radial menus for quick color/tool selection, ideal for technical diagrams and quick sketches.
 
 .SH POSITIONAL ARGUMENTS
 .TP 12
-\fIFILE\fP
-Path or URI to local file to be modified.
-.B Save
-and
-.B load
-commands will refer to it.
-Use "-" as path to read file from stdin and save to stdout.
-Can be overwritten with \fI--input\fP and \fI--output\fP options.
+\fI\fUFILE\fP
+Specifies the path or URI of the image file to be edited. The commands \fBSave\fP and \fBload\fP will refer to this file. Use "-" to read from standard input and write to standard output. This may be overridden by the \fI\-\-input\fP and \fI\-\-output\fP options.
 
 .SH OPTIONS
 .TP
@@ -32,167 +24,152 @@ Print help message.
 Print version.
 .TP
 .B \-v, \-\-verbose
-Use verbose output.
+Enable verbose output.
 .TP
 .B \-w \fIWIDTH\fP, \-\-width \fIWIDTH\fP
-Set canvas width.
+Set the canvas width (default: 1000).
 .TP
 .B \-h \fIHEIGHT\fP, \-\-height \fIHEIGHT\fP
-Set canvas height.
+Set the canvas height (default: 700).
 .TP
 .B \-i \fIFILE\fP, \-\-input \fIFILE\fP
-Set load file.
+Specify the input file to load.
 .TP
 .B \-o \fIFILE\fP, \-\-output \fIFILE\fP
-Set save file.
+Specify the output file for saving.
 
 .SH USAGE
 
 .SS MODES
-Application can be in \fICOLOR\fP, \fICONSOLE\fP, \fIINTERACT\fP or \fITRANSFORM\fP modes.
-Default mode is interact (\fI<Esc>\fP to enter),
-it used to edit canvas.
-Color mode (\fIc\fP to enter) is used to change color in current tool context.
-Console mode (\fI:\fP to enter) is used to execute commands.
-Transform mode (automatic enter with selection tool) is used to transform canvas or selected area.
+xpaint supports several modes:
+.IP "\fIINTERACT\fP (INT)"
+(Default mode) for direct canvas editing. Press \fB<Esc>\fP to switch modes.
+.IP "\fICOLOR\fP (COL)"
+For modifying the color in the current tool context. Enter by pressing \fBc\fP.
+.IP "\fICONSOLE\fP (CMD)"
+For executing text-based commands. Enter by pressing \fB:\fP.
+.IP "\fITRANSFORM\fP (TFM)"
+Automatically entered when using the selection tool, allowing image scaling, moving, and rotation.
 
-.SS CONSOLE
-In console mode all keys (except \fI<Esc>\fP) are captured to command line.
-Use \fI<Enter>\fP to execute typed command,
-use \fI<BS>\fP to delete typed letters.
-Use \fI<Tab>\fP to request completions.
-Completions will appear right after current command with different color.
-Use \fI<Tab>\fP again to cycle completions,
-use \fI<Enter>\fP to apply suggested completion.
-Unicode are supported.
+.SH CONSOLE
+In console mode, all keystrokes are directed to the command line. Auto-completion is available by default.
 .TP
-.B echo \fIMESSAGE\fP
-Display message in statusline.
+.B echo \fI\fUMESSAGE\fP
+Display a message in the status line.
 .TP
-.B set \fIPROPERTY\fP \fIVALUE\fP
-Set value to property.
-Available properties:
-line_w (tools line width),
-col (tool context current color),
-font (interface font, xft name),
-inp (input file, pass "-" for stdin),
-out (output file, pass "-" for stdout),
-png_cmpr (PNG save file compression level),
-jpg_qlty (JPG save file quality level),
-spacing (brush spacing).
+.B set \fI\fUPROPERTY\fP \fI\fUVALUE\fP
+Set a given property to a new value.
+Available properties include:
+.RS
+.RS
+.IP "line_w"
+The width of drawing tools.
+.IP "col"
+The current tool context color in hex format (e.g. 00A283).
+.IP "font"
+The interface font, provided as an Xft name.
+.IP "inp"
+The input file (use "-" for stdin).
+.IP "out"
+The output file (use "-" for stdout).
+.IP "png_cmpr"
+PNG compression level.
+.IP "jpg_qlty"
+JPG quality level.
+.IP "spacing"
+Brush spacing for drawing.
+.RE
+.RE
 .TP
 .B q
-Exit program. No progress is saved.
+Exit the program without saving.
 .TP
-.B save \fITYPE\fP [\fIFILE\fP]
-Save canvas contents to file as png or jpg (\fITYPE\fP). \fIout\fP will be used if \fIFILE\fP not specified.
+.B save \fI\fUTYPE\fP [\fIFILE\fP]
+Save the canvas contents to a file as a PNG or JPG. If \fIFILE\fP is omitted, the current output path is used.
 .TP
 .B load [\fIFILE\fP]
-Load png file to canvas. \fIinp\fP will be used if not specified.
+Load the specified file onto the canvas. If omitted, the current input path is used.
 
-.SS TOOL CONTEXT
+.SH TOOL CONTEXT
+The tool context holds the active tool and the palette of colors. Available tool contexts are displayed in the lower left corner of the status bar. Change the active tool using the number keys. Only one tool is active at any moment (default is the pencil).
 
-Tool context holds tool and color list.
-Available tool contexts are in left
-corner of status line.
-Change current tool context with number keys.
-One tool context holds only one tool (default is pencil).
-Color list can be modified in color mode.
-
-.SS TOOLS
-Tools used to manipulate canvas.
-All actions can be undone/redone.
-To change current tool hold right mouse and select needed tool in selection circle.
-
+.SH TOOLS
+The following tools are available for canvas editing:
 .TP
 .B PENCIL
-Draw squares and lines on left mouse. Hold shift to use last drawn point as line start.
+Draws squares and lines using the left mouse button; hold \fBShift\fP to use the previous point as the start of a new line.
 .TP
 .B BRUSH
-Same as pencil but draws circles and can have spacing.
+Similar to the pencil but produces smoother, rounded strokes. Spacing adjustments are available.
 .TP
 .B SELECTION
-Select rectangular regions on canvas.
-Move selected contents around the canvas by dragging with left mouse.
-Clone selected contents to canvas by dragging with shift.
-Copy selected contents to X selection via \fIC-c\fP.
+Selects rectangular areas and switches to transform mode. Drag to move or clone the selection (use \fBShift\fP for cloning) and copy to the X selection with \fBC-c\fP. Use \fBEsc\fP to exit transform mode and apply changes.
 .TP
 .B FILL
-Fill closed regions on canvas with current color.
+Fills closed regions with the current color.
 .TP
 .B PICKER
-Copy selected color from canvas.
+Extracts a color from the canvas.
 .TP
 .B FIGURE
-Draw circle, square or triangle.
-Current figure can be changed in selection circle.
-To change figure tool to another select pencil tool in selection circle.
+Draws regular shapes (circle, square, triangle). The current figure type can be changed through the selection circle.
 
-.SS KEYBOARD COMMANDS (ACTIONS AND KEYS)
-Actions are keybinds for which the modes in which they can be triggered can be customized.
-All keybinds can be changed in \fIconfig.h\fP file (ACT_* and KEY_* variables).
-Below are the default keys.
-
+.SH KEYBOARD COMMANDS
+The following key bindings are active by default. (All keys can be reconfigured in \fIconfig.h\fP.)
 .TP
-.B ACT_MODE_INTERACT <Esc>
-Enter interact mode.
+.B ACT_MODE_INTERACT \fB<Esc>\fP
+Switch to interact mode.
 .TP
-.B ACT_EXIT q
-Exit program.
+.B ACT_EXIT \fBq\fP
+Exit xpaint.
 .TP
-.B ACT_SAVE_TO_FILE <C-s>
+.B ACT_SAVE_TO_FILE \fB<C-s>\fP
 Save canvas to output path.
-Output path can be passed via \-\-output argument,
-FILE positional argument, or via console.
+Output path can be passed via \fI\-\-output\fP argument,
+\fIFILE\fP positional argument, or via console.
 Saved image type same as currently loaded file (PNG if no file loaded).
 .TP
 .B ACT_UNDO <C-z>
-Undo action.
+Undo the most recent action.
 .TP
 .B ACT_REVERT <C-Z>
-Redo action.
+Redo the most recently undone action.
 .TP
 .B ACT_COPY_AREA <C-c>
-Own selection with contents of selection tool. Selection MIME is image/png.
+Capture the selected area (as image/png) for copying.
 .TP
 .B ACT_PASTE_IMAGE <C-v>
-Paste image from clipboard and enter transform mode.
+Paste the clipboard image (automatically switches to transform mode).
 .TP
 .B ACT_SWAP_COLOR x
-Swap current color with last used.
+Swap the current drawing color with the previous color.
 .TP
-.B (no action) NUMBER FROM 0 TO 9
-Change current tool context.
+.B (no action) NUMBER (0 to 9)
+Switch between available tool contexts.
 .TP
 .B (no action) <C-Left>, <C-Right>, <C-Down>, <C-Up>
-Resize canvas.
-Use shift modifier to increase step.
+Resize the canvas (hold shift to increase step).
 .TP
-.B ACT_ZOOM_IN(OUT) <C-+>(<C-->)
-Zoom canvas in (out).
-
+.B ACT_ZOOM_IN / ACT_ZOOM_OUT <C-plus>/<C-minus>
+Zoom in and out of the canvas.
 .TP
 .B ACT_MODE_COLOR c
-Enter color mode.
+Switch to color mode.
 .TP
 .B ACT_ADD_COLOR <C-Up>
-In color mode. Increase color list length for current tool context.
+In color mode. Extend the number of colors in the current tool context.
 .TP
-.B ACT_TO_RIGHT(LEFT)_COL_DIGIT <Right>(<Left>)
-In color mode. Move cursor to next (previous) digit in modified color.
+.B ACT_TO_RIGHT_COL_DIGIT / ACT_TO_LEFT_COL_DIGIT <Right>/<Left>
+In color mode. Move cursor to next or previous digit in modified color.
 .TP
-.B (no action) NUMBER FROM 0 to F
+.B (no action) Number keys (0-F)
 In color mode. Change selected digit to typed.
-
 .TP
-.B ACT_MODE_CONSOLE :
-Enter console mode.
+.B ACT_MODE_CONSOLE \fB:\fP
+Switch to console mode.
 .TP
 .B (no action) LETTER (except ACT_MODE_INTERACT)
 In console mode. Append letter to command.
-.TP
-.B KEY_CL_REQ_COMPLT <no default key>
-In console mode. Display completions.
 .TP
 .B KEY_CL_NEXT_COMPLT <Tab>
 In console mode. Cycle completions.
@@ -200,8 +177,8 @@ In console mode. Cycle completions.
 .B KEY_CL_APPLY_COMPLT <Return>
 In console mode. Apply completions.
 .TP
-.B KEY_CL_RUN <Return>
-In console mode. Run command.
+.B KEY_CL_RUN <Enter>
+In console mode. Run the command.
 .TP
 .B KEY_CL_CLIPBOARD_PASTE <C-v>
 In console mode. Paste from clipboard.
@@ -209,9 +186,8 @@ In console mode. Paste from clipboard.
 .B KEY_CL_ERASE_CHAR <BS>
 In console mode. Clear letter from command.
 
-.SS MOUSE COMMANDS
+.SH MOUSE COMMANDS
 Mouse buttons also can be changed in \fIconfig.h\fP file (BTN_* variables).
-
 .TP
 .B BTN_MAIN <LeftMouse>
 Use current tool.
@@ -220,40 +196,40 @@ Use current tool.
 Display the selection circle. Hover over items and release the button to make a selection.
 .TP
 .B BTN_SEL_CIRC_ALTERNATIVE <C-RightMouse>
-Display the alternative selection circle. Hover over items and release the button to make a selection.
+Display an alternative selection circle (e.g. different color options).
 .TP
 .B BTN_CANVAS_RESIZE <C-RightMouse>
-Resize canvas using mouse.
+Resize the canvas via dragging.
 .TP
 .B BTN_SCROLL_DRAG <MiddleMouse>
-Move canvas around on drag.
+Drag to move the canvas.
 .TP
-.B BTN_SCROLL_UP(DOWN, LEFT, RIGHT) <Up>(<Down>, <S-Up>, <S-Down>)
-Scroll canvas around.
+.B BTN_SCROLL_UP / DOWN / LEFT / RIGHT (<Up>, <Down>, <S-Up>, <S-Down>)
+Scroll the canvas in the respective direction.
 .TP
-.B BTN_ZOOM_IN(OUT) <C-Up>(<C-Down>)
-Zoom canvas in (out).
+.B BTN_ZOOM_IN / BTN_ZOOM_OUT <C-Up>/<C-Down>
+Zoom in or out using the mouse.
 .TP
-.B BTN_COPY_SELECITON <S-LeftMouse>
+.B BTN_COPY_SELECTION <S-LeftMouse>
 Make selection with selection tool and drag it with this button to copy area (instead of move).
 .TP
 .B BTN_TRANS_MOVE <LeftMouse>
-Move canvas or selection in transform mode.
+Drag to move the canvas or a selection in transform mode.
 .TP
 .B BTN_TRANS_MOVE_LOCK <S-LeftMouse>
-Move canvas or selection along thes axes in transform mode.
+Move along one axis while in transform mode.
 .TP
 .B BTN_TRANS_SCALE <A-RightMouse>
-Scale canvas or selection in transform mode.
+Scale the canvas or a selection in transform mode.
 .TP
 .B BTN_TRANS_SCALE_UNIFORM <A-S-RightMouse>
-Scale canvas or selection in transform mode (maintain aspect ratio).
+Uniformly scale while keeping the aspect ratio intact.
 .TP
 .B BTN_TRANS_ROTATE <C-RightMouse>
-Rotate canvas or selection in transform mode by moving mouse along the y axis.
+Rotate the canvas or current selection by moving the mouse vertically.
 .TP
 .B BTN_TRANS_ROTATE_SNAP <C-S-RightMouse>
-Rotate canvas or selection with 45 degrees snapping in transform mode by moving mouse along the y axis.
+Rotate with predefined 45° snapping increments.
 
 .SH NOTE
 All listed keys are in vim notation.
