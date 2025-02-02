@@ -12,17 +12,16 @@
 #include <X11/extensions/sync.h>
 #include <assert.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <limits.h>
 #include <math.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/time.h>
-#include <sys/unistd.h>
+#include <unistd.h>
 
 // libs
 #pragma GCC diagnostic push
@@ -1831,6 +1830,91 @@ static void cl_compls_update_helper(
     }
 }
 
+static char* get_dir_part(char const* path) {
+    if (!path) {
+        return NULL;
+    }
+
+    char* last_slash = strrchr(path, '/');
+    if (!last_slash) {
+        return str_new(".");
+    }
+
+    if (last_slash == path) {
+        return str_new("/");
+    }
+
+    size_t dir_len = last_slash - path;
+    char* dir = ecalloc(dir_len + 1, sizeof(char));
+    strncpy(dir, path, dir_len);
+    return dir;
+}
+
+static char const* get_base_part(char const* path) {
+    if (!path) {
+        return "";
+    }
+
+    char const* last_slash = strrchr(path, '/');
+    if (!last_slash) {
+        return path;
+    }
+
+    return last_slash + 1;
+}
+
+static void cl_compls_update_dirs(char*** result, char const* token, Bool add_delim) {
+    if (!token || !result) {
+        return;
+    }
+
+    // Get directory to search in and base name to match against
+    char* search_dir_dyn = get_dir_part(token);
+    char const* base_name = get_base_part(token);
+
+    DIR* dir = opendir(search_dir_dyn);
+    if (!dir) {
+        str_free(&search_dir_dyn);
+        return;
+    }
+
+    struct dirent* entry = NULL;
+    while ((entry = readdir(dir))) {
+        struct stat st;
+        char* full_path_dyn = str_new("%s/%s", search_dir_dyn, entry->d_name);
+        if (stat(full_path_dyn, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                char const* dirname = entry->d_name;
+                if (dirname[0] == '.' && (dirname[1] == '\0' || (dirname[1] == '.' && dirname[2] == '\0'))) {
+                    str_free(&full_path_dyn);
+                    continue;  // Skip . and ..
+                }
+
+                usize const base_len = strlen(base_name);
+                usize const offset = first_dismatch(dirname, base_name);
+                if (offset == base_len && (offset < strlen(dirname))) {
+                    // Only add space prefix if we're starting fresh
+                    char const* prefix = (add_delim && !*token) ? CL_DELIM : "";
+                    char* complt = str_new("%s%s/", prefix, dirname + offset);
+                    arrpush(*result, complt);
+                }
+            }
+        }
+        str_free(&full_path_dyn);
+    }
+    closedir(dir);
+    str_free(&search_dir_dyn);
+}
+
+static Bool is_valid_token(char const* token, char const* (*enum_to_str)(i32), i32 enum_last) {
+    for (i32 e = 0; e < enum_last; ++e) {
+        if (!strcmp(token, enum_to_str(e))) {
+            return True;
+        }
+    }
+    return False;
+}
+
 usize cl_compls_new(struct InputConsoleData* cl) {
     char* cl_buf_dyn = cl_cmd_get_str_dyn(cl);
     char** result = NULL;
@@ -1841,20 +1925,29 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     Bool const add_delim = cl_buf_len != 0 && !last_char_is_space;
 
     char const* tok1 = strtok(cl_buf_dyn, CL_DELIM);
-    char const* tok2 = strtok(NULL, "");
+    char const* tok2 = strtok(NULL, CL_DELIM);
+    char const* tok3 = strtok(NULL, "");
     tok1 = COALESCE(tok1, "");  // don't do strtok in macro
     tok2 = COALESCE(tok2, "");
+    tok3 = COALESCE(tok3, "");
 
     cl_compls_free(cl);
 
-    typedef char const* (*cast)(i32);
+    typedef char const* (*enum_to_str_func)(i32);
     // subcommands with own completions
     if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
-        cl_compls_update_helper(&result, tok2, (cast)&cl_set_prop_from_enum, ClCDS_Last, add_delim);
+        cl_compls_update_helper(&result, tok2, (enum_to_str_func)&cl_set_prop_from_enum, ClCDS_Last, add_delim);
     } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
-        cl_compls_update_helper(&result, tok2, (cast)&cl_save_type_from_enum, ClCDSv_Last, add_delim);
-    } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token comletion
-        cl_compls_update_helper(&result, tok1, (cast)&cl_cmd_from_enum, ClC_Last, add_delim);
+        // Check if tok2 is a valid save type
+        if (is_valid_token(tok2, (enum_to_str_func)&cl_save_type_from_enum, ClCDSv_Last)) {
+            // If we have a valid type, suggest directories
+            cl_compls_update_dirs(&result, tok3, add_delim);
+        } else {
+            // If tok2 is empty or not a valid type, suggest types
+            cl_compls_update_helper(&result, tok2, (enum_to_str_func)&cl_save_type_from_enum, ClCDSv_Last, add_delim);
+        }
+    } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token completion
+        cl_compls_update_helper(&result, tok1, (enum_to_str_func)&cl_cmd_from_enum, ClC_Last, add_delim);
     } else {
         free(cl_buf_dyn);
         return 0;
