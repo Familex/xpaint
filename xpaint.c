@@ -3821,6 +3821,8 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     struct Input* inp = &ctx->input;
     Button const button = get_btn(e);
 
+    inp->damage = RNIL;
+
     if (inp->mode.t == InputT_Transform) {
         // do nothing
     } else if ((btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE)) && !ctx->input.is_holding) {
