@@ -4004,43 +4004,43 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
             input_mode_set(ctx, InputT_Interact);
-            ClCPrsResult res = cl_cmd_parse(ctx, cmd_dyn);
+            ClCPrsResult parse_res = cl_cmd_parse(ctx, cmd_dyn);
             str_free(&cmd_dyn);
             Bool is_exit = False;
-            switch (res.t) {
+            switch (parse_res.t) {
                 case ClCPrs_Ok: {
-                    struct ClCommand* cmd = &res.d.ok;
-                    ClCPrcResult res = cl_cmd_process(ctx, cmd);
-                    if (res.bit_status & ClCPrc_Msg) {
+                    struct ClCommand* cmd = &parse_res.d.ok;
+                    ClCPrcResult proc_res = cl_cmd_process(ctx, cmd);
+                    if (proc_res.bit_status & ClCPrc_Msg) {
                         // XXX double memory allocation
-                        cl_msg_to_show = str_new(res.msg_dyn);
-                        str_free(&res.msg_dyn);  // XXX member free
+                        cl_msg_to_show = str_new(proc_res.msg_dyn);
+                        str_free(&proc_res.msg_dyn);  // XXX member free
                     }
-                    is_exit = (Bool)(res.bit_status & ClCPrc_Exit);
+                    is_exit = (Bool)(proc_res.bit_status & ClCPrc_Exit);
                 } break;
                 case ClCPrs_ENoArg: {
-                    if (res.d.noarg.context_optdyn) {
+                    if (parse_res.d.noarg.context_optdyn) {
                         cl_msg_to_show =
-                            str_new("provide %s to '%s' command", res.d.noarg.arg_desc_dyn, res.d.noarg.context_optdyn);
+                            str_new("provide %s to '%s' command", parse_res.d.noarg.arg_desc_dyn, parse_res.d.noarg.context_optdyn);
                     } else {
-                        cl_msg_to_show = str_new("provide %s", res.d.noarg.arg_desc_dyn);
+                        cl_msg_to_show = str_new("provide %s", parse_res.d.noarg.arg_desc_dyn);
                     }
                 } break;
                 case ClCPrs_EInvArg: {
-                    if (res.d.invarg.context_optdyn) {
+                    if (parse_res.d.invarg.context_optdyn) {
                         cl_msg_to_show = str_new(
                             "%s: invalid arg '%s': %s",
-                            res.d.invarg.context_optdyn,
-                            res.d.invarg.arg_dyn,
-                            res.d.invarg.error_dyn
+                            parse_res.d.invarg.context_optdyn,
+                            parse_res.d.invarg.arg_dyn,
+                            parse_res.d.invarg.error_dyn
                         );
                     } else {
-                        cl_msg_to_show = str_new("invalid arg '%s': %s", res.d.invarg.arg_dyn, res.d.invarg.error_dyn);
+                        cl_msg_to_show = str_new("invalid arg '%s': %s", parse_res.d.invarg.arg_dyn, parse_res.d.invarg.error_dyn);
                     }
                 } break;
             }
 
-            cl_cmd_parse_res_free(&res);
+            cl_cmd_parse_res_free(&parse_res);
             if (is_exit) {
                 return HR_Quit;
             }
