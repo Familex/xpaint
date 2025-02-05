@@ -11,11 +11,14 @@ MANPREFIX = $(PREFIX)/share/man
 # tools
 CC ?= clang
 CLANGTIDY ?= clang-tidy
+CLANGFORMAT ?= clang-format
+PKG_CONFIG ?= pkg-config
 
 #### targets section
 
 SRC = ./xpaint.c
-DEPS = $(SRC) ./res ./types.h ./config.h
+HEADERS = ./types.h ./config.h
+DEPS = $(SRC) ./res $(HEADERS)
 
 all: help ## default target
 
@@ -28,22 +31,20 @@ help: ## display this help
 run: xpaint-d ## run application with ARGS
 	./xpaint-d -v $(ARGS)
 
-xpaint: $(DEPS) ## build release application
+xpaint: check-deps $(DEPS) ## build release application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(RELEASE_FLAGS)
 
-xpaint-d: $(DEPS) ## build debug application
+xpaint-d: check-deps $(DEPS) ## build debug application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_FLAGS)
 
-xpaint-d-ns: $(DEPS) ## build debug (no symbols) application
+xpaint-d-ns: check-deps $(DEPS) ## build debug (no symbols) application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_NO_SYMBOLS_FLAGS)
 
 clean: ## remove generated files
-	@rm -f ./xpaint ./xpaint-d ./xpaint-d-ns
+	@$(RM) ./xpaint ./xpaint-d ./xpaint-d-ns
 
 install: xpaint ## install application
-	@mkdir -p $(PREFIX)/bin
-	cp -f ./xpaint $(PREFIX)/bin
-	@chmod 755 $(PREFIX)/bin/xpaint
+	install -Dm 755 ./xpaint $(PREFIX)/bin/xpaint
 	@mkdir -p $(MANPREFIX)/man1
 	sed "s/VERSION/$(VERSION)/g" < ./xpaint.1 > $(MANPREFIX)/man1/xpaint.1
 	@chmod 644 $(MANPREFIX)/man1/xpaint.1
@@ -51,13 +52,25 @@ install: xpaint ## install application
 	cp -r --update=all ./share/* $(PREFIX)/share
 
 uninstall: ## uninstall application
-	rm -f $(PREFIX)/bin/xpaint
-	rm -f $(MANPREFIX)/man1/xpaint.1
-	rm -f $(PREFIX)/share/applications/xpaint.desktop
-	rm -f $(PREFIX)/share/icons/hicolor/scalable/apps/xpaint.svg
+	$(RM) $(PREFIX)/bin/xpaint
+	$(RM) $(MANPREFIX)/man1/xpaint.1
+	$(RM) $(PREFIX)/share/applications/xpaint.desktop
+	$(RM) $(PREFIX)/share/icons/hicolor/scalable/apps/xpaint.svg
+
+dist: clean ## create distribution archive
+	@mkdir -p xpaint-$(VERSION)
+	@cp -R $(DEPS) ./share/ ./Makefile ./README.md ./LICENSE ./xpaint.1 ./xpaint-$(VERSION)
+	tar -czf ./xpaint-$(VERSION).tar.gz ./xpaint-$(VERSION)
+	@rm -rf ./xpaint-$(VERSION)
+
+check-deps: ## verify all dependencies are available
+	@$(PKG_CONFIG) --print-errors --exists x11 xext xft xrender fontconfig
 
 check: ## check code with clang-tidy
 	$(CLANGTIDY) --use-color $(SRC)
+
+format: ## format code with clang-format
+	$(CLANGFORMAT) -i $(SRC) $(HEADERS)
 
 dev: clean ## generate dev files
 	bear -- $(MAKE) ./xpaint-d
@@ -69,17 +82,17 @@ valgrind: ## debug with valgrind
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
 		--suppressions=./.valgrind.supp $(ARGS) ./xpaint-d-no-asan
 
-.PHONY: all help run clean install uninstall check dev valgrind
+.PHONY: all help run clean install uninstall dist check-deps check format dev valgrind
 
 #### compiler and linker flags
 
-LANG_FLAGS = -std=c99 -pedantic -Wall -Wextra -Werror
-RELEASE_FLAGS = -flto=auto -O2 -DNDEBUG
+LANG_FLAGS = -std=c99 -pedantic -Wall -Wextra -Werror -Wshadow
+RELEASE_FLAGS = -flto=auto -O2 -DNDEBUG -D_FORTIFY_SOURCE=2
 DEBUG_FLAGS = -g -fsanitize=address -static-libasan
 DEBUG_NO_SYMBOLS_FLAGS = -O0 -DNDEBUG -Wno-error
 
-INCS = $(shell pkg-config --cflags x11 xext xft xrender fontconfig)
-LIBS = $(shell pkg-config --libs x11 xext xft xrender fontconfig) -lm
+INCS = $(shell $(PKG_CONFIG) --cflags x11 xext xft xrender fontconfig)
+LIBS = $(shell $(PKG_CONFIG) --libs x11 xext xft xrender fontconfig) -lm
 DEFINES = -DVERSION=\"$(VERSION)\" \
 	$(shell \
 		for res in ./res/* ; do \
