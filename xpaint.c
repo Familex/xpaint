@@ -1807,6 +1807,35 @@ enum ImageType cl_save_type_to_image_type(enum ClCDSv t) {
     UNREACHABLE();
 }
 
+static void for_each_enum(
+    i32 enum_last,
+    char const* (*enum_to_str)(i32),
+    void (*callback)(char const* enum_str, void* data_in_out),
+    void* data_in_out
+) {
+    for (i32 e = 0; e < enum_last; ++e) {
+        char const* enum_str = enum_to_str(e);
+        callback(enum_str, data_in_out);
+    }
+}
+
+struct CompletionCallbackData {
+    char*** result;
+    char const* token;
+    Bool add_delim;
+};
+
+static void completion_callback(char const* enum_str, void* user_data) {
+    struct CompletionCallbackData* ctx = user_data;
+    usize const token_len = strlen(ctx->token);
+    usize const offset = first_dismatch(enum_str, ctx->token);
+    if (offset == token_len && (offset < strlen(enum_str))) {
+        char const* prefix = ctx->add_delim && (token_len == 0) ? CL_DELIM : "";
+        char* complt = str_new("%s%s", prefix, enum_str + offset);
+        arrpush(*ctx->result, complt);
+    }
+}
+
 static void cl_compls_update_helper(
     char*** result,
     char const* token,
@@ -1817,17 +1846,27 @@ static void cl_compls_update_helper(
     if (!token || !enum_to_str || !result) {
         return;
     }
-    for (i32 e = 0; e < enum_last; ++e) {
-        char const* enum_str = enum_to_str(e);
-        usize const token_len = strlen(token);
-        usize const offset = first_dismatch(enum_str, token);
-        if (offset == token_len && (offset < strlen(enum_str))) {
-            // don't let completions stick with commands
-            char const* prefix = add_delim && (token_len == 0) ? CL_DELIM : "";
-            char* complt = str_new("%s%s", prefix, enum_str + offset);
-            arrpush(*result, complt);
-        }
+
+    struct CompletionCallbackData ctx = {result, token, add_delim};
+    for_each_enum(enum_last, enum_to_str, completion_callback, &ctx);
+}
+
+struct TokenCheckCallbackData {
+    char const* token;
+    Bool found;
+};
+
+static void check_token_callback(char const* enum_str, void* user_data) {
+    struct TokenCheckCallbackData* ctx = user_data;
+    if (!strcmp(ctx->token, enum_str)) {
+        ctx->found = True;
     }
+}
+
+static Bool is_valid_token(char const* token, char const* (*enum_to_str)(i32), i32 enum_last) {
+    struct TokenCheckCallbackData ctx = {token, False};
+    for_each_enum(enum_last, enum_to_str, check_token_callback, &ctx);
+    return ctx.found;
 }
 
 static char* get_dir_part(char const* path) {
@@ -1904,15 +1943,6 @@ static void cl_compls_update_dirs(char*** result, char const* token, Bool add_de
     }
     closedir(dir);
     str_free(&search_dir_dyn);
-}
-
-static Bool is_valid_token(char const* token, char const* (*enum_to_str)(i32), i32 enum_last) {
-    for (i32 e = 0; e < enum_last; ++e) {
-        if (!strcmp(token, enum_to_str(e))) {
-            return True;
-        }
-    }
-    return False;
 }
 
 usize cl_compls_new(struct InputConsoleData* cl) {
