@@ -4049,8 +4049,11 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 } break;
                 case ClCPrs_ENoArg: {
                     if (parse_res.d.noarg.context_optdyn) {
-                        cl_msg_to_show =
-                            str_new("provide %s to '%s' command", parse_res.d.noarg.arg_desc_dyn, parse_res.d.noarg.context_optdyn);
+                        cl_msg_to_show = str_new(
+                            "provide %s to '%s' command",
+                            parse_res.d.noarg.arg_desc_dyn,
+                            parse_res.d.noarg.context_optdyn
+                        );
                     } else {
                         cl_msg_to_show = str_new("provide %s", parse_res.d.noarg.arg_desc_dyn);
                     }
@@ -4064,7 +4067,8 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                             parse_res.d.invarg.error_dyn
                         );
                     } else {
-                        cl_msg_to_show = str_new("invalid arg '%s': %s", parse_res.d.invarg.arg_dyn, parse_res.d.invarg.error_dyn);
+                        cl_msg_to_show =
+                            str_new("invalid arg '%s': %s", parse_res.d.invarg.arg_dyn, parse_res.d.invarg.error_dyn);
                     }
                 } break;
             }
