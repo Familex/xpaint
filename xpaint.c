@@ -1,23 +1,12 @@
 #define _POSIX_C_SOURCE 200809L  // Enable POSIX.1-2008 features
 
-#include <X11/X.h>
 #include <X11/Xatom.h>  // XA_*
 #include <X11/Xft/Xft.h>
-#include <X11/Xft/XftCompat.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <X11/extensions/Xdbe.h>  // back buffer
 #include <X11/extensions/Xrender.h>
-#include <X11/extensions/render.h>
 #include <X11/extensions/sync.h>
-#include <assert.h>
 #include <ctype.h>
 #include <dirent.h>
-#include <limits.h>
-#include <math.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <string.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/time.h>
@@ -154,6 +143,7 @@ typedef struct {
 struct Ctx;
 struct DrawCtx;
 struct ToolCtx;
+union SCI_Arg;
 
 typedef void (*draw_fn)(struct Ctx* ctx, Pair p);
 
@@ -314,12 +304,12 @@ struct Ctx {
         i32 y;
         Bool draw_separators;
         struct Item {
+            void (*on_select)(struct Ctx*, union SCI_Arg);
             union SCI_Arg {
                 enum ToolTag tool;  // in interaction mode
                 enum FigureType figure;  // in interaction mode with figure tool
                 argb col;  // in color mode
             } arg;
-            void (*on_select)(struct Ctx*, union SCI_Arg);
             enum Icon icon;
             argb col_outer;
             argb col_inner;

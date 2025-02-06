@@ -13,6 +13,7 @@ Checks: >
     , -readability-function-cognitive-complexity
     , -readability-avoid-nested-conditional-operator
     , -bugprone-multi-level-implicit-pointer-conversion
+    , -misc-include-cleaner
 
 WarningsAsErrors: '*'
 ...
