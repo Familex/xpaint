@@ -490,7 +490,6 @@ static void ioctx_free(struct IOCtx* ioctx);
 static Pair point_from_cv_to_scr(struct DrawCtx const* dc, Pair p);
 static Pair point_from_cv_to_scr_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
-static Bool point_in_rect(Pair p, Pair a1, Pair a2);
 static Pair point_apply_trans(Pair p, Transform trans);
 static Pair point_apply_trans_pivot(Pair p, Transform trans, Pair pivot);
 static Pair dpt_to_pt(DPt p);
@@ -499,6 +498,7 @@ static DPt dpt_add(DPt a, DPt b);
 
 static enum ImageType file_type(u8 const* data, u32 len);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
+static Bool ximage_is_valid_point(XImage const* im, i32 x, i32 y);
 // coefficient c is proportional to the significance of component a
 static argb argb_blend(argb a, argb b, u8 c);
 // receives premultiplied argb value
@@ -1150,10 +1150,6 @@ Pair point_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y) {
     };
 }
 
-Bool point_in_rect(Pair p, Pair a1, Pair a2) {
-    return MIN(a1.x, a2.x) < p.x && p.x < MAX(a1.x, a2.x) && MIN(a1.y, a2.y) < p.y && p.y < MAX(a1.y, a2.y);
-}
-
 Pair point_apply_trans(Pair p, Transform trans) {
     XFixed(*m)[3] = xtrans_from_trans(trans).matrix;
 
@@ -1235,6 +1231,10 @@ u8* ximage_to_rgb(XImage const* image, Bool rgba) {
         }
     }
     return data;
+}
+
+Bool ximage_is_valid_point(XImage const* im, i32 x, i32 y) {
+    return BETWEEN(x, 0, im->width - 1) && BETWEEN(y, 0, im->height - 1);
 }
 
 argb argb_blend(argb a, argb b, u8 c) {
@@ -2422,9 +2422,9 @@ Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    XImage* im = dc->cv.im;  // overlay always empty, grab from canvas
+    XImage* im = dc->cv.im;
 
-    if (!point_in_rect(pointer, (Pair) {0, 0}, (Pair) {(i32)im->width, (i32)im->height})) {
+    if (!ximage_is_valid_point(im, pointer.x, pointer.y)) {
         return RNIL;
     }
 
@@ -2547,17 +2547,16 @@ void ximage_clear(XImage* im) {
 }
 
 Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col) {
-    if (x >= im->width || y >= im->height || x < 0 || y < 0) {
+    if (!ximage_is_valid_point(im, x, y)) {
         return False;
     }
-
     XPutPixel(im, x, y, col);
     return True;
 }
 
 Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
     assert(im);
-    if (x < 0 || y < 0 || x >= im->width || y >= im->height) {
+    if (!ximage_is_valid_point(im, x, y)) {
         return RNIL;
     }
 
@@ -2580,7 +2579,7 @@ Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y) {
         for (i32 dir = 0; dir < 4; ++dir) {
             Pair d_curr = {curr.x + d_rows[dir], curr.y + d_cols[dir]};
 
-            if (d_curr.x < 0 || d_curr.y < 0 || d_curr.x >= im->width || d_curr.y >= im->height) {
+            if (!ximage_is_valid_point(im, d_curr.x, d_curr.y)) {
                 continue;
             }
 
@@ -2828,7 +2827,7 @@ Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u3
             double const dr = ((dx - r) * (dx - r)) + ((dy - r) * (dy - r));
             i32 const x = l + dx;
             i32 const y = t + dy;
-            if (!BETWEEN(x, 0, im->width - 1) || !BETWEEN(y, 0, im->height - 1) || dr > r_sq) {
+            if (!ximage_is_valid_point(im, x, y) || dr > r_sq) {
                 continue;
             }
             argb const bg = XGetPixel(im, x, y);
