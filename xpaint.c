@@ -227,6 +227,9 @@ struct Ctx {
 
         // tracks damage to overlay from _on_press to _on_release.
         Rect damage;
+        // parts of overlay and canvas to redraw in update_screen
+        // stores last and previous damages to handle full screen clears, e.g. figure tool or selection tool
+        Rect redraw_track[2];
 
         struct InputMode {
             enum InputTag {
@@ -516,6 +519,7 @@ static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
 static void cl_pop(struct InputConsoleData* cl);
 
+static void input_set_damage(struct Input* inp, Rect damage);
 static void input_mode_set(struct Ctx* ctx, enum InputTag mode_tag);
 static void input_mode_free(struct InputMode* input_mode);
 static char const* input_mode_as_str(enum InputTag mode_tag);
@@ -587,14 +591,14 @@ static void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w);
 static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
-static void update_screen(struct Ctx* ctx, Pair cur_scr);
+static void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
 
 static void dc_cache_init(struct Ctx* ctx);
 static void dc_cache_free(struct DrawCtx* dc);
 // update Pixmaps for XRender interactions
-static void dc_cache_update(struct Ctx* ctx);
+static void dc_cache_update(struct Ctx* ctx, Rect damage);
 
 static int trigger_clipboard_paste(struct DrawCtx* dc, Atom selection_target);
 
@@ -864,7 +868,7 @@ Rect rect_expand(Rect a, Rect b) {
 }
 
 Pair rect_dims(Rect a) {
-    return (Pair) {a.r - a.l, a.b - a.t};
+    return (Pair) {a.r - a.l + 1, a.b - a.t + 1};  // inclusive
 }
 
 Transform trans_add(Transform a, Transform b) {
@@ -2022,6 +2026,16 @@ void cl_pop(struct InputConsoleData* cl) {
     }
 }
 
+void input_set_damage(struct Input* inp, Rect damage) {
+    if (!IS_RNIL(damage)) {
+        if (!IS_RNIL(inp->redraw_track[0])) {
+            inp->redraw_track[1] = inp->redraw_track[0];
+        }
+        inp->redraw_track[0] = damage;
+    }
+    inp->damage = damage;
+}
+
 void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
@@ -2037,7 +2051,7 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             overlay_free(&transformed);
 
             overlay_clear(&inp->ovr);
-            update_screen(ctx, PNIL);
+            update_screen(ctx, PNIL, False);
         } break;
         default: break;
     }
@@ -2258,7 +2272,7 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
     Pair p = {MIN(begin_x, end_x), MIN(begin_y, end_y)};
     Pair dims = (Pair) {MAX(begin_x, end_x) - p.x, MAX(begin_y, end_y) - p.y};
 
-    inp->damage = RNIL;
+    input_set_damage(inp, RNIL);
     overlay_clear(&inp->ovr);
 
     Rect damage = canvas_copy_region(inp->ovr.im, dc->cv.im, p, dims, p);
@@ -2295,7 +2309,7 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     i32 const w = end_x - begin_x;
     i32 const h = end_y - begin_y;
 
-    inp->damage = RNIL;
+    input_set_damage(inp, RNIL);
     overlay_clear(&inp->ovr);
 
     u32 const line_w = (u32)MAX(1, ceil(1.5 / ZOOM_C(dc)));
@@ -2413,8 +2427,8 @@ Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
 
+    input_set_damage(&ctx->input, RNIL);  // also undo damage
     overlay_clear(&ctx->input.ovr);
-    ctx->input.damage = RNIL;  // also undo damage
 
     return canvas_figure(ctx, ctx->input.ovr.im, pointer, anchor);
 }
@@ -3176,14 +3190,18 @@ void draw_selection_circle(
     }
 }
 
-void update_screen(struct Ctx* ctx, Pair cur_scr) {
+void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
 
     /* draw canvas */ {
         fill_rect(dc, (Pair) {0, 0}, (Pair) {(i32)dc->width, (i32)dc->height}, WND_BACKGROUND);
         /* put scaled image */ {
-            dc_cache_update(ctx);
+            dc_cache_update(
+                ctx,
+                full_redraw ? (Rect) {0, 0, dc->cv.im->width, dc->cv.im->height}
+                            : rect_expand(inp->redraw_track[0], inp->redraw_track[1])
+            );
             //  https://stackoverflow.com/a/66896097
 
             Picture cv_pict = XRenderCreatePicture(
@@ -3490,24 +3508,31 @@ void show_message(struct Ctx* ctx, char const* msg) {
     );
 }
 
-static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im) {
+static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im, Rect damage) {
+    if (IS_RNIL(damage)) {
+        return;
+    }
     assert(im);
-    XPutImage(dc->dp, pm, dc->screen_gc, im, 0, 0, 0, 0, im->width, im->height);
+    Pair dims = rect_dims(damage);
+    XPutImage(dc->dp, pm, dc->screen_gc, im, damage.l, damage.t, damage.l, damage.t, dims.x, dims.y);
 }
 
-void dc_cache_update(struct Ctx* ctx) {
+void dc_cache_update(struct Ctx* ctx, Rect damage) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
+    Rect const cv_rect = {0, 0, dc->cv.im->width, dc->cv.im->height};
     assert(dc->cache.overlay && dc->cache.pm);
 
     // resize pixmaps if needed
     if (dc->cache.dims.x != dc->cv.im->width || dc->cache.dims.y != dc->cv.im->height) {
         dc_cache_free(dc);
         dc_cache_init(ctx);
+        dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im, cv_rect);
+        dc_cache_update_pm(dc, dc->cache.overlay, inp->ovr.im, cv_rect);
+    } else {
+        dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im, damage);
+        dc_cache_update_pm(dc, dc->cache.overlay, inp->ovr.im, damage);
     }
-
-    dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im);
-    dc_cache_update_pm(dc, dc->cache.overlay, inp->ovr.im);
 }
 
 int trigger_clipboard_paste(struct DrawCtx* dc, Atom selection_target) {
@@ -3801,6 +3826,8 @@ void setup(Display* dp, struct Ctx* ctx) {
         tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
     }
 
+    update_screen(ctx, PNIL, True);
+
     /* show up window */
     XMapRaised(dp, ctx->dc.window);
 }
@@ -3841,18 +3868,20 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     Button const button = get_btn(e);
 
     inp->damage = RNIL;
+    inp->redraw_track[0] = RNIL;
+    inp->redraw_track[1] = RNIL;
 
     if (inp->mode.t == InputT_Transform) {
         // do nothing
     } else if ((btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE)) && !ctx->input.is_holding) {
         sel_circ_init_and_show(ctx, button, e->x, e->y);
     } else if (tc->on_press) {
-        Rect const damage = tc->on_press(ctx, e);
-        overlay_expand_rect(&inp->ovr, damage);
-        inp->damage = damage;
+        Rect const curr_damage = tc->on_press(ctx, e);
+        overlay_expand_rect(&inp->ovr, curr_damage);
+        input_set_damage(inp, curr_damage);
     }
 
-    update_screen(ctx, (Pair) {e->x, e->y});
+    update_screen(ctx, (Pair) {e->x, e->y}, False);
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
     ctx->input.press_pt = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
@@ -3867,7 +3896,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
-    Button e_btn = get_btn(e);
+    Button const e_btn = get_btn(e);
 
     if (btn_eq(e_btn, BTN_SCROLL_UP)) {
         canvas_scroll(&dc->cv, (Pair) {0, 10});
@@ -3895,17 +3924,19 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
             item->on_select(ctx, item->arg);
         }
     } else if (tc->on_release) {
-        Rect curr_damage = tc->on_release(ctx, e);
+        Rect const curr_damage = tc->on_release(ctx, e);
         overlay_expand_rect(&inp->ovr, curr_damage);
 
         Rect final_damage = rect_expand(inp->damage, curr_damage);
         if (!IS_RNIL(final_damage)) {
+            input_set_damage(inp, final_damage);
             history_forward(ctx, history_new_item(dc->cv.im, final_damage));
             ximage_blend(dc->cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
         }
 
-        inp->damage = RNIL;
+        update_screen(ctx, (Pair) {e->x, e->y}, False);
+        input_set_damage(inp, RNIL);
     }
 
     inp->is_holding = False;
@@ -3913,7 +3944,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     inp->press_pt = PNIL;
 
     sel_circ_free_and_hide(&ctx->sc);
-    update_screen(ctx, (Pair) {e->x, e->y});
+    update_screen(ctx, (Pair) {e->x, e->y}, False);
 
     return HR_Ok;
 }
@@ -3925,7 +3956,7 @@ HdlrResult destroy_notify_hdlr(__attribute__((unused)) struct Ctx* ctx, __attrib
 HdlrResult expose_hdlr(struct Ctx* ctx, XEvent* event) {
     XExposeEvent* e = (XExposeEvent*)event;
 
-    update_screen(ctx, (Pair) {e->x, e->y});
+    update_screen(ctx, (Pair) {e->x, e->y}, False);
     return HR_Ok;
 }
 
@@ -4186,7 +4217,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     // FIXME extra updates on invalid events
-    update_screen(ctx, (Pair) {e.x, e.y});
+    update_screen(ctx, (Pair) {e.x, e.y}, True);
     if (cl_msg_to_show) {
         show_message(ctx, cl_msg_to_show);
         str_free(&cl_msg_to_show);
@@ -4221,7 +4252,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
             // last update will be in button_release_hdlr
             if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
                 ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
-                update_screen(ctx, (Pair) {e->x, e->y});
+                update_screen(ctx, (Pair) {e->x, e->y}, False);
             }
         } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
             if (inp->mode.t == InputT_Transform) {
@@ -4289,29 +4320,29 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     transd->curr.move = snapped;
                 }
 
-                update_screen(ctx, (Pair) {e->x, e->y});
+                update_screen(ctx, (Pair) {e->x, e->y}, False);
             } else if (tc->on_drag) {
-                Rect damage = tc->on_drag(ctx, e);
-                overlay_expand_rect(&inp->ovr, damage);
+                Rect curr_damage = tc->on_drag(ctx, e);
+                overlay_expand_rect(&inp->ovr, curr_damage);
 
-                if (!IS_RNIL(damage)) {
-                    ctx->input.damage = rect_expand(inp->damage, damage);
-                    ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
+                if (!IS_RNIL(curr_damage)) {
+                    input_set_damage(inp, rect_expand(inp->damage, curr_damage));
+                    inp->last_proc_drag_ev_us = current_time.tv_usec;
                 }
                 // FIXME it here to draw selection tool (returns RNIL in on_drag)
-                update_screen(ctx, (Pair) {e->x, e->y});
+                update_screen(ctx, (Pair) {e->x, e->y}, False);
             }
         }
     } else {
         // FIXME unused
         if (tc->on_move) {
-            Rect damage = tc->on_move(ctx, e);
-            overlay_expand_rect(&inp->ovr, damage);
+            Rect curr_damage = tc->on_move(ctx, e);
+            overlay_expand_rect(&inp->ovr, curr_damage);
 
-            if (!IS_RNIL(damage)) {
-                inp->damage = rect_expand(inp->damage, damage);
+            if (!IS_RNIL(curr_damage)) {
+                input_set_damage(inp, rect_expand(inp->damage, curr_damage));
                 inp->last_proc_drag_ev_us = 0;
-                update_screen(ctx, (Pair) {e->x, e->y});
+                update_screen(ctx, (Pair) {e->x, e->y}, False);
             }
         }
     }
@@ -4453,7 +4484,7 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         XImage* im = read_file_from_memory(dc, data_xdyn, count, 0x00000000).im;
         if (im) {
             copy_image_to_transform_mode(ctx, im);
-            update_screen(ctx, PNIL);
+            update_screen(ctx, PNIL, False);
             XDestroyImage(im);
         } else {
             show_message(ctx, "failed to parse pasted image");
@@ -4479,7 +4510,7 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
 
         if (im) {
             copy_image_to_transform_mode(ctx, im);
-            update_screen(ctx, PNIL);
+            update_screen(ctx, PNIL, False);
             XDestroyImage(im);
         } else {
             show_message(ctx, "failed to parse dragged image");
