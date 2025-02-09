@@ -497,6 +497,8 @@ static argb argb_blend(argb a, argb b, u8 c);
 // receives premultiplied argb value
 static argb argb_normalize(argb c);
 static argb argb_from_hsl(double hue, double sat, double light);
+// XXX hex non-const because of implementation
+static Bool argb_from_hex_col(char* hex, argb* argb_out);
 static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
 static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
@@ -1302,6 +1304,35 @@ argb argb_from_hsl(double hue, double sat, double light) {
     return (0xFF << 24) | (ri << 16) | (gi << 8) | bi;
 }
 
+Bool argb_from_hex_col(char* hex, argb* argb_out) {
+    if (!hex || !argb_out) {
+        return False;
+    }
+    if (*hex == '#') {
+        ++hex;  // skip # at beginning
+    }
+    u32 const len = strlen(hex);
+
+    switch (len) {
+        default:
+            // unknown format
+            return False;
+        case 6: {
+            char* end = hex + 6;
+            *argb_out = strtoul(hex, &end, 16) | ARGB_ALPHA;
+        } break;
+        case 8: {
+            // with alpha (rrggbbaa)
+            char* end = hex + 8;
+            u32 const input = strtoul(hex, &end, 16);
+            // convert rgba to argb
+            *argb_out = ((input >> 8) & 0xFFFFFF) | ((input & 0xFF) << 24);
+        } break;
+    }
+
+    return True;
+}
+
 static u32 argb_to_abgr(argb v) {
     u32 const a = v & ARGB_ALPHA;
     u8 const red = (v & 0x00FF0000) >> (2 * 8);
@@ -1597,11 +1628,20 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
             };
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
-            char const* arg = strtok(NULL, CL_DELIM);
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_Col,
-                                   .d.ok.d.set.d.col.v = arg ? (strtol(arg, NULL, 16) & 0xFFFFFF) | 0xFF000000 : 0};
+            char* arg = strtok(NULL, CL_DELIM);
+            argb value = 0;
+            if (!arg) {
+                return cl_prs_noarg(str_new("hex color"), str_new("%s", cl_set_prop_from_enum(ClCDS_Col)));
+            }
+            if (!argb_from_hex_col(arg, &value)) {
+                return cl_prs_invarg(
+                    str_new("%s", arg),
+                    str_new("failed to parse hex color"),
+                    str_new("%s", cl_set_prop_from_enum(ClCDS_Col))
+                );
+            }
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Set, .d.ok.d.set.t = ClCDS_Col, .d.ok.d.set.d.col.v = value};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
             char const* font = strtok(NULL, CL_DELIM);
@@ -4527,23 +4567,8 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 update_statusline(ctx);
                 break;
             case InputT_Color: {
-                char* begin = (char*)data_xdyn;
-                if (begin) {
-                    if (*begin == '#') {
-                        ++begin;  // skip # at beginning
-                    }
-                    u32 const len = strlen(begin);
-
-                    if (len == 6) {
-                        char* end = begin + 6;
-                        *tc_curr_col(tc) = strtoul(begin, &end, 16) | ARGB_ALPHA;
-                        update_statusline(ctx);
-                    } else if (len == 8) {
-                        // with alpha (rrggbbaa)
-                        char* end = begin + 8;
-                        u32 const input = strtoul(begin, &end, 16);
-                        // convert to argb
-                        *tc_curr_col(tc) = ((input >> 8) & 0xFFFFFF) | ((input & 0xFF) << 24);
+                if (data_xdyn) {
+                    if (argb_from_hex_col((char*)data_xdyn, tc_curr_col(tc))) {
                         update_statusline(ctx);
                     } else {
                         show_message(ctx, "unexpected color format");
