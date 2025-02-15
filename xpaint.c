@@ -343,6 +343,8 @@ struct ClCommand {
         ClC_Set,
         ClC_Exit,
         ClC_Save,
+        ClC_W,
+        ClC_WQ,
         ClC_Load,
         ClC_Last,
     } t;
@@ -1554,6 +1556,24 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
         case ClC_Exit: {
             bit_status |= ClCPrc_Exit;
         } break;
+        case ClC_W:
+        case ClC_WQ: {
+            if (ctx->out.t != IO_None) {
+                enum ImageType const type = IMT_Png;  // FIXME pass actual filetype
+                if (write_io(&ctx->dc, &ctx->input, type, &ctx->out)) {
+                    if (cl_cmd->t == ClC_WQ) {
+                        bit_status |= ClCPrc_Exit;
+                    } else {
+                        msg_to_show = str_new("image saved to '%s'", ioctx_as_str(&ctx->out));
+                    }
+                } else {
+                    msg_to_show = str_new("failed save image to '%s'", ioctx_as_str(&ctx->out));
+                }
+            } else {
+                msg_to_show =
+                    str_new("can't save: no path provided (use '%s' command to pass path)", cl_cmd_from_enum(ClC_Save));
+            }
+        } break;
         case ClC_Save: {
             if (!cl_cmd->d.save.path_dyn && ctx->out.t == IO_None) {
                 msg_to_show = str_new("can't save: no path provided");
@@ -1702,6 +1722,12 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
         return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
     }
+    if (!strcmp(cmd, cl_cmd_from_enum(ClC_W))) {
+        return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_W};
+    }
+    if (!strcmp(cmd, cl_cmd_from_enum(ClC_WQ))) {
+        return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_WQ};
+    }
     if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
         char const* type_str = strtok(NULL, CL_DELIM);
         if (!type_str) {
@@ -1772,8 +1798,10 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
                 case ClC_Save: free(cl_cmd->d.save.path_dyn); break;
                 case ClC_Load: free(cl_cmd->d.load.path_dyn); break;
                 case ClC_Echo: free(cl_cmd->d.echo.msg_dyn); break;
-                case ClC_Exit: break;  // no default branch to enable warnings
-                case ClC_Last: assert(!"invalid enum value");
+                case ClC_W:
+                case ClC_WQ:
+                case ClC_Exit: break;
+                case ClC_Last: assert(!"invalid enum value");  // no default branch to enable warnings
             }
         } break;
         case ClCPrs_EInvArg: {
@@ -1802,6 +1830,8 @@ char const* cl_cmd_from_enum(enum ClCTag t) {
         case ClC_Exit: return "q";
         case ClC_Load: return "load";
         case ClC_Save: return "save";
+        case ClC_W: return "w";
+        case ClC_WQ: return "wq";
         case ClC_Set: return "set";
         case ClC_Last: return "last";
     }
@@ -4014,6 +4044,7 @@ static void to_next_input_digit(struct Input* input, Bool is_increment) {
 }
 
 HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
+    // FIXME repeated assignments will cause memory leaks
     char* cl_msg_to_show = NULL;
 
     struct Input const* inp = &ctx->input;
@@ -4254,9 +4285,9 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
     if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
         if (write_io(&ctx->dc, inp, ctx->dc.cv.type, &ctx->out)) {
-            trace("xpaint: file saved");
+            cl_msg_to_show = str_new("changes saved");
         } else {
-            trace("xpaint: failed to save image");
+            cl_msg_to_show = str_new("failed to save changes");
         }
     }
 
