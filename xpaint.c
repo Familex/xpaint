@@ -4080,7 +4080,13 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // else-if chain to filter keys
     if (mode->t == InputT_Console) {
         struct InputConsoleData* cl = &ctx->input.mode.d.cl;
-        if (key_eq(curr, KEY_CL_CLIPBOARD_PASTE)) {
+        if (key_eq(curr, ACT_MODE_INTERACT.key)) {  // XXX direct member access
+            if (cl->compls_arr) {
+                cl_compls_free(cl);
+            } else {
+                input_mode_set(ctx, InputT_Interact);
+            }
+        } else if (key_eq(curr, KEY_CL_CLIPBOARD_PASTE)) {
             trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
             // handled in selection_notify_hdlr
         } else if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
@@ -4210,9 +4216,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (can_action(inp, curr, ACT_ZOOM_OUT)) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
     }
-    if (can_action(inp, curr, ACT_MODE_INTERACT)
-        // XXX direct action key access
-        || (mode->t == InputT_Console && key_eq(curr, ACT_MODE_INTERACT.key))) {
+    if (can_action(inp, curr, ACT_MODE_INTERACT)) {
         input_mode_set(ctx, InputT_Interact);
     }
     if (can_action(inp, curr, ACT_MODE_COLOR)) {
