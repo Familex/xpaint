@@ -31,13 +31,16 @@ help: ## display this help
 run: xpaint-d ## run application with ARGS
 	./xpaint-d -v $(ARGS)
 
-xpaint: check-deps $(DEPS) ## build release application
+xpaint: $(DEPS) ## build release application
+	$(MAKE) check-deps
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(RELEASE_FLAGS)
 
-xpaint-d: check-deps $(DEPS) ## build debug application
+xpaint-d: $(DEPS) ## build debug application
+	$(MAKE) check-deps
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_FLAGS)
 
-xpaint-d-ns: check-deps $(DEPS) ## build debug (no symbols) application
+xpaint-d-ns: $(DEPS) ## build debug (no symbols) application
+	$(MAKE) check-deps
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_NO_SYMBOLS_FLAGS)
 
 clean: ## remove generated files
