@@ -248,7 +248,6 @@ struct Ctx {
                         char* val_dyn;
                         char* descr_optdyn;
                     }* compls_arr;
-                    Bool compls_valid;  // FIXME remove
                     usize compls_curr;
                 } cl;
                 struct InputTransformData {
@@ -2099,9 +2098,6 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     free(cl_buf_dyn);
 
     cl->compls_arr = result;
-    if (cl->compls_arr) {
-        cl->compls_valid = True;
-    }
 
     return arrlen(cl->compls_arr);
 }
@@ -2119,7 +2115,6 @@ void cl_compls_free(struct InputConsoleData* cl) {
         }
         arrfree(cl->compls_arr);
         cl->compls_arr = NULL;
-        cl->compls_valid = False;
         cl->compls_curr = 0;
     }
 }
@@ -2182,7 +2177,7 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
     switch (inp->mode.t) {
         case InputT_Color: inp->mode.d.col = (struct InputColorData) {.current_digit = 0}; break;
         case InputT_Console: {
-            inp->mode.d.cl = (struct InputConsoleData) {.cmdarr = NULL, .compls_valid = False};
+            inp->mode.d.cl = (struct InputConsoleData) {0};
             if (CONSOLE_AUTO_COMPLETIONS) {
                 cl_compls_new(&inp->mode.d.cl);
             }
@@ -4239,9 +4234,9 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             if (is_exit) {
                 return HR_Quit;
             }
-        } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_valid) {
+        } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_arr) {
             cl_compls_new(cl);
-        } else if (key_eq(curr, KEY_CL_NEXT_COMPLT) && cl->compls_valid) {
+        } else if (key_eq(curr, KEY_CL_NEXT_COMPLT) && cl->compls_arr) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
                 cl->compls_curr = (cl->compls_curr + 1) % max;
