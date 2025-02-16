@@ -2,7 +2,7 @@
 # change them if needed
 
 # xpaint version
-VERSION = 0.9.0
+VERSION = 0.10.0
 
 # installation path
 PREFIX = /usr/local

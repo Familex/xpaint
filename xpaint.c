@@ -2088,7 +2088,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
             // If tok2 is empty or not a valid type, suggest types
             cl_compls_update_helper(&result, tok2, (itos_f)&cl_save_type_from_enum, NULL, ClCDSv_Last, add_delim);
         }
-    } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token completion
+    } else if (strlen(tok2) == 0 && !last_char_is_space) {  // first token completion
         cl_compls_update_helper(&result, tok1, (itos_f)&cl_cmd_from_enum, (itos_f)&cl_cmd_descr, ClC_Last, add_delim);
     } else {
         free(cl_buf_dyn);
