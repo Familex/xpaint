@@ -1893,7 +1893,7 @@ static void completion_callback(char const* enum_str, void* user_data) {
     struct CompletionCallbackData* ctx = user_data;
     usize const token_len = strlen(ctx->token);
     usize const offset = first_dismatch(enum_str, ctx->token);
-    if (offset == token_len && (offset < strlen(enum_str))) {
+    if (offset == token_len && (offset <= strlen(enum_str))) {
         char const* prefix = ctx->add_delim && (token_len == 0) ? CL_DELIM : "";
         char* complt = str_new("%s%s", prefix, enum_str + offset);
         arrpush(*ctx->result, complt);
