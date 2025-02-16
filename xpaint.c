@@ -244,8 +244,11 @@ struct Ctx {
                 } col;
                 struct InputConsoleData {
                     char* cmdarr;
-                    char** compls_arr;
-                    Bool compls_valid;
+                    struct ComplsItem {
+                        char* val_dyn;
+                        char* descr_optdyn;
+                    }* compls_arr;
+                    Bool compls_valid;  // FIXME remove
                     usize compls_curr;
                 } cl;
                 struct InputTransformData {
@@ -513,7 +516,9 @@ static ClCPrsResult cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_
 static void cl_cmd_parse_res_free(ClCPrsResult* res);
 static char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl);
 static char const* cl_cmd_from_enum(enum ClCTag t);
+static char const* cl_cmd_descr(enum ClCTag t);
 static char const* cl_set_prop_from_enum(enum ClCDSTag t);
+static char const* cl_set_prop_descr(enum ClCDSTag t);
 static char const* cl_save_type_from_enum(enum ClCDSv t);
 static enum ImageType cl_save_type_to_image_type(enum ClCDSv t);
 // returns number of completions
@@ -1838,6 +1843,20 @@ char const* cl_cmd_from_enum(enum ClCTag t) {
     UNREACHABLE();
 }
 
+char const* cl_cmd_descr(enum ClCTag t) {
+    switch (t) {
+        case ClC_Echo: return "print message";
+        case ClC_Set: return "set property value";
+        case ClC_Exit: return "exit program";
+        case ClC_Save: return "save changes to provided file";
+        case ClC_W: return "save changes";
+        case ClC_WQ: return "save changes and exit program";
+        case ClC_Load: return "load file to canvas";
+        case ClC_Last: break;
+    }
+    UNREACHABLE();
+}
+
 static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
     switch (t) {
         case ClCDS_Col: return "col";
@@ -1848,7 +1867,22 @@ static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
         case ClCDS_PngCompression: return "png_cmpr";
         case ClCDS_JpgQuality: return "jpg_qlty";
         case ClCDS_Spacing: return "spacing";
-        case ClCDS_Last: return "last";
+        case ClCDS_Last: break;
+    }
+    UNREACHABLE();
+}
+
+char const* cl_set_prop_descr(enum ClCDSTag t) {
+    switch (t) {
+        case ClCDS_LineW: return "line width";
+        case ClCDS_Col: return "tool color";
+        case ClCDS_Font: return "interface font";
+        case ClCDS_Inp: return "input file";
+        case ClCDS_Out: return "output file";
+        case ClCDS_PngCompression: return "png file compression level";
+        case ClCDS_JpgQuality: return "jpeg quality level";
+        case ClCDS_Spacing: return "brush tool spacing";
+        case ClCDS_Last: break;
     }
     UNREACHABLE();
 }
@@ -1874,44 +1908,49 @@ enum ImageType cl_save_type_to_image_type(enum ClCDSv t) {
 static void for_each_enum(
     i32 enum_last,
     char const* (*enum_to_str)(i32),
-    void (*callback)(char const* enum_str, void* data_in_out),
+    void (*callback)(i32 tag, char const* enum_str, void* data_in_out),
     void* data_in_out
 ) {
     for (i32 e = 0; e < enum_last; ++e) {
         char const* enum_str = enum_to_str(e);
-        callback(enum_str, data_in_out);
+        callback(e, enum_str, data_in_out);
     }
 }
 
 struct CompletionCallbackData {
-    char*** result;
+    struct ComplsItem** result;
     char const* token;
     Bool add_delim;
+    char const* (*get_descr_opt)(i32 tag);
 };
 
-static void completion_callback(char const* enum_str, void* user_data) {
+static void completion_callback(i32 tag, char const* enum_str, void* user_data) {
     struct CompletionCallbackData* ctx = user_data;
     usize const token_len = strlen(ctx->token);
     usize const offset = first_dismatch(enum_str, ctx->token);
     if (offset == token_len && (offset <= strlen(enum_str))) {
         char const* prefix = ctx->add_delim && (token_len == 0) ? CL_DELIM : "";
-        char* complt = str_new("%s%s", prefix, enum_str + offset);
+        struct ComplsItem complt = {
+            .val_dyn = str_new("%s%s", prefix, enum_str + offset),
+            .descr_optdyn = ctx->get_descr_opt ? str_new("%s", ctx->get_descr_opt(tag)) : NULL,
+        };
         arrpush(*ctx->result, complt);
     }
 }
 
 static void cl_compls_update_helper(
-    char*** result,
+    struct ComplsItem** result_out,
     char const* token,
     char const* (*enum_to_str)(i32),
+    char const* (*get_descr)(i32),
     i32 enum_last,
     Bool add_delim
 ) {
-    if (!token || !enum_to_str || !result) {
+    if (!token || !enum_to_str || !result_out) {
         return;
     }
 
-    struct CompletionCallbackData ctx = {result, token, add_delim};
+    struct CompletionCallbackData ctx = {result_out, token, add_delim, get_descr};
     for_each_enum(enum_last, enum_to_str, completion_callback, &ctx);
 }
 
@@ -1920,7 +1959,7 @@ struct TokenCheckCallbackData {
     Bool found;
 };
 
-static void check_token_callback(char const* enum_str, void* user_data) {
+static void check_token_callback(__attribute__((unused)) i32 tag, char const* enum_str, void* user_data) {
     struct TokenCheckCallbackData* ctx = user_data;
     if (!strcmp(ctx->token, enum_str)) {
         ctx->found = True;
@@ -1966,7 +2005,7 @@ static char const* get_base_part(char const* path) {
     return last_slash + 1;
 }
 
-static void cl_compls_update_dirs(char*** result, char const* token, Bool add_delim) {
+static void cl_compls_update_dirs(struct ComplsItem** result, char const* token, Bool add_delim) {
     if (!token || !result) {
         return;
     }
@@ -1998,7 +2037,10 @@ static void cl_compls_update_dirs(char*** result, char const* token, Bool add_de
                 if (offset == base_len && (offset < strlen(dirname))) {
                     // Only add space prefix if we're starting fresh
                     char const* prefix = (add_delim && !*token) ? CL_DELIM : "";
-                    char* complt = str_new("%s%s/", prefix, dirname + offset);
+                    struct ComplsItem complt = {
+                        .val_dyn = str_new("%s%s/", prefix, dirname + offset),
+                        .descr_optdyn = NULL,
+                    };
                     arrpush(*result, complt);
                 }
             }
@@ -2011,7 +2053,7 @@ static void cl_compls_update_dirs(char*** result, char const* token, Bool add_de
 
 usize cl_compls_new(struct InputConsoleData* cl) {
     char* cl_buf_dyn = cl_cmd_get_str_dyn(cl);
-    char** result = NULL;
+    struct ComplsItem* result = NULL;
 
     usize const cl_buf_len = strlen(cl_buf_dyn);
     Bool const last_char_is_space = cl_buf_len != 0 && cl_buf_dyn[cl_buf_len - 1] == CL_DELIM[0];
@@ -2027,21 +2069,28 @@ usize cl_compls_new(struct InputConsoleData* cl) {
 
     cl_compls_free(cl);
 
-    typedef char const* (*enum_to_str_func)(i32);
+    typedef char const* (*itos_f)(i32);
     // subcommands with own completions
     if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
-        cl_compls_update_helper(&result, tok2, (enum_to_str_func)&cl_set_prop_from_enum, ClCDS_Last, add_delim);
+        cl_compls_update_helper(
+            &result,
+            tok2,
+            (itos_f)&cl_set_prop_from_enum,
+            (itos_f)&cl_set_prop_descr,
+            ClCDS_Last,
+            add_delim
+        );
     } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
         // Check if tok2 is a valid save type
-        if (is_valid_token(tok2, (enum_to_str_func)&cl_save_type_from_enum, ClCDSv_Last)) {
+        if (is_valid_token(tok2, (itos_f)&cl_save_type_from_enum, ClCDSv_Last)) {
             // If we have a valid type, suggest directories
             cl_compls_update_dirs(&result, tok3, add_delim);
         } else {
             // If tok2 is empty or not a valid type, suggest types
-            cl_compls_update_helper(&result, tok2, (enum_to_str_func)&cl_save_type_from_enum, ClCDSv_Last, add_delim);
+            cl_compls_update_helper(&result, tok2, (itos_f)&cl_save_type_from_enum, NULL, ClCDSv_Last, add_delim);
         }
     } else if (strlen(tok1) == 0 || !last_char_is_space) {  // first token completion
-        cl_compls_update_helper(&result, tok1, (enum_to_str_func)&cl_cmd_from_enum, ClC_Last, add_delim);
+        cl_compls_update_helper(&result, tok1, (itos_f)&cl_cmd_from_enum, (itos_f)&cl_cmd_descr, ClC_Last, add_delim);
     } else {
         free(cl_buf_dyn);
         return 0;
@@ -2065,7 +2114,8 @@ void cl_free(struct InputConsoleData* cl) {
 void cl_compls_free(struct InputConsoleData* cl) {
     if (cl->compls_arr) {
         for (u32 i = 0; i < arrlen(cl->compls_arr); ++i) {
-            str_free(&cl->compls_arr[i]);
+            str_free(&cl->compls_arr[i].val_dyn);
+            str_free(&cl->compls_arr[i].descr_optdyn);
         }
         arrfree(cl->compls_arr);
         cl->compls_arr = NULL;
@@ -3497,7 +3547,8 @@ void update_statusline(struct Ctx* ctx) {
         i32 const cmd_y = (i32)(dc->height - STATUSLINE_PADDING_BOTTOM);
         draw_string(dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
         if (cl->compls_arr) {
-            draw_string(dc, cl->compls_arr[cl->compls_curr], (Pair) {user_cmd_w, cmd_y}, SchmFocus, False);
+            draw_string(dc, cl->compls_arr[cl->compls_curr].val_dyn, (Pair) {user_cmd_w, cmd_y}, SchmFocus, False);
+
             /* draw compls array */ {
                 u32 const list_pre_half = (STATUSLINE_COMPLS_LIST_MAX + 1) / 2;
                 u32 const len = arrlen(cl->compls_arr);
@@ -3507,13 +3558,26 @@ void update_statusline(struct Ctx* ctx) {
                 i32 const end = MIN(len, begin + STATUSLINE_COMPLS_LIST_MAX);
 
                 for (i32 i = begin; i < end; ++i) {
+                    char const* const compl_val = cl->compls_arr[i].val_dyn;
+                    char const* const compl_descr = cl->compls_arr[i].descr_optdyn;
+
                     u32 const row_num = end - i;
                     i32 const y = (i32)(clientarea.y - (statusline_h * row_num));
                     i32 const stry = (i32)(y + statusline_h - STATUSLINE_PADDING_BOTTOM);
                     argb const bg_col = i != (i32)cl->compls_curr ? COL_BG(dc, SchmNorm) : COL_FG(dc, SchmNorm);
+                    Bool const invert = i == (i32)cl->compls_curr;
 
                     fill_rect(dc, (Pair) {0, y}, line_dims, bg_col);
-                    draw_string(dc, cl->compls_arr[i], (Pair) {0, stry}, SchmNorm, i == (i32)cl->compls_curr);
+                    draw_string(dc, compl_val, (Pair) {0, stry}, SchmNorm, invert);
+
+                    if (compl_descr) {
+                        i32 const padding = (i32)STATUSLINE_COMPLS_DESRCIPTION_PADDING_PX;
+                        i32 const val_w = (i32)get_string_width(dc, compl_val, strlen(compl_val));
+                        i32 const descr_w = (i32)get_string_width(dc, compl_descr, strlen(compl_descr));
+                        i32 const strx =
+                            val_w + descr_w + padding < clientarea.x ? clientarea.x - descr_w : val_w + padding;
+                        draw_string(dc, compl_descr, (Pair) {strx, stry}, SchmNorm, invert);
+                    }
                 }
             }
         }
@@ -4121,7 +4185,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
             // handled in selection_notify_hdlr
         } else if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
-            char* complt = cl->compls_arr[cl->compls_curr];
+            char* complt = cl->compls_arr[cl->compls_curr].val_dyn;
             while (*complt) {
                 arrpush(cl->cmdarr, *complt);
                 complt += 1;
