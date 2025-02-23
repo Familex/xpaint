@@ -18,7 +18,7 @@ PKG_CONFIG ?= pkg-config
 
 SRC = ./xpaint.c
 HEADERS = ./types.h ./config.h
-DEPS = $(SRC) ./res $(HEADERS)
+DEPS = $(SRC) $(HEADERS) ./res ./lib
 
 all: help ## default target
 
@@ -44,7 +44,7 @@ xpaint-d-ns: $(DEPS) ## build debug (no symbols) application
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_NO_SYMBOLS_FLAGS)
 
 clean: ## remove generated files
-	@$(RM) ./xpaint ./xpaint-d ./xpaint-d-ns
+	@$(RM) ./xpaint ./xpaint-d ./xpaint-d-ns ./xpaint-d-no-asan
 
 install: xpaint ## install application
 	install -Dm 755 ./xpaint $(PREFIX)/bin/xpaint
@@ -62,7 +62,7 @@ uninstall: ## uninstall application
 
 dist: clean ## create distribution archive
 	@mkdir -p xpaint-$(VERSION)
-	@cp -R $(DEPS) ./share/ ./Makefile ./README.md ./LICENSE ./xpaint.1 ./xpaint-$(VERSION)
+	@cp -r $(DEPS) ./share/ ./Makefile ./README.md ./LICENSE ./xpaint.1 ./xpaint-$(VERSION)
 	tar -czf ./xpaint-$(VERSION).tar.gz ./xpaint-$(VERSION)
 	@rm -rf ./xpaint-$(VERSION)
 
