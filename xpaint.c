@@ -2004,7 +2004,7 @@ static char const* get_base_part(char const* path) {
     return last_slash + 1;
 }
 
-static void cl_compls_update_dirs(struct ComplsItem** result, char const* token, Bool add_delim) {
+static void cl_compls_update_dirs(struct ComplsItem** result, char const* token, Bool only_dirs, Bool add_delim) {
     if (!token || !result) {
         return;
     }
@@ -2024,20 +2024,21 @@ static void cl_compls_update_dirs(struct ComplsItem** result, char const* token,
         struct stat st;
         char* full_path_dyn = str_new("%s/%s", search_dir_dyn, entry->d_name);
         if (stat(full_path_dyn, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-                char const* dirname = entry->d_name;
-                if (dirname[0] == '.' && (dirname[1] == '\0' || (dirname[1] == '.' && dirname[2] == '\0'))) {
+            if (!only_dirs || S_ISDIR(st.st_mode)) {
+                char const* filename = entry->d_name;
+                if (filename[0] == '.' && (filename[1] == '\0' || (filename[1] == '.' && filename[2] == '\0'))) {
                     str_free(&full_path_dyn);
                     continue;  // Skip . and ..
                 }
 
                 usize const base_len = strlen(base_name);
-                usize const offset = first_dismatch(dirname, base_name);
-                if (offset == base_len && (offset < strlen(dirname))) {
+                usize const offset = first_dismatch(filename, base_name);
+                if (offset == base_len && (offset < strlen(filename))) {
                     // Only add space prefix if we're starting fresh
                     char const* prefix = (add_delim && !*token) ? CL_DELIM : "";
+                    char const* suffix = S_ISDIR(st.st_mode) ? "/" : "";
                     struct ComplsItem complt = {
-                        .val_dyn = str_new("%s%s/", prefix, dirname + offset),
+                        .val_dyn = str_new("%s%s%s", prefix, filename + offset, suffix),
                         .descr_optdyn = NULL,
                     };
                     arrpush(*result, complt);
@@ -2083,11 +2084,14 @@ usize cl_compls_new(struct InputConsoleData* cl) {
         // Check if tok2 is a valid save type
         if (is_valid_token(tok2, (itos_f)&cl_save_type_from_enum, ClCDSv_Last)) {
             // If we have a valid type, suggest directories
-            cl_compls_update_dirs(&result, tok3, add_delim);
+            cl_compls_update_dirs(&result, tok3, True, add_delim);
         } else {
             // If tok2 is empty or not a valid type, suggest types
             cl_compls_update_helper(&result, tok2, (itos_f)&cl_save_type_from_enum, NULL, ClCDSv_Last, add_delim);
         }
+    } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Load))) {
+        // Suggest directories to load
+        cl_compls_update_dirs(&result, tok2, False, add_delim);
     } else if (strlen(tok2) == 0 && !last_char_is_space) {  // first token completion
         cl_compls_update_helper(&result, tok1, (itos_f)&cl_cmd_from_enum, (itos_f)&cl_cmd_descr, ClC_Last, add_delim);
     } else {
