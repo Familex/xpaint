@@ -249,6 +249,8 @@ struct Ctx {
                         char* descr_optdyn;
                     }* compls_arr;
                     usize compls_curr;
+                    // Automatic delimeter append breaks paths
+                    Bool dont_append_delimeter_after_apply;
                 } cl;
                 struct InputTransformData {
                     Transform acc;  // accumulated
@@ -2085,6 +2087,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
         if (is_valid_token(tok2, (itos_f)&cl_save_type_from_enum, ClCDSv_Last)) {
             // If we have a valid type, suggest directories
             cl_compls_update_dirs(&result, tok3, True, add_delim);
+            cl->dont_append_delimeter_after_apply = True;
         } else {
             // If tok2 is empty or not a valid type, suggest types
             cl_compls_update_helper(&result, tok2, (itos_f)&cl_save_type_from_enum, NULL, ClCDSv_Last, add_delim);
@@ -2092,6 +2095,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Load))) {
         // Suggest directories to load
         cl_compls_update_dirs(&result, tok2, False, add_delim);
+        cl->dont_append_delimeter_after_apply = True;
     } else if (strlen(tok2) == 0 && !last_char_is_space) {  // first token completion
         cl_compls_update_helper(&result, tok1, (itos_f)&cl_cmd_from_enum, (itos_f)&cl_cmd_descr, ClC_Last, add_delim);
     } else {
@@ -4190,7 +4194,10 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 complt += 1;
             }
             cl_compls_free(cl);
-            cl_push(cl, CL_DELIM[0]);
+            // FIXME add contidion
+            if (!cl->dont_append_delimeter_after_apply) {
+                cl_push(cl, CL_DELIM[0]);
+            }
         } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
             input_mode_set(ctx, InputT_Interact);
