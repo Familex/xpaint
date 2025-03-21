@@ -3403,7 +3403,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
         }
     }
 
-    if (WND_ANCHOR_CROSS_SIZE && !IS_PNIL(inp->anchor) && !inp->is_dragging) {
+    if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor) && !inp->is_dragging) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
         Pair c = point_from_cv_to_scr(dc, inp->anchor);
         Rect const rect = {c.x - size, c.y - size, c.x + size, c.y + size};
