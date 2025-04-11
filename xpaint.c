@@ -4592,6 +4592,7 @@ static void copy_image_to_transform_mode(struct Ctx* ctx, XImage* im) {
     overlay_clear(ovr);
     ximage_blend(ovr->im, im);
     ovr->rect = ximage_calc_damage(ovr->im);
+    input_set_damage(&ctx->input, ovr->rect);
     input_mode_set(ctx, InputT_Transform);
 }
 
