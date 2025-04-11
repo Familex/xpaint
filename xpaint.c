@@ -3181,7 +3181,7 @@ void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool
         dc->fnt.xfont,
         c.x,
         c.y,
-        (XftChar8*)str,
+        (FcChar8 const*)str,
         (i32)strlen(str)
     );
     XftDrawDestroy(d);
