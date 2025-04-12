@@ -3238,6 +3238,7 @@ void draw_selection_circle(
         return;
     }
 
+    double const segment_icon_location = 0.58;  // 0.5 for center
     i32 const outer_r = (i32)SEL_CIRC_OUTER_R_PX;
     i32 const inner_r = (i32)SEL_CIRC_INNER_R_PX;
     Pair const outer_c = {sc->x - outer_r, sc->y - outer_r};
@@ -3263,9 +3264,9 @@ void draw_selection_circle(
                     image,
                     0,
                     0,
-                    (i32)(sc->x + (cos(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5))
+                    (i32)(sc->x + (cos(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * segment_icon_location))
                           - (image->width / 2.0)),
-                    (i32)(sc->y + (sin(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * 0.5))
+                    (i32)(sc->y + (sin(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * segment_icon_location))
                           - (image->height / 2.0)),
                     image->width,
                     image->height
