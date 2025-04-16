@@ -622,6 +622,7 @@ static int draw_line_ex(struct DrawCtx* dc, Pair from, Pair to, u32 w, int line_
 static int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool invert);
 static void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w);
 static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
+static void draw_dash_rect(struct DrawCtx* dc, Pair points[4]);
 // FIXME merge with get_string_rect?
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static Rect get_string_rect(struct DrawCtx const* dc, XftFont* font, char const* str, u32 len, Pair lt_c);
@@ -3429,6 +3430,14 @@ u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
     return get_string_width(dc, buf, strlen(buf));
 }
 
+void draw_dash_rect(struct DrawCtx* dc, Pair points[4]) {
+    for (u32 i = 0; i < 4; ++i) {
+        Pair const from = point_from_cv_to_scr(dc, points[i]);
+        Pair const to = point_from_cv_to_scr(dc, points[(i + 1) % 4]);
+        draw_dash_line(dc, from, to, 2);
+    }
+}
+
 u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     XGlyphInfo ext;
     XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
@@ -3536,6 +3545,8 @@ void draw_selection_circle(
 void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
+    struct InputMode* mode = &inp->mode;
+    struct ToolCtx* tc = &CURR_TC(ctx);
 
     /* draw canvas */ {
         fill_rect(dc, (Pair) {0, 0}, (Pair) {(i32)dc->width, (i32)dc->height}, WND_BACKGROUND);
@@ -3609,17 +3620,36 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
         Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
         Rect const rect = inp->ovr.rect;
         Pair const pivot = {rect.l, rect.t};
-        Pair transformed[] = {
-            point_apply_trans_pivot((Pair) {rect.l, rect.t}, trans, pivot),
-            point_apply_trans_pivot((Pair) {rect.r + 1, rect.t}, trans, pivot),
-            point_apply_trans_pivot((Pair) {rect.r + 1, rect.b + 1}, trans, pivot),
-            point_apply_trans_pivot((Pair) {rect.l, rect.b + 1}, trans, pivot),
-        };
-        for (u32 i = 0; i < LENGTH(transformed); ++i) {
-            Pair from = point_from_cv_to_scr(dc, transformed[i]);
-            Pair to = point_from_cv_to_scr(dc, transformed[(i + 1) % LENGTH(transformed)]);
-            draw_line(dc, from, to, 2, SchmNorm, True);
-            draw_line_ex(dc, from, to, 2, LineOnOffDash, SchmNorm, False);
+        draw_dash_rect(
+            dc,
+            (Pair[4]) {point_apply_trans_pivot((Pair) {rect.l, rect.t}, trans, pivot),
+                       point_apply_trans_pivot((Pair) {rect.r + 1, rect.t}, trans, pivot),
+                       point_apply_trans_pivot((Pair) {rect.r + 1, rect.b + 1}, trans, pivot),
+                       point_apply_trans_pivot((Pair) {rect.l, rect.b + 1}, trans, pivot)}
+        );
+    }
+
+    if (mode->t == InputT_Text) {
+        // FIXME store XftFont in tc
+        XftFont* font = XftFontOpenName(dc->dp, dc->sys.vinfo.screen, tc_curr_text_font(tc));
+        if (font) {
+            Rect const text_rect = get_string_rect(
+                dc,
+                font,
+                mode->d.text.textarr,
+                arrlen(mode->d.text.textarr),
+                mode->d.text.tool_data.lb_corner
+            );
+            draw_dash_rect(
+                dc,
+                // +1 to match Transform rect (idk why it was added)
+                (Pair[4]) {(Pair) {text_rect.l, text_rect.t},
+                           (Pair) {text_rect.r + 1, text_rect.t},
+                           (Pair) {text_rect.r + 1, text_rect.b + 1},
+                           (Pair) {text_rect.l, text_rect.b + 1}}
+            );
+
+            XftFontClose(dc->dp, font);
         }
     }
 
@@ -3634,14 +3664,15 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
     if (inp->is_dragging && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
 
-        Pair const lt = point_from_cv_to_scr_xy(dc, 0, 0);
-        Pair const rt = point_from_cv_to_scr_xy(dc, cur.x, 0);
-        Pair const rb = point_from_cv_to_scr_xy(dc, cur.x, cur.y);
-        Pair const lb = point_from_cv_to_scr_xy(dc, 0, cur.y);
-        draw_dash_line(dc, lt, rt, 1);
-        draw_dash_line(dc, rt, rb, 1);
-        draw_dash_line(dc, rb, lb, 1);
-        draw_dash_line(dc, lb, lt, 1);
+        draw_dash_rect(
+            dc,
+            (Pair[4]) {
+                (Pair) {0, 0},
+                (Pair) {cur.x, 0},
+                (Pair) {cur.x, cur.y},
+                (Pair) {0, cur.y},
+            }
+        );
     }
 
     update_statusline(ctx);  // backbuffer swapped here
