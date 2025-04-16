@@ -544,7 +544,7 @@ static usize cl_compls_new(struct InputConsoleData* cl);
 static void cl_free(struct InputConsoleData* cl);
 static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
-static void cl_pop(struct InputConsoleData* cl);
+static Bool cl_pop(struct InputConsoleData* cl);
 
 static void input_set_damage(struct Input* inp, Rect damage);
 static void input_mode_set(struct Ctx* ctx, enum InputTag mode_tag);
@@ -2208,18 +2208,21 @@ void cl_push(struct InputConsoleData* cl, char c) {
     }
 }
 
-void cl_pop(struct InputConsoleData* cl) {
+Bool cl_pop(struct InputConsoleData* cl) {
     if (!cl->cmdarr) {
-        return;
+        return False;
     }
     usize const size = arrlen(cl->cmdarr);
     if (size) {
         arrpoputf8(cl->cmdarr);
     }
+
     cl_compls_free(cl);
     if (CONSOLE_AUTO_COMPLETIONS) {
         cl_compls_new(cl);
     }
+
+    return size != 0;
 }
 
 void input_set_damage(struct Input* inp, Rect damage) {
@@ -4535,6 +4538,11 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
                 cl->compls_curr = (cl->compls_curr + 1) % max;
+            }
+        } else if (key_eq(curr, KEY_CL_ERASE_ALL)) {
+            usize is_not_infinite_loop = 100000;
+            while (cl_pop(cl) && --is_not_infinite_loop) {
+                // empty body
             }
         } else if (key_eq(curr, KEY_CL_ERASE_CHAR)) {
             cl_pop(cl);
