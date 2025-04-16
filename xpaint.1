@@ -50,6 +50,8 @@ For modifying the color in the current tool context. Enter by pressing \fBc\fP.
 For executing text-based commands. Enter by pressing \fB:\fP.
 .IP "\fITRANSFORM\fP (TFM)"
 Automatically entered when using the selection tool, allowing image scaling, moving, and rotation.
+.IP "\fITEXT\fP (TXT)"
+Automatically entered when using the text tool, type text to draw on canvas.
 
 .SH CONSOLE
 In console mode, all keystrokes are directed to the command line. Auto-completion is available by default.
@@ -119,6 +121,9 @@ Extracts a color from the canvas.
 .TP
 .B FIGURE
 Draws regular shapes (circle, square, triangle). The current figure type can be changed through the selection circle.
+.TP
+.B TEXT
+Use to initiate text mode by selecting the bottom-left corner where the text will be drawn.
 
 .SH KEYBOARD COMMANDS
 The following key bindings are active by default. (All keys can be reconfigured in \fIconfig.h\fP.)

@@ -74,8 +74,7 @@ typedef struct {
         SLM_ToolCtx,  // list of tool contexts
         SLM_Mode,  // current mode
         SLM_Tool,  // current tool
-        SLM_ToolLineW,  // current line width of tool
-        SLM_ToolSpacing,  // current spacing of pencil/brush tool
+        SLM_ToolSettings,  // current tool settings
         SLM_ColorBox,  // rectangle filled with current color
         SLM_ColorName,  // name of current color
         SLM_ColorList,  // current index and size of color list

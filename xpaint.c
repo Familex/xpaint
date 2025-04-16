@@ -41,6 +41,7 @@ INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
 INCBIN(u8, pic_tool_select, "res/tool-select.png");
 INCBIN(u8, pic_tool_brush, "res/tool-brush.png");
 INCBIN(u8, pic_tool_figure, "res/tool-figure.png");
+INCBIN(u8, pic_tool_text, "res/tool-text.png");
 INCBIN(u8, pic_fig_rect, "res/figure-rectangle.png");
 INCBIN(u8, pic_fig_circ, "res/figure-circle.png");
 INCBIN(u8, pic_fig_tri, "res/figure-triangle.png");
@@ -72,6 +73,8 @@ INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
 // adjust brush line width to pencil's line width
 // XXX kinda works only for small values of line_w
 #define BRUSH_LINE_W_MOD 4.0
+#define TEXT_FONT_PROMPT "font: "
+#define TEXT_MODE_PROMPT "text: "
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -112,6 +115,7 @@ enum Icon {
     I_Picker,
     I_Brush,
     I_Figure,
+    I_Text,
     I_FigRect,
     I_FigCirc,
     I_FigTri,
@@ -237,6 +241,7 @@ struct Ctx {
                 InputT_Color,
                 InputT_Console,
                 InputT_Transform,
+                InputT_Text,
             } t;
             union {
                 struct InputColorData {
@@ -256,6 +261,12 @@ struct Ctx {
                     Transform acc;  // accumulated
                     Transform curr;  // current mouse drag
                 } trans;
+                struct InputTextData {
+                    char* textarr;
+                    struct ToolTextData {
+                        Pair lb_corner;
+                    } tool_data;  // copied from text tool on mouse release
+                } text;
             } d;
         } mode;
     } input;
@@ -271,6 +282,7 @@ struct Ctx {
         u32 curr_col;
         u32 prev_col;
         u32 line_w;
+        char* text_font_dyn;
 
         enum ToolTag {
             Tool_Selection,
@@ -279,6 +291,7 @@ struct Ctx {
             Tool_Picker,
             Tool_Brush,
             Tool_Figure,
+            Tool_Text,
         } t;
         union ToolData {
             // Tool_Pencil | Tool_Brush
@@ -297,6 +310,7 @@ struct Ctx {
                 } curr;
                 Bool fill;
             } fig;
+            struct ToolTextData text;
         } d;
     }* tcarr;
     u32 curr_tc;
@@ -357,7 +371,8 @@ struct ClCommand {
             enum ClCDSTag {
                 ClCDS_LineW = 0,
                 ClCDS_Col,
-                ClCDS_Font,
+                ClCDS_UiFont,
+                ClCDS_TextFont,
                 ClCDS_Inp,
                 ClCDS_Out,
                 ClCDS_PngCompression,
@@ -374,7 +389,7 @@ struct ClCommand {
                 } col;
                 struct ClCDSDFont {
                     char* name_dyn;
-                } font;
+                } ui_font, text_font;
                 struct ClCDSDInp {
                     char* path_dyn;
                 } inp;
@@ -475,6 +490,7 @@ static void str_free(char** str_dyn);
 static void tc_set_curr_col_num(struct ToolCtx* tc, u32 value);
 static argb* tc_curr_col(struct ToolCtx* tc);
 static void tc_set_tool(struct ToolCtx* tc, enum ToolTag type);
+static char const* tc_curr_text_font(struct ToolCtx const* tc);
 static char const* tc_get_tool_name(struct ToolCtx const* tc);
 static void tc_free(struct ToolCtx* tc);
 
@@ -505,6 +521,7 @@ static argb argb_normalize(argb c);
 static argb argb_from_hsl(double hue, double sat, double light);
 // XXX hex non-const because of implementation
 static Bool argb_from_hex_col(char* hex, argb* argb_out);
+static XRenderColor argb_to_xrender_color(argb col);
 static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
 static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
@@ -535,12 +552,17 @@ static void input_mode_free(struct InputMode* input_mode);
 static char const* input_mode_as_str(enum InputTag mode_tag);
 static void input_free(struct Input* input);
 
+static void text_mode_push(struct Ctx* ctx, char c);
+static Bool text_mode_pop(struct Ctx* ctx);
+static void text_mode_rerender(struct Ctx* ctx);
+
 static void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y);
 static void sel_circ_free_and_hide(struct SelectionCircle* sel_circ);
 static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
 
 // separate functions, because they are callbacks
 static Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
+static Rect tool_text_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event);
 static Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
@@ -566,6 +588,7 @@ static Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static Rect ximage_calc_damage(XImage* im);
 
+static Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, char const* font_name, argb col, char const* text, u32 text_len);
 static Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col1, argb col2);
 static Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2);
@@ -599,7 +622,9 @@ static int draw_line_ex(struct DrawCtx* dc, Pair from, Pair to, u32 w, int line_
 static int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool invert);
 static void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w);
 static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
+// FIXME merge with get_string_rect?
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
+static Rect get_string_rect(struct DrawCtx const* dc, XftFont* font, char const* str, u32 len, Pair lt_c);
 static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw);
 static void update_statusline(struct Ctx* ctx);
@@ -793,6 +818,7 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
         case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
         case I_Figure: return (D) {pic_tool_figure_data, RES_SZ_TOOL_FIGURE};
+        case I_Text: return (D) {pic_tool_text_data, RES_SZ_TOOL_TEXT};
         case I_FigRect: return (D) {pic_fig_rect_data, RES_SZ_FIGURE_RECTANGLE};
         case I_FigCirc: return (D) {pic_fig_circ_data, RES_SZ_FIGURE_CIRCLE};
         case I_FigTri: return (D) {pic_fig_tri_data, RES_SZ_FIGURE_TRIANGLE};
@@ -838,8 +864,9 @@ static Bool can_action(struct Input const* input, Key curr_key, Action act) {
     switch (input->mode.t) {
         case InputT_Interact: return (i32)act.mode & MF_Int;
         case InputT_Color: return (i32)act.mode & MF_Color;
-        case InputT_Console: return False;  // managed manually
         case InputT_Transform: return (i32)act.mode & MF_Trans;
+        case InputT_Text:
+        case InputT_Console: return False;  // managed manually
     }
     UNREACHABLE();
 }
@@ -1012,6 +1039,10 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
     tc->on_move = NULL;
 
     switch (type) {
+        case Tool_Text:
+            tc->on_release = &tool_text_on_release;
+            tc->d.text = (struct ToolTextData) {0};
+            break;
         case Tool_Selection:
             tc->on_release = &tool_selection_on_release;
             tc->on_drag = &tool_selection_on_drag;
@@ -1045,8 +1076,16 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
     }
 }
 
+char const* tc_curr_text_font(struct ToolCtx const* tc) {
+    if (tc == NULL || tc->text_font_dyn == NULL) {
+        return TEXT_TOOL_DEFAULT_FONT;
+    }
+    return tc->text_font_dyn;
+}
+
 char const* tc_get_tool_name(struct ToolCtx const* tc) {
     switch (tc->t) {
+        case Tool_Text: return "text   ";
         case Tool_Selection: return "select ";
         case Tool_Pencil: return "pencil ";
         case Tool_Fill: return "fill   ";
@@ -1063,6 +1102,7 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
 }
 
 void tc_free(struct ToolCtx* tc) {
+    str_free(&tc->text_font_dyn);
     arrfree(tc->colarr);
 }
 
@@ -1341,6 +1381,20 @@ Bool argb_from_hex_col(char* hex, argb* argb_out) {
     return True;
 }
 
+XRenderColor argb_to_xrender_color(argb col) {
+    unsigned char a = (col >> 24) & 0xFF;
+    unsigned char r = (col >> 16) & 0xFF;
+    unsigned char g = (col >> 8) & 0xFF;
+    unsigned char b = (col) & 0xFF;
+
+    return (XRenderColor) {
+        .red = r * (0xFFFF / 0xFF),
+        .green = g * (0xFFFF / 0xFF),
+        .blue = b * (0xFFFF / 0xFF),
+        .alpha = a * (0xFFFF / 0xFF),
+    };
+}
+
 static u32 argb_to_abgr(argb v) {
     u32 const a = v & ARGB_ALPHA;
     u8 const red = (v & 0x00FF0000) >> (2 * 8);
@@ -1520,11 +1574,17 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 case ClCDS_Col: {
                     *tc_curr_col(&CURR_TC(ctx)) = cl_cmd->d.set.d.col.v;
                 } break;
-                case ClCDS_Font: {
-                    char const* font = cl_cmd->d.set.d.font.name_dyn;
+                case ClCDS_UiFont: {
+                    char const* font = cl_cmd->d.set.d.ui_font.name_dyn;
                     if (!fnt_set(&ctx->dc, font)) {
                         msg_to_show = str_new("invalid font name: '%s'", font);
                     }
+                } break;
+                case ClCDS_TextFont: {
+                    char const* font = cl_cmd->d.set.d.text_font.name_dyn;
+                    // FIXME no check for font validity
+                    str_free(&CURR_TC(ctx).text_font_dyn);
+                    CURR_TC(ctx).text_font_dyn = str_new("%s", font);
                 } break;
                 case ClCDS_Inp: {
                     char const* path = cl_cmd->d.set.d.inp.path_dyn;
@@ -1669,15 +1729,25 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
             return (ClCPrsResult
             ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Set, .d.ok.d.set.t = ClCDS_Col, .d.ok.d.set.d.col.v = value};
         }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Font))) {
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_UiFont))) {
             char const* font = strtok(NULL, CL_DELIM);
             if (!font) {
-                return cl_prs_noarg(str_new("font"), NULL);
+                return cl_prs_noarg(str_new("ui font"), NULL);
             }
             return (ClCPrsResult) {.t = ClCPrs_Ok,
                                    .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_Font,
-                                   .d.ok.d.set.d.font.name_dyn = font ? str_new("%s", font) : NULL};
+                                   .d.ok.d.set.t = ClCDS_UiFont,
+                                   .d.ok.d.set.d.ui_font.name_dyn = font ? str_new("%s", font) : NULL};
+        }
+        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_TextFont))) {
+            char const* font = strtok(NULL, CL_DELIM);
+            if (!font) {
+                return cl_prs_noarg(str_new("text tool font"), NULL);
+            }
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Set,
+                                   .d.ok.d.set.t = ClCDS_TextFont,
+                                   .d.ok.d.set.d.text_font.name_dyn = font ? str_new("%s", font) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
             char const* path = strtok(NULL, "");  // user can load NULL
@@ -1790,7 +1860,8 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
             switch (cl_cmd->t) {
                 case ClC_Set:
                     switch (cl_cmd->d.set.t) {
-                        case ClCDS_Font: free(cl_cmd->d.set.d.font.name_dyn); break;
+                        case ClCDS_UiFont: free(cl_cmd->d.set.d.ui_font.name_dyn); break;
+                        case ClCDS_TextFont: free(cl_cmd->d.set.d.text_font.name_dyn); break;
                         case ClCDS_Inp: free(cl_cmd->d.set.d.inp.path_dyn); break;
                         case ClCDS_Out: free(cl_cmd->d.set.d.out.path_dyn); break;
                         case ClCDS_LineW:
@@ -1863,7 +1934,8 @@ static char const* cl_set_prop_from_enum(enum ClCDSTag t) {
         case ClCDS_Col: return "col";
         case ClCDS_Inp: return "inp";
         case ClCDS_Out: return "out";
-        case ClCDS_Font: return "font";
+        case ClCDS_UiFont: return "ui_font";
+        case ClCDS_TextFont: return "font";
         case ClCDS_LineW: return "line_w";
         case ClCDS_PngCompression: return "png_cmpr";
         case ClCDS_JpgQuality: return "jpg_qlty";
@@ -1877,7 +1949,8 @@ char const* cl_set_prop_descr(enum ClCDSTag t) {
     switch (t) {
         case ClCDS_LineW: return "line width";
         case ClCDS_Col: return "tool color";
-        case ClCDS_Font: return "interface font";
+        case ClCDS_UiFont: return "interface font";
+        case ClCDS_TextFont: return "text tool font";
         case ClCDS_Inp: return "input file";
         case ClCDS_Out: return "output file";
         case ClCDS_PngCompression: return "png file compression level";
@@ -2162,6 +2235,7 @@ void input_set_damage(struct Input* inp, Rect damage) {
 void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
+    struct ToolCtx* tc = &CURR_TC(ctx);
 
     switch (inp->mode.t) {
         case InputT_Transform: {
@@ -2197,12 +2271,20 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
                 .curr = TRANSFORM_DEFAULT,
             };
             break;
+        case InputT_Text:
+            if (tc->t == Tool_Text) {
+                inp->mode.d.text = (struct InputTextData) {.tool_data = tc->d.text};
+            } else {
+                inp->mode.d.text = (struct InputTextData) {0};
+            }
+            break;
     }
 }
 
 void input_mode_free(struct InputMode* input_mode) {
     switch (input_mode->t) {
         case InputT_Console: cl_free(&input_mode->d.cl); break;
+        case InputT_Text: arrfree(input_mode->d.text.textarr); break;
         default: break;
     }
 }
@@ -2213,6 +2295,7 @@ char const* input_mode_as_str(enum InputTag mode_tag) {
         case InputT_Color: return "COL";
         case InputT_Console: return "CMD";
         case InputT_Transform: return "TFM";
+        case InputT_Text: return "TXT";
     }
     return "???";
 }
@@ -2220,6 +2303,60 @@ char const* input_mode_as_str(enum InputTag mode_tag) {
 void input_free(struct Input* input) {
     input_mode_free(&input->mode);
     overlay_free(&input->ovr);
+}
+
+void text_mode_push(struct Ctx* ctx, char c) {
+    if (ctx->input.mode.t != InputT_Text) {
+        return;
+    }
+
+    struct InputTextData* td = &ctx->input.mode.d.text;
+    arrpush(td->textarr, c);
+
+    text_mode_rerender(ctx);
+}
+
+Bool text_mode_pop(struct Ctx* ctx) {
+    if (ctx->input.mode.t != InputT_Text) {
+        return False;
+    }
+
+    struct InputTextData* td = &ctx->input.mode.d.text;
+    if (!td->textarr) {
+        return False;
+    }
+
+    usize const size = arrlen(td->textarr);
+    if (size == 0) {
+        return False;
+    }
+    arrpoputf8(td->textarr);
+
+    text_mode_rerender(ctx);
+    return True;
+}
+
+void text_mode_rerender(struct Ctx* ctx) {
+    struct Input* inp = &ctx->input;
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    if (inp->mode.t != InputT_Text) {
+        return;
+    }
+    struct InputTextData* td = &inp->mode.d.text;
+
+    input_set_damage(inp, RNIL);
+    overlay_clear(&inp->ovr);
+    Rect const damage = canvas_text(
+        &ctx->dc,
+        inp->ovr.im,
+        td->tool_data.lb_corner,
+        tc_curr_text_font(tc),
+        *tc_curr_col(tc),
+        td->textarr,
+        arrlen(td->textarr)
+    );
+    inp->ovr.rect = damage;
+    input_set_damage(inp, damage);
 }
 
 static void sel_circ_on_select_tool(struct Ctx* ctx, union SCI_Arg arg) {
@@ -2247,6 +2384,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
     sc->y = y;
 
     switch (ctx->input.mode.t) {
+        case InputT_Text:
         case InputT_Transform:
         case InputT_Console: break;
         case InputT_Color: {
@@ -2308,12 +2446,14 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
             sc->draw_separators = True;
 
             switch (tc->t) {
+                case Tool_Text:
                 case Tool_Selection:
                 case Tool_Pencil:
                 case Tool_Fill:
                 case Tool_Picker:
                 case Tool_Brush: {
                     struct Item items[] = {
+                        {.arg.tool = Tool_Text, .on_select = &sel_circ_on_select_tool, .icon = I_Text},
                         {.arg.tool = Tool_Selection, .on_select = &sel_circ_on_select_tool, .icon = I_Select},
                         {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
                         {.arg.tool = Tool_Fill, .on_select = &sel_circ_on_select_tool, .icon = I_Fill},
@@ -2414,6 +2554,16 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
     }
 
     // all actions already done above
+    return RNIL;
+}
+
+Rect tool_text_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+    assert(tc->t == Tool_Text);
+
+    tc->d.text.lb_corner = point_from_scr_to_cv_xy(&ctx->dc, event->x, event->y);
+    input_mode_set(ctx, InputT_Text);
+
     return RNIL;
 }
 
@@ -2763,6 +2913,60 @@ Rect ximage_calc_damage(XImage* im) {
             }
         }
     }
+    return damage;
+}
+
+Rect canvas_text(
+    struct DrawCtx* dc,
+    XImage* im,
+    Pair lt_c,
+    char const* font_name,
+    argb col,
+    char const* text,
+    u32 text_len
+) {
+    Rect damage = RNIL;
+    if (text == NULL || font_name == NULL || im == NULL || dc == NULL) {
+        return damage;
+    }
+
+    XRenderColor renderColor = argb_to_xrender_color(col);
+    XftColor color;
+    if (!XftColorAllocValue(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &renderColor, &color)) {
+        trace("xpaint: canvas_text: failed to create xft color");
+        return damage;
+    }
+
+    XftFont* font = XftFontOpenName(dc->dp, dc->sys.vinfo.screen, font_name);
+    if (!font) {
+        trace("xpaint: canvas_text: failed to open font");
+        return damage;
+    }
+    Rect const text_rect = get_string_rect(dc, font, text, text_len, lt_c);
+    Pair const text_dims = rect_dims(text_rect);
+
+    Pixmap pm = XCreatePixmap(dc->dp, dc->window, text_dims.x, text_dims.y, dc->sys.vinfo.depth);
+    XftDraw* d = XftDrawCreate(dc->dp, pm, dc->sys.vinfo.visual, dc->sys.colmap);
+    if (!d) {
+        XFreePixmap(dc->dp, pm);
+        trace("xpaint: canvas_text: failed to create xft draw");
+        return damage;
+    }
+
+    // x, y == left-baseline
+    XftDrawStringUtf8(d, &color, font, 0, font->height - font->descent, (FcChar8*)text, (i32)text_len);
+    damage = rect_expand(damage, text_rect);
+
+    // apply pixmap with text on input image
+    XImage* image = XGetImage(dc->dp, pm, 0, 0, text_dims.x, text_dims.y, AllPlanes, ZPixmap);
+    canvas_copy_region(im, image, (Pair) {0, 0}, text_dims, (Pair) {text_rect.l, text_rect.t});
+    XDestroyImage(image);
+
+    XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &color);
+    XftFontClose(dc->dp, font);
+    XftDrawDestroy(d);
+    XFreePixmap(dc->dp, pm);
+
     return damage;
 }
 
@@ -3228,6 +3432,18 @@ u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     return ext.xOff;
 }
 
+Rect get_string_rect(struct DrawCtx const* dc, XftFont* font, char const* str, u32 len, Pair lt) {
+    XGlyphInfo ext = {0};
+    XftTextExtentsUtf8(dc->dp, font, (FcChar8 const*)str, (i32)len, &ext);
+    // XftDrawStringUtf8 seems like to accept left-baseline point
+    return (Rect) {
+        .l = lt.x,
+        .t = lt.y + font->descent - font->height,
+        .r = lt.x + ext.xOff,
+        .b = lt.y + font->descent,
+    };
+}
+
 void draw_selection_circle(
     struct DrawCtx* dc,
     struct SelectionCircle const* sc,
@@ -3429,6 +3645,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
 }
 
 static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
+    struct InputMode const* mode = &ctx->input.mode;
     struct DrawCtx const* dc = &ctx->dc;
     struct ToolCtx const* tc = &CURR_TC(ctx);
 
@@ -3450,8 +3667,40 @@ static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
             char const* tool_str = tc_get_tool_name(tc);
             return get_string_width(dc, tool_str, strlen(tool_str));
         }
-        case SLM_ToolLineW: return get_int_width(dc, "%d", tc->line_w);
-        case SLM_ToolSpacing: return get_int_width(dc, "%d", TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 0);
+        case SLM_ToolSettings:
+            switch (mode->t) {
+                case InputT_Interact: {
+                    switch (tc->t) {
+                        case Tool_Selection:
+                        case Tool_Fill:
+                        case Tool_Picker:
+                        case Tool_Figure:
+                        case Tool_Text: return 0;
+                        case Tool_Pencil: return get_int_width(dc, "%d", tc->line_w);
+                        case Tool_Brush:
+                            return get_int_width(dc, "%d", tc->line_w) + +STATUSLINE_MODULE_SPACING_SMALL_PX
+                                + get_int_width(dc, "%d", TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 0);
+                    }
+                } break;
+                case InputT_Color:
+                case InputT_Console:
+                case InputT_Transform: return 0;
+                case InputT_Text: {
+                    char const* separator = " ";
+                    u32 const str_len = LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(tc_curr_text_font(tc)) + strlen(separator)
+                        + LENGTH(TEXT_MODE_PROMPT) - 1 + arrlen(mode->d.text.textarr) + 1;
+                    char* str = ecalloc(str_len, sizeof(char));
+                    strcat(str, TEXT_FONT_PROMPT);
+                    strcat(str, tc_curr_text_font(tc));
+                    strcat(str, separator);
+                    strcat(str, TEXT_MODE_PROMPT);
+                    strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
+                    u32 const result = get_string_width(dc, str, str_len);
+                    free(str);
+                    return result;
+                }
+            }
+            break;
         case SLM_ColorBox: return module->d.color_box_w;
         case SLM_ColorName:
             // XXX uses 'F' as overage character
@@ -3490,12 +3739,43 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
             char const* name = tc_get_tool_name(tc);
             draw_string(dc, name, c, SchmNorm, False);
         } break;
-        case SLM_ToolLineW: {
-            draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
-        } break;
-        case SLM_ToolSpacing: {
-            i32 const val = TC_IS_DRAWER(tc) ? (i32)tc->d.drawer.spacing : 0;
-            draw_int(dc, val, c, SchmNorm, False);
+        case SLM_ToolSettings: {
+            switch (mode->t) {
+                case InputT_Color:
+                case InputT_Console:
+                case InputT_Transform: break;
+                case InputT_Interact:
+                    switch (tc->t) {
+                        case Tool_Selection:
+                        case Tool_Fill:
+                        case Tool_Picker:
+                        case Tool_Figure:
+                        case Tool_Text: break;
+                        case Tool_Pencil: {
+                            draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
+                        } break;
+                        case Tool_Brush: {
+                            i32 const val = TC_IS_DRAWER(tc) ? (i32)tc->d.drawer.spacing : 0;
+                            draw_int(dc, val, c, SchmNorm, False);
+                        } break;
+                    }
+                    break;
+                case InputT_Text: {
+                    char const* separator = " ";
+                    char* str = ecalloc(
+                        LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(tc_curr_text_font(tc)) + strlen(separator)
+                            + LENGTH(TEXT_MODE_PROMPT) - 1 + arrlen(mode->d.text.textarr) + 1,
+                        sizeof(char)
+                    );
+                    strcat(str, TEXT_FONT_PROMPT);
+                    strcat(str, tc_curr_text_font(tc));
+                    strcat(str, separator);
+                    strcat(str, TEXT_MODE_PROMPT);
+                    strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
+                    draw_string(dc, str, c, SchmNorm, False);
+                    free(str);
+                } break;
+            }
         } break;
         case SLM_ColorBox: {
             fill_rect(
@@ -3628,7 +3908,7 @@ void update_statusline(struct Ctx* ctx) {
 
 // FIXME DRY
 void show_message(struct Ctx* ctx, char const* msg) {
-    u32 const statusline_h = ctx->dc.fnt.xfont->ascent + STATUSLINE_PADDING_BOTTOM;
+    u32 const statusline_h = statusline_height(&ctx->dc);
     fill_rect(
         &ctx->dc,
         (Pair) {0, (i32)(ctx->dc.height - statusline_h)},
@@ -4009,7 +4289,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     inp->redraw_track[0] = RNIL;
     inp->redraw_track[1] = RNIL;
 
-    if (inp->mode.t == InputT_Transform) {
+    if (inp->mode.t == InputT_Transform || inp->mode.t == InputT_Text) {
         // do nothing
     } else if ((btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE)) && !ctx->input.is_holding) {
         sel_circ_init_and_show(ctx, button, e->x, e->y);
@@ -4052,6 +4332,8 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         struct InputTransformData* transd = &inp->mode.d.trans;
         transd->acc = trans_add(transd->acc, transd->curr);
         transd->curr = TRANSFORM_DEFAULT;
+    } else if (inp->mode.t == InputT_Text) {
+        // do not run tool handlers
     } else if (btn_eq(e_btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
         canvas_resize(ctx, cur.x, cur.y);
@@ -4115,8 +4397,9 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // FIXME repeated assignments will cause memory leaks
     char* cl_msg_to_show = NULL;
 
-    struct Input const* inp = &ctx->input;
-    struct InputMode const* mode = &inp->mode;
+    struct Input* inp = &ctx->input;
+    struct InputMode* mode = &inp->mode;
+
     XKeyPressedEvent e = event->xkey;
     if (e.type == KeyRelease) {
         return HR_Ok;
@@ -4179,7 +4462,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // else-if chain to filter keys
     if (mode->t == InputT_Console) {
         struct InputConsoleData* cl = &ctx->input.mode.d.cl;
-        if (key_eq(curr, ACT_MODE_INTERACT.key)) {  // XXX direct member access
+        if (key_eq(curr, KEY_CL_MODE_INTERACT)) {
             if (cl->compls_arr) {
                 cl_compls_free(cl);
             } else {
@@ -4279,6 +4562,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 trigger_clipboard_paste(&ctx->dc, atoms[A_ImagePng]);
                 // handled in selection_notify_hdlr
                 break;
+            case InputT_Text:
             case InputT_Color:
             case InputT_Console:
                 trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
@@ -4360,6 +4644,34 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         } else {
             cl_msg_to_show = str_new("failed to save changes");
         }
+    }
+
+    // else-if chain to filter keys
+    if (mode->t == InputT_Text) {
+        if (key_eq(curr, KEY_TX_MODE_INTERACT)) {
+            input_set_damage(inp, RNIL);
+            overlay_clear(&inp->ovr);
+            input_mode_set(ctx, InputT_Interact);
+        } else if (key_eq(curr, KEY_TX_CONFIRM)) {
+            input_mode_set(ctx, InputT_Transform);
+        } else if (key_eq(curr, KEY_TX_PASTE_TEXT)) {
+            trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
+        } else if (key_eq(curr, KEY_TX_ERASE_ALL)) {
+            usize is_not_infinite_loop = 100000;
+            while (text_mode_pop(ctx) && --is_not_infinite_loop) {
+                // empty body
+            }
+        } else if (key_eq(curr, KEY_TX_ERASE_CHAR)) {
+            text_mode_pop(ctx);
+        }
+        // FIXME add way to type (and render) '\n'?
+        else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
+            for (i32 i = 0; i < text_len; ++i) {
+                text_mode_push(ctx, (char)(lookup_buf[i] & 0xFF));
+            }
+        }
+        // FIXME do full screen update?
+        update_screen(ctx, PNIL, True);
     }
 
     // FIXME extra updates on invalid events
@@ -4682,6 +4994,16 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     }
                 }
             } break;
+                // FIXME combine with InputT_Controle handler?
+            case InputT_Text:
+                for (u32 i = 0; i < count; ++i) {
+                    // not letter, because utf-8 is multibyte enc
+                    char elem = (char)data_xdyn[i];
+                    text_mode_push(ctx, elem);
+                }
+                // FIXME calc damage instead?
+                update_screen(ctx, PNIL, True);
+                break;
             case InputT_Interact:
             case InputT_Transform:
                 trace(

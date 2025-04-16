@@ -33,8 +33,8 @@ SLModule const LEFT_MODULES[] = {
     {SLM_ToolCtx, .d = {0}},
     {SLM_Mode, .d = {0}},
     {SLM_Tool, .d = {0}},
-    {SLM_Text, .d.text = "| w: "},
-    {SLM_ToolLineW, .d = {0}},
+    {SLM_Text, .d.text = "|"},
+    {SLM_ToolSettings, .d = {0}},
 };
 
 SLModule const RIGHT_MODULES[] = {
@@ -66,6 +66,9 @@ u32 const SEL_TOOL_LINE_W = 2;
 argb const SEL_TOOL_COL = 0x80000000;
 i32 const SEL_TOOL_LINE_STYLE = LineOnOffDash;
 argb const SEL_TOOL_SELECTION_FG = 0xFF181818;
+
+// text tool
+char const* const TEXT_TOOL_DEFAULT_FONT = "monospace-24";
 
 u32 const TOOLS_DEFAULT_LINE_W = 5;
 u32 const TOOLS_BRUSH_DEFAULT_SPACING = 1;  // '1' to disable. must be >= 1
@@ -123,10 +126,18 @@ Action const ACT_MODE_INTERACT = {ANY_MODE, {XK_Escape, NO_MOD}};  // return to 
 Action const ACT_MODE_COLOR = {MF_Int, {XK_c, NO_MOD}};
 Action const ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
 
+// only in text mode
+Key const KEY_TX_CONFIRM = {XK_Return, NO_MOD};  // typing '\n' not supported by implementation
+Key const KEY_TX_MODE_INTERACT = ACT_MODE_INTERACT.key;
+Key const KEY_TX_PASTE_TEXT = ACT_PASTE_IMAGE.key;
+Key const KEY_TX_ERASE_CHAR = {XK_BackSpace, NO_MOD};
+Key const KEY_TX_ERASE_ALL = {XK_BackSpace, ControlMask};
+
 // only in console mode
 Key const KEY_CL_REQ_COMPLT = {NO_KEY, NO_MOD};
 Key const KEY_CL_NEXT_COMPLT = {XK_Tab, NO_MOD};
 Key const KEY_CL_APPLY_COMPLT = {XK_Return, NO_MOD};
-Key const KEY_CL_ERASE_CHAR = {XK_BackSpace, NO_MOD};
+Key const KEY_CL_ERASE_CHAR = KEY_TX_ERASE_CHAR;
 Key const KEY_CL_RUN = {XK_Return, NO_MOD};
-Key const KEY_CL_CLIPBOARD_PASTE = {XK_v, ControlMask};
+Key const KEY_CL_CLIPBOARD_PASTE = ACT_PASTE_IMAGE.key;
+Key const KEY_CL_MODE_INTERACT = ACT_MODE_INTERACT.key;
