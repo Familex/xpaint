@@ -190,10 +190,7 @@ struct Ctx {
             i32 zoom;  // 0 == no zoom
             Pair scroll;
         } cv;
-        struct Fnt {
-            XftFont* xfont;
-            u32 h;
-        } fnt;
+        XftFont* fnt;
         struct Scheme {
             XftColor fg;
             XftColor bg;
@@ -282,7 +279,7 @@ struct Ctx {
         u32 curr_col;
         u32 prev_col;
         u32 line_w;
-        char* text_font_dyn;
+        XftFont* text_font;
 
         enum ToolTag {
             Tool_Selection,
@@ -487,15 +484,15 @@ static char* str_new(char const* fmt, ...);
 static char* str_new_va(char const* fmt, va_list args);
 static void str_free(char** str_dyn);
 
+static struct ToolCtx tc_new(struct DrawCtx* dc);
 static void tc_set_curr_col_num(struct ToolCtx* tc, u32 value);
 static argb* tc_curr_col(struct ToolCtx* tc);
 static void tc_set_tool(struct ToolCtx* tc, enum ToolTag type);
-static char const* tc_curr_text_font(struct ToolCtx const* tc);
 static char const* tc_get_tool_name(struct ToolCtx const* tc);
-static void tc_free(struct ToolCtx* tc);
+static void tc_free(Display* dp, struct ToolCtx* tc);
 
-static Bool fnt_set(struct DrawCtx* dc, char const* font_name);
-static void fnt_free(Display* dp, struct Fnt* fnt);
+static Bool xft_font_set(struct DrawCtx* dc, char const* font_name, XftFont** fnt_out);
+static char const* xft_font_name(XftFont* fnt);
 static struct IOCtx ioctx_new(char const* input);
 static struct IOCtx ioctx_copy(struct IOCtx const* ioctx);
 static void ioctx_set(struct IOCtx* ioctx, char const* input);
@@ -588,7 +585,7 @@ static Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static Rect ximage_calc_damage(XImage* im);
 
-static Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, char const* font_name, argb col, char const* text, u32 text_len);
+static Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, XftFont* font, argb col, char const* text, u32 text_len);
 static Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col1, argb col2);
 static Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2);
@@ -1023,6 +1020,22 @@ void str_free(char** str_dyn) {
     }
 }
 
+struct ToolCtx tc_new(struct DrawCtx* dc) {
+    struct ToolCtx result = {
+        .colarr = NULL,
+        .curr_col = 0,
+        .prev_col = 0,
+        .line_w = TOOLS_DEFAULT_LINE_W,
+    };
+    arrpush(result.colarr, 0xFF000000);
+    arrpush(result.colarr, 0xFFFFFFFF);
+    if (!xft_font_set(dc, TEXT_TOOL_DEFAULT_FONT, &result.text_font)) {
+        die("xpaint: tc_new: failed to load font: ", TEXT_TOOL_DEFAULT_FONT);
+    }
+
+    return result;
+}
+
 void tc_set_curr_col_num(struct ToolCtx* tc, u32 value) {
     tc->prev_col = tc->curr_col;
     tc->curr_col = value;
@@ -1077,13 +1090,6 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
     }
 }
 
-char const* tc_curr_text_font(struct ToolCtx const* tc) {
-    if (tc == NULL || tc->text_font_dyn == NULL) {
-        return TEXT_TOOL_DEFAULT_FONT;
-    }
-    return tc->text_font_dyn;
-}
-
 char const* tc_get_tool_name(struct ToolCtx const* tc) {
     switch (tc->t) {
         case Tool_Text: return "text   ";
@@ -1102,28 +1108,30 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
     UNREACHABLE();
 }
 
-void tc_free(struct ToolCtx* tc) {
-    str_free(&tc->text_font_dyn);
+void tc_free(Display* dp, struct ToolCtx* tc) {
+    if (tc->text_font != NULL) {
+        XftFontClose(dp, tc->text_font);
+    }
     arrfree(tc->colarr);
 }
 
-Bool fnt_set(struct DrawCtx* dc, char const* font_name) {
+Bool xft_font_set(struct DrawCtx* dc, char const* font_name, XftFont** fnt_out) {
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
         // FIXME never go there
         return False;
     }
-    fnt_free(dc->dp, &dc->fnt);
-    dc->fnt.xfont = xfont;
-    dc->fnt.h = xfont->ascent + xfont->descent;
+    if (*fnt_out != NULL) {
+        XftFontClose(dc->dp, *fnt_out);
+    }
+    *fnt_out = xfont;
     return True;
 }
 
-void fnt_free(Display* dp, struct Fnt* fnt) {
-    if (fnt->xfont) {
-        XftFontClose(dp, fnt->xfont);
-        fnt->xfont = NULL;
-    }
+char const* xft_font_name(XftFont* fnt) {
+    char* result = NULL;
+    XftPatternGetString(fnt->pattern, FC_FULLNAME, 0, &result);
+    return result;
 }
 
 struct IOCtx ioctx_new(char const* input) {
@@ -1577,15 +1585,15 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 } break;
                 case ClCDS_UiFont: {
                     char const* font = cl_cmd->d.set.d.ui_font.name_dyn;
-                    if (!fnt_set(&ctx->dc, font)) {
+                    if (!xft_font_set(&ctx->dc, font, &ctx->dc.fnt)) {
                         msg_to_show = str_new("invalid font name: '%s'", font);
                     }
                 } break;
                 case ClCDS_TextFont: {
                     char const* font = cl_cmd->d.set.d.text_font.name_dyn;
-                    // FIXME no check for font validity
-                    str_free(&CURR_TC(ctx).text_font_dyn);
-                    CURR_TC(ctx).text_font_dyn = str_new("%s", font);
+                    if (!xft_font_set(&ctx->dc, font, &CURR_TC(ctx).text_font)) {
+                        msg_to_show = str_new("invalid font name: '%s'", font);
+                    }
                 } break;
                 case ClCDS_Inp: {
                     char const* path = cl_cmd->d.set.d.inp.path_dyn;
@@ -2354,7 +2362,7 @@ void text_mode_rerender(struct Ctx* ctx) {
         &ctx->dc,
         inp->ovr.im,
         td->tool_data.lb_corner,
-        tc_curr_text_font(tc),
+        tc->text_font,
         *tc_curr_col(tc),
         td->textarr,
         arrlen(td->textarr)
@@ -2920,17 +2928,9 @@ Rect ximage_calc_damage(XImage* im) {
     return damage;
 }
 
-Rect canvas_text(
-    struct DrawCtx* dc,
-    XImage* im,
-    Pair lt_c,
-    char const* font_name,
-    argb col,
-    char const* text,
-    u32 text_len
-) {
+Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, XftFont* font, argb col, char const* text, u32 text_len) {
     Rect damage = RNIL;
-    if (text == NULL || font_name == NULL || im == NULL || dc == NULL) {
+    if (text == NULL || im == NULL || dc == NULL) {
         return damage;
     }
 
@@ -2941,11 +2941,6 @@ Rect canvas_text(
         return damage;
     }
 
-    XftFont* font = XftFontOpenName(dc->dp, dc->sys.vinfo.screen, font_name);
-    if (!font) {
-        trace("xpaint: canvas_text: failed to open font");
-        return damage;
-    }
     Rect const text_rect = get_string_rect(dc, font, text, text_len, lt_c);
     Pair const text_dims = rect_dims(text_rect);
 
@@ -2967,7 +2962,6 @@ Rect canvas_text(
     XDestroyImage(image);
 
     XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &color);
-    XftFontClose(dc->dp, font);
     XftDrawDestroy(d);
     XFreePixmap(dc->dp, pm);
 
@@ -3354,7 +3348,7 @@ void overlay_free(struct InputOverlay* ovr) {
 }
 
 u32 statusline_height(struct DrawCtx const* dc) {
-    return dc->fnt.xfont->ascent + STATUSLINE_PADDING_BOTTOM;
+    return dc->fnt->ascent + STATUSLINE_PADDING_BOTTOM;
 }
 
 Pair clientarea_size(struct DrawCtx const* dc) {
@@ -3386,7 +3380,7 @@ void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool
     XftDrawStringUtf8(
         d,
         invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
-        dc->fnt.xfont,
+        dc->fnt,
         c.x,
         c.y,
         (FcChar8 const*)str,
@@ -3440,7 +3434,7 @@ void draw_dash_rect(struct DrawCtx* dc, Pair points[4]) {
 
 u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     XGlyphInfo ext;
-    XftTextExtentsUtf8(dc->dp, dc->fnt.xfont, (XftChar8*)str, (i32)len, &ext);
+    XftTextExtentsUtf8(dc->dp, dc->fnt, (XftChar8*)str, (i32)len, &ext);
     return ext.xOff;
 }
 
@@ -3630,27 +3624,21 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
     }
 
     if (mode->t == InputT_Text) {
-        // FIXME store XftFont in tc
-        XftFont* font = XftFontOpenName(dc->dp, dc->sys.vinfo.screen, tc_curr_text_font(tc));
-        if (font) {
-            Rect const text_rect = get_string_rect(
-                dc,
-                font,
-                mode->d.text.textarr,
-                arrlen(mode->d.text.textarr),
-                mode->d.text.tool_data.lb_corner
-            );
-            draw_dash_rect(
-                dc,
-                // +1 to match Transform rect (idk why it was added)
-                (Pair[4]) {(Pair) {text_rect.l, text_rect.t},
-                           (Pair) {text_rect.r + 1, text_rect.t},
-                           (Pair) {text_rect.r + 1, text_rect.b + 1},
-                           (Pair) {text_rect.l, text_rect.b + 1}}
-            );
-
-            XftFontClose(dc->dp, font);
-        }
+        Rect const text_rect = get_string_rect(
+            dc,
+            tc->text_font,
+            mode->d.text.textarr,
+            arrlen(mode->d.text.textarr),
+            mode->d.text.tool_data.lb_corner
+        );
+        draw_dash_rect(
+            dc,
+            // +1 to match Transform rect (idk why it was added)
+            (Pair[4]) {(Pair) {text_rect.l, text_rect.t},
+                       (Pair) {text_rect.r + 1, text_rect.t},
+                       (Pair) {text_rect.r + 1, text_rect.b + 1},
+                       (Pair) {text_rect.l, text_rect.b + 1}}
+        );
     }
 
     if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor) && !inp->is_dragging) {
@@ -3721,11 +3709,12 @@ static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
                 case InputT_Transform: return 0;
                 case InputT_Text: {
                     char const* separator = " ";
-                    u32 const str_len = LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(tc_curr_text_font(tc)) + strlen(separator)
+                    char const* font_name = xft_font_name(tc->text_font);
+                    u32 const str_len = LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(font_name) + strlen(separator)
                         + LENGTH(TEXT_MODE_PROMPT) - 1 + arrlen(mode->d.text.textarr) + 1;
                     char* str = ecalloc(str_len, sizeof(char));
                     strcat(str, TEXT_FONT_PROMPT);
-                    strcat(str, tc_curr_text_font(tc));
+                    strcat(str, font_name);
                     strcat(str, separator);
                     strcat(str, TEXT_MODE_PROMPT);
                     strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
@@ -3796,13 +3785,14 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
                     break;
                 case InputT_Text: {
                     char const* separator = " ";
+                    char const* font_name = xft_font_name(tc->text_font);
                     char* str = ecalloc(
-                        LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(tc_curr_text_font(tc)) + strlen(separator)
-                            + LENGTH(TEXT_MODE_PROMPT) - 1 + arrlen(mode->d.text.textarr) + 1,
+                        LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(font_name) + strlen(separator) + LENGTH(TEXT_MODE_PROMPT)
+                            - 1 + arrlen(mode->d.text.textarr) + 1,
                         sizeof(char)
                     );
                     strcat(str, TEXT_FONT_PROMPT);
-                    strcat(str, tc_curr_text_font(tc));
+                    strcat(str, font_name);
                     strcat(str, separator);
                     strcat(str, TEXT_MODE_PROMPT);
                     strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
@@ -4067,20 +4057,6 @@ void setup(Display* dp, struct Ctx* ctx) {
     assert(dp);
     assert(ctx);
 
-    /* init arrays */ {
-        for (u32 i = 0; i < TCS_NUM; ++i) {
-            struct ToolCtx tc = {
-                .colarr = NULL,
-                .curr_col = 0,
-                .prev_col = 0,
-                .line_w = TOOLS_DEFAULT_LINE_W,
-            };
-            arrpush(ctx->tcarr, tc);
-            arrpush(ctx->tcarr[i].colarr, 0xFF000000);
-            arrpush(ctx->tcarr[i].colarr, 0xFFFFFFFF);
-        }
-    }
-
     /* init fontconfig */ {
         if (!FcInit()) {
             die("failed to initialize fontconfig");
@@ -4204,8 +4180,14 @@ void setup(Display* dp, struct Ctx* ctx) {
 
     ctx->dc.back_buffer = XdbeAllocateBackBufferName(dp, ctx->dc.window, 0);
 
-    if (!fnt_set(&ctx->dc, FONT_NAME)) {
-        die("failed to load default font: %s", FONT_NAME);
+    if (!xft_font_set(&ctx->dc, FONT_NAME, &ctx->dc.fnt)) {
+        die("failed to load default ui font: %s", FONT_NAME);
+    }
+
+    /* tc */ {
+        for (u32 i = 0; i < TCS_NUM; ++i) {
+            arrpush(ctx->tcarr, tc_new(&ctx->dc));
+        }
     }
 
     /* schemes */ {
@@ -5133,7 +5115,7 @@ void cleanup(struct Ctx* ctx) {
     /* Selection circle */ { sel_circ_free_and_hide(&ctx->sc); }
     /* ToolCtx */ {
         for (u32 i = 0; i < TCS_NUM; ++i) {
-            tc_free(&ctx->tcarr[i]);
+            tc_free(ctx->dc.dp, &ctx->tcarr[i]);
         }
         arrfree(ctx->tcarr);
     }
@@ -5153,7 +5135,9 @@ void cleanup(struct Ctx* ctx) {
             }
             free(ctx->dc.schemes_dyn);
         }
-        fnt_free(ctx->dc.dp, &ctx->dc.fnt);
+        if (ctx->dc.fnt != NULL) {
+            XftFontClose(ctx->dc.dp, ctx->dc.fnt);
+        }
         canvas_free(&ctx->dc.cv);
         XdbeDeallocateBackBufferName(ctx->dc.dp, ctx->dc.back_buffer);
         XDestroyIC(ctx->dc.sys.xic);
