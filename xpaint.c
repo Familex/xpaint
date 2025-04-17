@@ -612,13 +612,12 @@ static Pair clientarea_size(struct DrawCtx const* dc);
 static Pair canvas_size(struct DrawCtx const* dc);
 static void draw_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col);
 static void fill_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col);
-static void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert);
-static void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert);
+static u32 draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert);
+static u32 draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert);
 static int fill_rect(struct DrawCtx* dc, Pair p, Pair dim, argb col);
 static int draw_line_ex(struct DrawCtx* dc, Pair from, Pair to, u32 w, int line_style, enum Schm sc, Bool invert);
 static int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool invert);
 static void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w);
-static u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i);
 static void draw_dash_rect(struct DrawCtx* dc, Pair points[4]);
 // FIXME merge with get_string_rect?
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
@@ -3375,8 +3374,10 @@ void fill_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb 
     XFillArc(dc->dp, dc->window, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
 }
 
-void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert) {
+u32 draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert) {
     XftDraw* d = XftDrawCreate(dc->dp, dc->back_buffer, dc->sys.vinfo.visual, dc->sys.colmap);
+    u32 str_len = strlen(str);
+    u32 const width = get_string_width(dc, str, str_len);
     XftDrawStringUtf8(
         d,
         invert ? &dc->schemes_dyn[sc].bg : &dc->schemes_dyn[sc].fg,
@@ -3384,15 +3385,17 @@ void draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool
         c.x,
         c.y,
         (FcChar8 const*)str,
-        (i32)strlen(str)
+        (i32)str_len
     );
     XftDrawDestroy(d);
+    return width;
 }
 
-void draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
+u32 draw_int(struct DrawCtx* dc, i32 i, Pair c, enum Schm sc, Bool invert) {
     char* msg = str_new("%d", i);
-    draw_string(dc, msg, c, sc, invert);
+    u32 result = draw_string(dc, msg, c, sc, invert);
     str_free(&msg);
+    return result;
 }
 
 // XXX always opaque
@@ -3415,13 +3418,6 @@ int draw_line(struct DrawCtx* dc, Pair from, Pair to, u32 w, enum Schm sc, Bool 
 void draw_dash_line(struct DrawCtx* dc, Pair from, Pair to, u32 w) {
     draw_line(dc, from, to, w, SchmNorm, True);
     draw_line_ex(dc, from, to, w, LineOnOffDash, SchmNorm, False);
-}
-
-u32 get_int_width(struct DrawCtx const* dc, char const* format, u32 i) {
-    static u32 const MAX_BUF = 50;
-    char buf[MAX_BUF];
-    (void)snprintf(buf, MAX_BUF, format, i);
-    return get_string_width(dc, buf, strlen(buf));
 }
 
 void draw_dash_rect(struct DrawCtx* dc, Pair points[4]) {
@@ -3666,141 +3662,80 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
     update_statusline(ctx);  // backbuffer swapped here
 }
 
-static u32 get_module_width(struct Ctx const* ctx, SLModule const* module) {
-    struct InputMode const* mode = &ctx->input.mode;
-    struct DrawCtx const* dc = &ctx->dc;
-    struct ToolCtx const* tc = &CURR_TC(ctx);
-
-    switch (module->t) {
-        case SLM_Spacer: return module->d.spacer;
-        case SLM_Text: return get_string_width(dc, module->d.text, strlen(module->d.text));
-        case SLM_ToolCtx: {
-            u32 result = 0;
-            for (u32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
-                result += get_int_width(dc, "%d", tc_name) + STATUSLINE_MODULE_SPACING_SMALL_PX;
-            }
-            return result - STATUSLINE_MODULE_SPACING_SMALL_PX;
-        }
-        case SLM_Mode: {
-            char const* int_str = input_mode_as_str(ctx->input.mode.t);
-            return get_string_width(dc, int_str, strlen(int_str));
-        }
-        case SLM_Tool: {
-            char const* tool_str = tc_get_tool_name(tc);
-            return get_string_width(dc, tool_str, strlen(tool_str));
-        }
-        case SLM_ToolSettings:
-            switch (mode->t) {
-                case InputT_Interact: {
-                    switch (tc->t) {
-                        case Tool_Selection:
-                        case Tool_Fill:
-                        case Tool_Picker:
-                        case Tool_Figure:
-                        case Tool_Text: return 0;
-                        case Tool_Pencil: return get_int_width(dc, "%d", tc->line_w);
-                        case Tool_Brush:
-                            return get_int_width(dc, "%d", tc->line_w) + +STATUSLINE_MODULE_SPACING_SMALL_PX
-                                + get_int_width(dc, "%d", TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 0);
-                    }
-                } break;
-                case InputT_Color:
-                case InputT_Console:
-                case InputT_Transform: return 0;
-                case InputT_Text: {
-                    char const* separator = " ";
-                    char const* font_name = xft_font_name(tc->text_font);
-                    u32 const str_len = LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(font_name) + strlen(separator)
-                        + LENGTH(TEXT_MODE_PROMPT) - 1 + arrlen(mode->d.text.textarr) + 1;
-                    char* str = ecalloc(str_len, sizeof(char));
-                    strcat(str, TEXT_FONT_PROMPT);
-                    strcat(str, font_name);
-                    strcat(str, separator);
-                    strcat(str, TEXT_MODE_PROMPT);
-                    strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
-                    u32 const result = get_string_width(dc, str, str_len);
-                    free(str);
-                    return result;
-                }
-            }
-            break;
-        case SLM_ColorBox: return module->d.color_box_w;
-        case SLM_ColorName:
-            // XXX uses 'F' as overage character
-            return get_string_width(dc, "#FFFFFF", 7);
-        case SLM_ColorList: return get_string_width(dc, "/", 1) + (get_int_width(dc, "%d", MAX_COLORS) * 2);
-    }
-    UNREACHABLE();
-    return 0;
-}
-
-static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
+static u32 draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
     struct DrawCtx* dc = &ctx->dc;
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct InputMode* mode = &ctx->input.mode;
 
     switch (module->t) {
-        case SLM_Spacer: break;
+        case SLM_Spacer: return module->d.spacer;
         case SLM_Text: {
             char const* str = module->d.text;
-            draw_string(dc, str, c, SchmNorm, False);
+            return draw_string(dc, str, c, SchmNorm, False);
         } break;
         case SLM_ToolCtx: {
-            i32 x = c.x;
+            u32 x = c.x;
             for (u32 tc_name = 1; tc_name <= TCS_NUM; ++tc_name) {
                 enum Schm const schm = ctx->curr_tc == (tc_name - 1) ? SchmFocus : SchmNorm;
-                draw_int(dc, (i32)tc_name, (Pair) {x, c.y}, schm, False);
-                x += (i32)(get_int_width(dc, "%d", tc_name) + STATUSLINE_MODULE_SPACING_SMALL_PX);
+                x += draw_int(dc, (i32)tc_name, (Pair) {(i32)x, c.y}, schm, False);
+                x += STATUSLINE_MODULE_SPACING_SMALL_PX;
             }
+            return x - STATUSLINE_MODULE_SPACING_SMALL_PX;
         } break;
         case SLM_Mode: {
             char const* name = input_mode_as_str(mode->t);
             enum Schm const schm = mode->t == InputT_Interact ? SchmNorm : SchmFocus;
-            draw_string(dc, name, c, schm, False);
+            return draw_string(dc, name, c, schm, False);
         } break;
         case SLM_Tool: {
             char const* name = tc_get_tool_name(tc);
-            draw_string(dc, name, c, SchmNorm, False);
+            return draw_string(dc, name, c, SchmNorm, False);
         } break;
         case SLM_ToolSettings: {
             switch (mode->t) {
                 case InputT_Color:
                 case InputT_Console:
-                case InputT_Transform: break;
+                case InputT_Transform: return 0;
                 case InputT_Interact:
                     switch (tc->t) {
                         case Tool_Selection:
                         case Tool_Fill:
                         case Tool_Picker:
                         case Tool_Figure:
-                        case Tool_Text: break;
+                        case Tool_Text: return 0;
                         case Tool_Pencil: {
-                            draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
-                        } break;
+                            return draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
+                        }
                         case Tool_Brush: {
                             i32 const val = TC_IS_DRAWER(tc) ? (i32)tc->d.drawer.spacing : 0;
-                            draw_int(dc, val, c, SchmNorm, False);
-                        } break;
+                            return draw_int(dc, val, c, SchmNorm, False);
+                        }
                     }
-                    break;
+                    UNREACHABLE();
                 case InputT_Text: {
                     char const* separator = " ";
                     char const* font_name = xft_font_name(tc->text_font);
                     char* str = ecalloc(
-                        LENGTH(TEXT_FONT_PROMPT) - 1 + strlen(font_name) + strlen(separator) + LENGTH(TEXT_MODE_PROMPT)
-                            - 1 + arrlen(mode->d.text.textarr) + 1,
+                        (LENGTH(TEXT_FONT_PROMPT) - 1) + (strlen(font_name) + 2) + strlen(separator)
+                            + (LENGTH(TEXT_MODE_PROMPT) - 1) + arrlen(mode->d.text.textarr) + 1,
                         sizeof(char)
                     );
                     strcat(str, TEXT_FONT_PROMPT);
+                    strcat(str, "\"");
                     strcat(str, font_name);
+                    strcat(str, "\"");
                     strcat(str, separator);
                     strcat(str, TEXT_MODE_PROMPT);
                     strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
-                    draw_string(dc, str, c, SchmNorm, False);
+                    u32 width = draw_string(dc, str, c, SchmNorm, False);
+
                     free(str);
-                } break;
+
+                    return width;
+                }
             }
-        } break;
+            UNREACHABLE();
+        }
         case SLM_ColorBox: {
             fill_rect(
                 dc,
@@ -3808,13 +3743,14 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
                 (Pair) {(i32)module->d.color_box_w, (i32)statusline_height(dc)},
                 *tc_curr_col(tc)
             );
-        } break;
+            return module->d.color_box_w;
+        }
         case SLM_ColorName: {
             static u32 const col_value_size = 1 + 6;
 
             char col_value[col_value_size + 1];
             (void)sprintf(col_value, "#%06X", *tc_curr_col(tc) & 0xFFFFFF);
-            draw_string(dc, col_value, c, SchmNorm, False);
+            u32 width = draw_string(dc, col_value, c, SchmNorm, False);
             // draw focused digit
             if (mode->t == InputT_Color) {
                 static u32 const hash_w = 1;
@@ -3823,14 +3759,17 @@ static void draw_module(struct Ctx* ctx, SLModule const* module, Pair c) {
                 u32 focus_offset = get_string_width(dc, col_value, curr_dig + hash_w);
                 draw_string(dc, col_digit_value, (Pair) {c.x + (i32)focus_offset, c.y}, SchmFocus, False);
             }
-        } break;
+            return width;
+        }
         case SLM_ColorList: {
             // FIXME why it compiles
             char col_count[(digit_count(MAX_COLORS) * 2) + 1 + 1];
             (void)sprintf(col_count, "%d/%td", tc->curr_col + 1, arrlen(tc->colarr));
-            draw_string(dc, col_count, c, SchmNorm, False);
-        } break;
+            return draw_string(dc, col_count, c, SchmNorm, False);
+        }
     }
+
+    UNREACHABLE();
 }
 
 void update_statusline(struct Ctx* ctx) {
@@ -3898,9 +3837,9 @@ void update_statusline(struct Ctx* ctx) {
             u32 x = 0;
             for (u32 i = 0; i < LENGTH(LEFT_MODULES); ++i) {
                 SLModule const* module = &LEFT_MODULES[i];
-                draw_module(ctx, module, (Pair) {(i32)x, (i32)y});
 
-                x += get_module_width(ctx, module) + STATUSLINE_MODULE_SPACING_PX;
+                x += draw_module(ctx, module, (Pair) {(i32)x, (i32)y});
+                x += STATUSLINE_MODULE_SPACING_PX;
             }
         }
 
@@ -3909,10 +3848,9 @@ void update_statusline(struct Ctx* ctx) {
             u32 x = dc->width;
             for (i32 i = LENGTH(RIGHT_MODULES) - 1; i >= 0; --i) {
                 SLModule const* module = &RIGHT_MODULES[i];
-                x -= get_module_width(ctx, module);
-
+                // HACK draw out of client area to get module width
+                x -= draw_module(ctx, module, (Pair) {1000000, (i32)y});
                 draw_module(ctx, module, (Pair) {(i32)x, (i32)y});
-
                 x -= STATUSLINE_MODULE_SPACING_PX;
             }
         }
@@ -4180,8 +4118,8 @@ void setup(Display* dp, struct Ctx* ctx) {
 
     ctx->dc.back_buffer = XdbeAllocateBackBufferName(dp, ctx->dc.window, 0);
 
-    if (!xft_font_set(&ctx->dc, FONT_NAME, &ctx->dc.fnt)) {
-        die("failed to load default ui font: %s", FONT_NAME);
+    if (!xft_font_set(&ctx->dc, UI_FONT_NAME, &ctx->dc.fnt)) {
+        die("failed to load default ui font: %s", UI_FONT_NAME);
     }
 
     /* tc */ {
