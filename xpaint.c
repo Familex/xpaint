@@ -2569,6 +2569,10 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
 }
 
 Rect tool_text_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)) {
+        return RNIL;
+    }
+
     struct ToolCtx* tc = &CURR_TC(ctx);
     assert(tc->t == Tool_Text);
 
