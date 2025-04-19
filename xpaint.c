@@ -75,6 +75,7 @@ INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
 #define BRUSH_LINE_W_MOD 4.0
 #define TEXT_FONT_PROMPT "font: "
 #define TEXT_MODE_PROMPT "text: "
+#define CL_CMD_PROMPT    ":"
 
 #define CURR_TC(p_ctx)     ((p_ctx)->tcarr[(p_ctx)->curr_tc])
 // XXX workaround
@@ -3787,16 +3788,31 @@ void update_statusline(struct Ctx* ctx) {
 
     if (mode->t == InputT_Console) {
         struct InputConsoleData* cl = &mode->d.cl;
-        char const* command = cl->cmdarr;
-        usize const command_len = arrlen(command);
-        // extra 2 for prompt and terminator
-        char* cl_str_dyn = ecalloc(2 + command_len, sizeof(char));
-        cl_str_dyn[0] = ':';
-        cl_str_dyn[command_len + 1] = '\0';
-        memcpy(cl_str_dyn + 1, command, command_len);
-        i32 const user_cmd_w = (i32)get_string_width(dc, cl_str_dyn, command_len + 1);
         i32 const cmd_y = (i32)(dc->height - STATUSLINE_PADDING_BOTTOM);
-        draw_string(dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
+
+        i32 user_cmd_w = NIL;
+        /* draw command */ {
+            char const* command = cl->cmdarr;
+            usize const command_len = arrlen(command);
+
+            char* cl_str_dyn = ecalloc(strlen(CL_CMD_PROMPT) + command_len + 1, sizeof(char));
+            strcat(cl_str_dyn, CL_CMD_PROMPT);
+            strncat(cl_str_dyn + strlen(CL_CMD_PROMPT), command, command_len);
+
+            user_cmd_w = (i32)draw_string(dc, cl_str_dyn, (Pair) {0, cmd_y}, SchmNorm, False);
+
+            str_free(&cl_str_dyn);
+        }
+
+        /* draw cursor */ {
+            i32 const indent = 2;
+            i32 const cursor_w = 1;
+
+            i32 const cursor_width = (i32)get_string_width(dc, "_", 1);
+            Pair const c = {user_cmd_w, cmd_y + indent};
+            draw_line(dc, c, (Pair) {c.x + cursor_width, c.y}, cursor_w, SchmNorm, False);
+        }
+
         if (cl->compls_arr) {
             draw_string(dc, cl->compls_arr[cl->compls_curr].val_dyn, (Pair) {user_cmd_w, cmd_y}, SchmFocus, False);
 
@@ -3832,7 +3848,6 @@ void update_statusline(struct Ctx* ctx) {
                 }
             }
         }
-        str_free(&cl_str_dyn);
     } else {
         u32 const y = dc->height - STATUSLINE_PADDING_BOTTOM;
 
