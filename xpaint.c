@@ -2088,13 +2088,33 @@ static char const* get_base_part(char const* path) {
     return last_slash + 1;
 }
 
+static char* expand_home(char const* path) {
+    if (!path) {
+        return NULL;
+    }
+
+    if (path[0] != '~') {
+        return str_new("%s", path);
+    }
+
+    char* home = getenv("HOME");
+    if (home == NULL) {
+        trace("xpaint: $HOME environment variable not found (requested by ~)");
+        return str_new("%s", path);
+    }
+
+    return str_new("%s%s", home, path + 1);
+}
+
 static void cl_compls_update_dirs(struct ComplsItem** result, char const* token, Bool only_dirs, Bool add_delim) {
     if (!token || !result) {
         return;
     }
 
     // Get directory to search in and base name to match against
-    char* search_dir_dyn = get_dir_part(token);
+    char* dir_part_dyn = get_dir_part(token);
+    char* search_dir_dyn = expand_home(dir_part_dyn);
+    free(dir_part_dyn);
     char const* base_name = get_base_part(token);
 
     DIR* dir = opendir(search_dir_dyn);
