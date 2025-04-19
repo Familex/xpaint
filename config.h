@@ -84,6 +84,7 @@ i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
 Bool const CONSOLE_AUTO_COMPLETIONS = True;
 
 // ---------------------------- keymap ---------------------------------------
+// use `xev` command to check keycodes
 
 Button const BTN_MAIN = {Button1, ANY_MOD};
 Button const BTN_SEL_CIRC = {Button3, NO_MOD};
@@ -136,6 +137,7 @@ Key const KEY_TX_ERASE_ALL = {XK_BackSpace, ControlMask};
 // only in console mode
 Key const KEY_CL_REQ_COMPLT = {NO_KEY, NO_MOD};
 Key const KEY_CL_NEXT_COMPLT = {XK_Tab, NO_MOD};
+Key const KEY_CL_PREV_COMPLT = {XK_ISO_Left_Tab, ShiftMask};
 Key const KEY_CL_APPLY_COMPLT = {XK_Return, NO_MOD};
 Key const KEY_CL_ERASE_CHAR = KEY_TX_ERASE_CHAR;
 Key const KEY_CL_ERASE_ALL = KEY_TX_ERASE_ALL;

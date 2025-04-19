@@ -4524,6 +4524,10 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_arr) {
             cl_compls_new(cl);
+        } else if (key_eq(curr, KEY_CL_PREV_COMPLT) && cl->compls_arr) {
+            usize len = (usize)arrlen(cl->compls_arr);
+            usize last = len ? len - 1 : 0;
+            cl->compls_curr = cl->compls_curr == 0 ? last : cl->compls_curr - 1;
         } else if (key_eq(curr, KEY_CL_NEXT_COMPLT) && cl->compls_arr) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
