@@ -2154,7 +2154,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
 
     typedef char const* (*itos_f)(i32);
     // subcommands with own completions
-    if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
+    if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set)) && !strcmp(tok3, "")) {
         cl_compls_update_helper(
             &result,
             tok2,
