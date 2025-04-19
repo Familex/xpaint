@@ -2168,7 +2168,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
         // Check if tok2 is a valid save type
         if (is_valid_token(tok2, (itos_f)&cl_save_type_from_enum, ClCDSv_Last)) {
             // If we have a valid type, suggest directories
-            cl_compls_update_dirs(&result, tok3, True, add_delim);
+            cl_compls_update_dirs(&result, tok3, False, add_delim);
             cl->dont_append_delimeter_after_apply = True;
         } else {
             // If tok2 is empty or not a valid type, suggest types
