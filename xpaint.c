@@ -492,6 +492,8 @@ static void tc_set_tool(struct ToolCtx* tc, enum ToolTag type);
 static char const* tc_get_tool_name(struct ToolCtx const* tc);
 static void tc_free(Display* dp, struct ToolCtx* tc);
 
+// free: with `free` and `arrfree`
+static char** xft_get_fonts_arr(void);
 static Bool xft_font_set(struct DrawCtx* dc, char const* font_name, XftFont** fnt_out);
 static char const* xft_font_name(XftFont* fnt);
 static struct IOCtx ioctx_new(char const* input);
@@ -1113,6 +1115,69 @@ void tc_free(Display* dp, struct ToolCtx* tc) {
         XftFontClose(dp, tc->text_font);
     }
     arrfree(tc->colarr);
+}
+
+// change strcmp type to use in `qsort`
+static int compare_strings(const void* a, const void* b) {
+    return strcmp(*(const char**)a, *(const char**)b);
+}
+
+char** xft_get_fonts_arr(void) {
+    FcPattern* pattern = FcPatternCreate();
+    if (!pattern) {
+        trace("xpaint: xft_get_font_arr: failed to create font pattern");
+        return NULL;
+    }
+
+    // only family names
+    FcObjectSet* object_set = FcObjectSetBuild(FC_FAMILY, NULL);
+    if (!object_set) {
+        trace("xpaint: xft_get_font_arr: failed to create object set");
+        FcPatternDestroy(pattern);
+        return NULL;
+    }
+
+    FcFontSet* font_set = FcFontList(NULL, pattern, object_set);
+    if (!font_set) {
+        trace("xpaint: xft_get_font_arr: failed to retrieve font list");
+        FcObjectSetDestroy(object_set);
+        FcPatternDestroy(pattern);
+        return NULL;
+    }
+
+    char** families_arr = NULL;
+    for (int i = 0; i < font_set->nfont; i++) {
+        FcPattern* font = font_set->fonts[i];
+        FcChar8* family = NULL;
+        // Get the first family name for this font
+        if (FcPatternGetString(font, FC_FAMILY, 0, &family) == FcResultMatch) {
+            arrpush(families_arr, strdup((char*)family));
+        }
+    }
+
+    usize const count = arrlen(families_arr);
+    qsort(families_arr, count, sizeof(char*), compare_strings);
+
+    // filter unique families
+    char** result_arr = NULL;
+    if (count > 0) {
+        for (usize i = 0; i < count - 1; i++) {
+            if (strcmp(families_arr[i], families_arr[i + 1]) != 0) {
+                arrpush(result_arr, families_arr[i]);
+            } else {
+                free(families_arr[i]);
+            }
+        }
+        arrpush(result_arr, families_arr[count - 1]);
+    }
+    // values free'd in filter loop or moved to `result`
+    arrfree(families_arr);
+
+    FcFontSetDestroy(font_set);
+    FcObjectSetDestroy(object_set);
+    FcPatternDestroy(pattern);
+
+    return result_arr;
 }
 
 Bool xft_font_set(struct DrawCtx* dc, char const* font_name, XftFont** fnt_out) {
@@ -2155,6 +2220,26 @@ static void cl_compls_update_dirs(struct ComplsItem** result, char const* token,
     str_free(&search_dir_dyn);
 }
 
+static void cl_compls_update_fonts(struct ComplsItem** result, char const* token, Bool add_delim) {
+    char** fonts = xft_get_fonts_arr();
+
+    for (i32 i = 0; i < arrlen(fonts); ++i) {
+        usize const offset = first_dismatch(token, fonts[i]);
+        if (offset == strlen(token) && offset < strlen(fonts[i])) {
+            // Only add space prefix if we're starting fresh
+            char const* prefix = (add_delim && !*token) ? CL_DELIM : "";
+            struct ComplsItem complt = {
+                .val_dyn = str_new("%s%s", prefix, fonts[i] + offset),
+                .descr_optdyn = NULL,
+            };
+            arrpush(*result, complt);
+        }
+
+        free(fonts[i]);
+    }
+    arrfree(fonts);
+}
+
 usize cl_compls_new(struct InputConsoleData* cl) {
     char* cl_buf_dyn = cl_cmd_get_str_dyn(cl);
     struct ComplsItem* result = NULL;
@@ -2164,6 +2249,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     // prepend delim to completions if not provided
     Bool const add_delim = cl_buf_len != 0 && !last_char_is_space;
 
+    // FIXME strtok in if-chain
     char const* tok1 = strtok(cl_buf_dyn, CL_DELIM);
     char const* tok2 = strtok(NULL, CL_DELIM);
     char const* tok3 = strtok(NULL, "");
@@ -2175,15 +2261,19 @@ usize cl_compls_new(struct InputConsoleData* cl) {
 
     typedef char const* (*itos_f)(i32);
     // subcommands with own completions
-    if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set)) && !strcmp(tok3, "")) {
-        cl_compls_update_helper(
-            &result,
-            tok2,
-            (itos_f)&cl_set_prop_from_enum,
-            (itos_f)&cl_set_prop_descr,
-            ClCDS_Last,
-            add_delim
-        );
+    if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
+        if (!strcmp(tok2, cl_set_prop_from_enum(ClCDS_TextFont))) {
+            cl_compls_update_fonts(&result, tok3, add_delim);
+        } else if (!strcmp(tok3, "")) {
+            cl_compls_update_helper(
+                &result,
+                tok2,
+                (itos_f)&cl_set_prop_from_enum,
+                (itos_f)&cl_set_prop_descr,
+                ClCDS_Last,
+                add_delim
+            );
+        }
     } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
         // Check if tok2 is a valid save type
         if (is_valid_token(tok2, (itos_f)&cl_save_type_from_enum, ClCDSv_Last)) {
