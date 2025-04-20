@@ -2262,7 +2262,8 @@ usize cl_compls_new(struct InputConsoleData* cl) {
     typedef char const* (*itos_f)(i32);
     // subcommands with own completions
     if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
-        if (!strcmp(tok2, cl_set_prop_from_enum(ClCDS_TextFont))) {
+        if (!strcmp(tok2, cl_set_prop_from_enum(ClCDS_TextFont))
+            || !strcmp(tok2, cl_set_prop_from_enum(ClCDS_UiFont))) {
             cl_compls_update_fonts(&result, tok3, add_delim);
         } else if (!strcmp(tok3, "")) {
             cl_compls_update_helper(
