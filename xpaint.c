@@ -1183,7 +1183,7 @@ char** xft_get_fonts_arr(void) {
 Bool xft_font_set(struct DrawCtx* dc, char const* font_name, XftFont** fnt_out) {
     XftFont* xfont = XftFontOpenName(dc->dp, DefaultScreen(dc->dp), font_name);
     if (!xfont) {
-        // FIXME never go there
+        // XXX never goes there (picks default font or something)
         return False;
     }
     if (*fnt_out != NULL) {
@@ -1804,7 +1804,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
             ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Set, .d.ok.d.set.t = ClCDS_Col, .d.ok.d.set.d.col.v = value};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_UiFont))) {
-            char const* font = strtok(NULL, CL_DELIM);
+            char const* font = strtok(NULL, "");  // font with spaces
             if (!font) {
                 return cl_prs_noarg(str_new("ui font"), NULL);
             }
@@ -1814,7 +1814,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
                                    .d.ok.d.set.d.ui_font.name_dyn = font ? str_new("%s", font) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_TextFont))) {
-            char const* font = strtok(NULL, CL_DELIM);
+            char const* font = strtok(NULL, "");  // font with spaces
             if (!font) {
                 return cl_prs_noarg(str_new("text tool font"), NULL);
             }
@@ -1838,7 +1838,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
                                    .d.ok.d.set.d.out.path_dyn = path ? str_new("%s", path) : NULL};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
-            char const* compression = strtok(NULL, CL_DELIM);
+            char const* compression = strtok(NULL, "");
             if (!compression) {
                 return cl_prs_noarg(str_new("compression value"), NULL);
             }
@@ -1848,7 +1848,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
                                    .d.ok.d.set.d.png_cpr.compression = (i32)strtol(compression, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
-            char const* quality = strtok(NULL, CL_DELIM);
+            char const* quality = strtok(NULL, "");
             if (!quality) {
                 return cl_prs_noarg(str_new("image quality"), NULL);
             }
@@ -1858,7 +1858,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
                                    .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
         }
         if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Spacing))) {
-            char const* spacing = strtok(NULL, CL_DELIM);
+            char const* spacing = strtok(NULL, "");
             if (!spacing) {
                 return cl_prs_noarg(str_new("spacing"), NULL);
             }
@@ -1892,7 +1892,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
         if (type == ClCDSv_Last) {
             return cl_prs_invarg(str_new("%s", type_str), str_new("unknown type"), NULL);
         }
-        char const* path = strtok(NULL, "");  // include spaces
+        char const* path = strtok(NULL, "");  // path with spaces
         return (ClCPrsResult) {.t = ClCPrs_Ok,
                                .d.ok.t = ClC_Save,
                                .d.ok.d.save.im_type = type,
