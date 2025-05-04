@@ -201,16 +201,21 @@ struct Ctx {
     } dc;
 
     struct Input {
-        Pair prev_c;
-        u64 last_proc_drag_ev_us;
+        struct CursorState {
+            enum CursorStateTag {
+                CS_None,
+                CS_Hold,
+                CS_Drag,
+            } state;
 
-        Pair anchor;
+            Button btn;  // invalid if state == CS_None
+            Pair pos;  // invalid if state == CS_None
+        } c;
 
-        Bool is_holding;
-        Button holding_button;
+        Pair prev_c;  // last cursor position
 
-        Bool is_dragging;
-        Pair press_pt;
+        u64 last_proc_drag_ev_us;  // optimization to reduce drag events
+        Pair anchor;  // cursor position of last processed drawing tool event
 
         i32 png_compression_level;  // FIXME find better place
         i32 jpg_quality_level;  // FIXME find better place
@@ -2651,8 +2656,8 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
     struct Input* inp = &ctx->input;
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    i32 const begin_x = CLAMP(inp->press_pt.x, 0, dc->cv.im->width);
-    i32 const begin_y = CLAMP(inp->press_pt.y, 0, dc->cv.im->height);
+    i32 const begin_x = CLAMP(inp->c.pos.x, 0, dc->cv.im->width);
+    i32 const begin_y = CLAMP(inp->c.pos.y, 0, dc->cv.im->height);
     i32 const end_x = CLAMP(pointer.x, 0, dc->cv.im->width);
     i32 const end_y = CLAMP(pointer.y, 0, dc->cv.im->height);
 
@@ -2696,17 +2701,17 @@ Rect tool_text_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
 }
 
 Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, BTN_MAIN) && !btn_eq(ctx->input.holding_button, BTN_COPY_SELECTION)) {
+    if (!btn_eq(ctx->input.c.btn, BTN_MAIN) && !btn_eq(ctx->input.c.btn, BTN_COPY_SELECTION)) {
         return RNIL;
     }
 
     struct Input* inp = &ctx->input;
     struct DrawCtx* dc = &ctx->dc;
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
-    i32 const begin_x = MIN(pointer.x, inp->press_pt.x);
-    i32 const begin_y = MIN(pointer.y, inp->press_pt.y);
-    i32 const end_x = MAX(pointer.x, inp->press_pt.x);
-    i32 const end_y = MAX(pointer.y, inp->press_pt.y);
+    i32 const begin_x = MIN(pointer.x, inp->c.pos.x);
+    i32 const begin_y = MIN(pointer.y, inp->c.pos.y);
+    i32 const end_x = MAX(pointer.x, inp->c.pos.x);
+    i32 const end_y = MAX(pointer.y, inp->c.pos.y);
     i32 const w = end_x - begin_x;
     i32 const h = end_y - begin_y;
 
@@ -2763,7 +2768,7 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
     ctx->input.anchor = end;
 
     // all points with drag motion drawn in on_drag
-    if (!ctx->input.is_dragging && state_match(event->state, ShiftMask)) {
+    if (ctx->input.c.state != CS_Drag && state_match(event->state, ShiftMask)) {
         return canvas_line(im, tc, drawer->shape, begin, end, False);
     }
 
@@ -2771,7 +2776,7 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 }
 
 Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)) {
+    if (!btn_eq(ctx->input.c.btn, BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2807,7 +2812,8 @@ Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
 }
 
 Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN) || (!ctx->input.is_dragging && !(state_match(event->state, ShiftMask)))) {
+    if (!btn_eq(get_btn(event), BTN_MAIN)
+        || (ctx->input.c.state != CS_Drag && !(state_match(event->state, ShiftMask)))) {
         return RNIL;
     }
 
@@ -2820,7 +2826,7 @@ Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 }
 
 Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)) {
+    if (!btn_eq(ctx->input.c.btn, BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2835,7 +2841,7 @@ Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 }
 
 Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(ctx->input.holding_button, BTN_MAIN)) {
+    if (!btn_eq(ctx->input.c.btn, BTN_MAIN)) {
         return RNIL;
     }
 
@@ -3754,7 +3760,8 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
         );
     }
 
-    if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor) && !inp->is_dragging) {
+    if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor)
+        && inp->c.state == CS_None) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
         Pair c = point_from_cv_to_scr(dc, inp->anchor);
         Rect const rect = {c.x - size, c.y - size, c.x + size, c.y + size};
@@ -3762,7 +3769,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
         draw_dash_line(dc, (Pair) {rect.l, rect.t}, (Pair) {rect.r, rect.b}, 1);
     }
 
-    if (inp->is_dragging && btn_eq(ctx->input.holding_button, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
+    if (inp->c.state == CS_Drag && btn_eq(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
 
         draw_dash_rect(
@@ -4376,7 +4383,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
     if (inp->mode.t == InputT_Transform || inp->mode.t == InputT_Text) {
         // do nothing
-    } else if ((btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE)) && !ctx->input.is_holding) {
+    } else if (inp->c.state == CS_None && (btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE))) {
         sel_circ_init_and_show(ctx, button, e->x, e->y);
     } else if (tc->on_press) {
         Rect const curr_damage = tc->on_press(ctx, e);
@@ -4387,9 +4394,11 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     update_screen(ctx, (Pair) {e->x, e->y}, False);
     draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
 
-    ctx->input.press_pt = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
-    ctx->input.holding_button = button;
-    ctx->input.is_holding = True;
+    inp->c = (struct CursorState) {
+        .state = CS_Hold,
+        .btn = button,
+        .pos = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y),
+    };
 
     return HR_Ok;
 }
@@ -4444,9 +4453,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         input_set_damage(inp, RNIL);
     }
 
-    inp->is_holding = False;
-    inp->is_dragging = False;
-    inp->press_pt = PNIL;
+    inp->c = (struct CursorState) {0};
 
     sel_circ_free_and_hide(&ctx->sc);
     update_screen(ctx, (Pair) {e->x, e->y}, False);
@@ -4789,9 +4796,9 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     struct Input* inp = &ctx->input;
     Pair const cur = point_from_scr_to_cv_xy(&ctx->dc, e->x, e->y);
 
-    if (ctx->input.is_holding) {
-        if (!ctx->input.is_dragging) {
-            ctx->input.is_dragging = !PAIR_EQ(cur, ctx->input.press_pt);
+    if (ctx->input.c.state != CS_None) {
+        if (ctx->input.c.state != CS_Drag && !PAIR_EQ(cur, ctx->input.c.pos)) {
+            ctx->input.c.state = CS_Drag;
         }
 
         struct timeval current_time;
@@ -4799,7 +4806,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         // XXX mouse scroll and drag event are shared
         u64 const elapsed_from_last = current_time.tv_usec - ctx->input.last_proc_drag_ev_us;
 
-        if (btn_eq(inp->holding_button, BTN_SCROLL_DRAG)) {
+        if (btn_eq(inp->c.btn, BTN_SCROLL_DRAG)) {
             canvas_scroll(&ctx->dc.cv, (Pair) {e->x - inp->prev_c.x, e->y - inp->prev_c.y});
             // last update will be in button_release_hdlr
             if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
@@ -4809,10 +4816,9 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         } else if (elapsed_from_last >= DRAG_EVENT_PROC_PERIOD_US) {
             if (inp->mode.t == InputT_Transform) {
                 struct InputTransformData* transd = &inp->mode.d.trans;
-                Pair const cur_delta = {cur.x - inp->press_pt.x, cur.y - inp->press_pt.y};
+                Pair const cur_delta = {cur.x - inp->c.pos.x, cur.y - inp->c.pos.y};
 
-                if (btn_eq(inp->holding_button, BTN_TRANS_SCALE)
-                    || btn_eq(inp->holding_button, BTN_TRANS_SCALE_UNIFORM)) {
+                if (btn_eq(inp->c.btn, BTN_TRANS_SCALE) || btn_eq(inp->c.btn, BTN_TRANS_SCALE_UNIFORM)) {
                     // adjust scale to match cursor
 
                     Transform trans = transd->acc;
@@ -4824,16 +4830,15 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     Pair dims = {rb_trans.x - lt_trans.x, rb_trans.y - lt_trans.y};
                     DPt scale = {((double)dims.x + delta.x) / dims.x, ((double)dims.y + delta.y) / dims.y};
 
-                    transd->curr.scale = btn_eq(inp->holding_button, BTN_TRANS_SCALE)
+                    transd->curr.scale = btn_eq(inp->c.btn, BTN_TRANS_SCALE)
                         ? scale
                         : (DPt) {MAX(scale.x, scale.y), MAX(scale.x, scale.y)};
-                } else if (btn_eq(inp->holding_button, BTN_TRANS_ROTATE)
-                           | btn_eq(inp->holding_button, BTN_TRANS_ROTATE_SNAP)) {
+                } else if (btn_eq(inp->c.btn, BTN_TRANS_ROTATE) | btn_eq(inp->c.btn, BTN_TRANS_ROTATE_SNAP)) {
                     double const snap_interval = PI / 4;  // 45 degrees in radians
 
                     double angle_delta = cur_delta.y * TFM_MODE_ROTATE_SENSITIVITY;
 
-                    if (btn_eq(inp->holding_button, BTN_TRANS_ROTATE_SNAP)) {
+                    if (btn_eq(inp->c.btn, BTN_TRANS_ROTATE_SNAP)) {
                         // Snap to nearest 45° increment relative to accumulated rotation
                         double const total_angle = transd->acc.rotate + angle_delta;
                         double const snapped_total = round(total_angle / snap_interval) * snap_interval;
@@ -4841,9 +4846,9 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     }
 
                     transd->curr.rotate = angle_delta;
-                } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE)) {
+                } else if (btn_eq(inp->c.btn, BTN_TRANS_MOVE)) {
                     transd->curr.move = cur_delta;
-                } else if (btn_eq(inp->holding_button, BTN_TRANS_MOVE_LOCK)) {
+                } else if (btn_eq(inp->c.btn, BTN_TRANS_MOVE_LOCK)) {
                     Pair snapped = cur_delta;
                     double const angle_threshold = 0.4142;  // tan(22.5°)
                     i32 const min_move = 2;  // Minimum pixels to trigger snapping
