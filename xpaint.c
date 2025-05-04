@@ -164,10 +164,6 @@ typedef enum {
 } HdlrResult;
 
 struct Ctx {
-    // FIXME find better place
-    XSyncCounter sync_counter;
-    XSyncValue last_sync_request_value;
-
     struct DrawCtx {
         // readonly outside setup and cleanup functions
         struct System {
@@ -334,6 +330,11 @@ struct Ctx {
             argb col_inner;
         }* items_arr;
     } sc;
+
+    struct StateXSync {
+        XSyncCounter counter;
+        XSyncValue last_request_value;
+    } xsync;
 
     struct SelectionBuffer {
         XImage* im;
@@ -3995,7 +3996,7 @@ void update_statusline(struct Ctx* ctx) {
         1
     );
 
-    XSyncSetCounter(dc->dp, ctx->sync_counter, ctx->last_sync_request_value);
+    XSyncSetCounter(dc->dp, ctx->xsync.counter, ctx->xsync.last_request_value);
 }
 
 // FIXME DRY
@@ -4207,8 +4208,8 @@ void setup(Display* dp, struct Ctx* ctx) {
     }
 
     /* _NET_WM_SYNC_REQUEST */ {
-        XSyncIntToValue(&ctx->last_sync_request_value, 0);
-        ctx->sync_counter = XSyncCreateCounter(dp, ctx->last_sync_request_value);
+        XSyncIntToValue(&ctx->xsync.last_request_value, 0);
+        ctx->xsync.counter = XSyncCreateCounter(dp, ctx->xsync.last_request_value);
 
         XChangeProperty(
             dp,
@@ -4217,7 +4218,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             XA_CARDINAL,
             32,
             PropModeReplace,
-            (unsigned char*)&ctx->sync_counter,
+            (unsigned char*)&ctx->xsync.counter,
             1
         );
     }
@@ -5154,7 +5155,7 @@ HdlrResult client_message_hdlr(struct Ctx* ctx, XEvent* event) {
         }
 
         if ((Atom)e->data.l[0] == atoms[A_NetWmSyncRequest]) {
-            ctx->last_sync_request_value = (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
+            ctx->xsync.last_request_value = (XSyncValue) {.lo = e->data.l[2], .hi = (i32)e->data.l[3]};
             return HR_Ok;
         }
     }
@@ -5170,7 +5171,7 @@ void cleanup(struct Ctx* ctx) {
             }
         }
     }
-    /* sync counter */ { XSyncDestroyCounter(ctx->dc.dp, ctx->sync_counter); }
+    /* sync counter */ { XSyncDestroyCounter(ctx->dc.dp, ctx->xsync.counter); }
     /* file paths */ {
         ioctx_free(&ctx->out);
         ioctx_free(&ctx->inp);
