@@ -1,5 +1,3 @@
-#define _POSIX_C_SOURCE 200809L  // Enable POSIX.1-2008 features
-
 #include <X11/Xatom.h>  // XA_*
 #include <X11/Xft/Xft.h>
 #include <X11/extensions/Xdbe.h>  // back buffer

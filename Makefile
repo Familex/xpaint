@@ -99,13 +99,15 @@ DEBUG_NO_SYMBOLS_FLAGS = -O0 -DNDEBUG -Wno-error
 
 INCS = $(shell $(PKG_CONFIG) --cflags x11 xext xft xrender fontconfig)
 LIBS = $(shell $(PKG_CONFIG) --libs x11 xext xft xrender fontconfig) -lm
-DEFINES = -DVERSION=\"$(VERSION)\" \
-	$(shell \
-		for res in ./res/* ; do \
-			echo -n $$(basename $$res) \
-				| tr '-' '_' \
-				| sed -En 's/(.*)\..*/\U-DRES_SZ_\1/p'; \
-			echo -n "=$$(stat -c %s $$res) "; \
-		done \
-	)
+DEFINES = \
+	-D_POSIX_C_SOURCE=200809L \
+	-DVERSION=\"$(VERSION)\" \
+		$(shell \
+			for res in ./res/* ; do \
+				echo -n $$(basename $$res) \
+					| tr '-' '_' \
+					| sed -En 's/(.*)\..*/\U-DRES_SZ_\1/p'; \
+				echo -n "=$$(stat -c %s $$res) "; \
+			done \
+		)
 CCFLAGS = $(LANG_FLAGS) $(INCS) $(LIBS) $(DEFINES)
