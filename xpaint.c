@@ -1245,6 +1245,12 @@ char** xft_get_fonts_arr(void) {
             arrpush(families_arr, strdup((char*)family));
         }
     }
+    if (!families_arr) {
+        FcFontSetDestroy(font_set);
+        FcObjectSetDestroy(object_set);
+        FcPatternDestroy(pattern);
+        return NULL;  // no need to filter empty array
+    }
 
     usize const count = arrlen(families_arr);
     qsort(families_arr, count, sizeof(char*), compare_strings);
