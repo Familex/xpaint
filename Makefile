@@ -2,7 +2,7 @@
 # change them if needed
 
 # xpaint version
-VERSION = 0.11.4
+VERSION = 0.12.0
 
 # installation path
 PREFIX = /usr/local
@@ -17,7 +17,7 @@ PKG_CONFIG ?= pkg-config
 #### targets section
 
 SRC = ./xpaint.c
-HEADERS = ./types.h ./config.h
+HEADERS = ./config.h
 DEPS = $(SRC) $(HEADERS) ./res ./lib
 
 all: help ## default target
@@ -30,6 +30,9 @@ help: ## display this help
 
 run: xpaint-d ## run application with ARGS
 	./xpaint-d -v $(ARGS)
+
+config.h:
+	cp ./config.def.h $@
 
 xpaint: $(DEPS) ## build release application
 	$(MAKE) check-deps

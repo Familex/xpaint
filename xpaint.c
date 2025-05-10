@@ -31,8 +31,24 @@
 
 #pragma GCC diagnostic pop
 
-#include "config.h"
-#include "types.h"
+/*
+ * -opt vars are nullable (optional)
+ * free -dyn vars with 'free' function
+ * free -arr vars with 'arrfree' function
+ * free -imdyn vars with 'stbi_image_free' function
+ * free -xdyn vars with 'XFree' function
+ * structs with t and d fields are tagged unions
+ */
+
+typedef int8_t i8;
+typedef uint8_t u8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+typedef size_t usize;
 
 // embedded data
 INCBIN(u8, pic_tool_fill, "res/tool-fill.png");
@@ -48,23 +64,28 @@ INCBIN(u8, pic_fig_tri, "res/figure-triangle.png");
 INCBIN(u8, pic_fig_fill_on, "res/figure-fill-on.png");
 INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
 
-/*
- * -opt vars are nullable (optional)
- * free -dyn vars with 'free' function
- * free -arr vars with 'arrfree' function
- * free -imdyn vars with 'stbi_image_free' function
- * free -xdyn vars with 'XFree' function
- * structs with t and d fields are tagged unions
- */
+#define MAX(A, B)         ((A) > (B) ? (A) : (B))
+#define MIN(A, B)         ((A) < (B) ? (A) : (B))
+#define CLAMP(X, L, H)    (((X) < (L)) ? (L) : ((X) > (H)) ? (H) : (X))
+#define LENGTH(X)         (sizeof(X) / sizeof(X)[0])
+#define BETWEEN(X, A, B)  ((A) <= (X) && (X) <= (B))
+#define COALESCE(A, B)    ((A) ? (A) : (B))
+#define UNREACHABLE()     __builtin_unreachable()
+#define IS_PNIL(p_pair)   ((p_pair).x == NIL && (p_pair).y == NIL)
+#define PAIR_EQ(p_a, p_b) ((p_a).x == (p_b).x && (p_a).y == (p_b).y)
+#define IS_RNIL(p_rect) \
+    (((p_rect).l) == INT32_MAX && ((p_rect).t) == INT32_MAX && ((p_rect).r) == INT32_MIN && ((p_rect).b) == INT32_MIN)
 
-#define MAX(A, B)        ((A) > (B) ? (A) : (B))
-#define MIN(A, B)        ((A) < (B) ? (A) : (B))
-#define CLAMP(X, L, H)   (((X) < (L)) ? (L) : ((X) > (H)) ? (H) : (X))
-#define LENGTH(X)        (sizeof(X) / sizeof(X)[0])
-#define BETWEEN(X, A, B) ((A) <= (X) && (X) <= (B))
-#define COALESCE(A, B)   ((A) ? (A) : (B))
-#define UNREACHABLE()    __builtin_unreachable()
-
+enum { NO_MOD = 0 };
+#define ANY_MOD UINT_MAX
+#define NO_KEY  XK_VoidSymbol
+#define ANY_KEY UINT_MAX
+enum { NO_MODE = 0 };
+#define ANY_MODE         UINT_MAX
+// default value for signed integers
+#define NIL              (-1)
+#define PNIL             ((Pair) {NIL, NIL})
+#define RNIL             ((Rect) {.l = INT32_MAX, .t = INT32_MAX, .r = INT32_MIN, .b = INT32_MIN})
 #define PI               (3.141)
 // only one one-byte symbol allowed
 #define ARGB_ALPHA       ((argb)(0xFF000000))
@@ -86,6 +107,70 @@ INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
 #define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
 #define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 #define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
+
+typedef u32 argb;
+
+typedef struct {
+    i32 x;
+    i32 y;
+} Pair;
+
+typedef struct {
+    i32 l;
+    i32 t;
+    i32 r;
+    i32 b;
+} Rect;
+
+typedef struct {
+    double x;
+    double y;
+} DPt;
+
+typedef struct {
+    KeySym sym;
+    u32 mask;
+} Key;
+
+typedef struct {
+    u32 button;
+    u32 mask;
+} Button;
+
+enum Schm {
+    SchmNorm,
+    SchmFocus,
+    SchmLast,
+};
+
+typedef struct {
+    enum {
+        SLM_Spacer,  // static spacer
+        SLM_Text,  // static text
+        SLM_ToolCtx,  // list of tool contexts
+        SLM_Mode,  // current mode
+        SLM_Tool,  // current tool
+        SLM_ToolSettings,  // current tool settings
+        SLM_ColorBox,  // rectangle filled with current color
+        SLM_ColorName,  // name of current color
+        SLM_ColorList,  // current index and size of color list
+    } t;  // type
+    union {
+        u32 spacer;  // for SLM_Spacer
+        char const* text;  // for SLM_Text
+        u32 color_box_w;  // for SLM_ColorBox
+    } d;  // data for corresponding type
+} SLModule;  // status line modules
+
+typedef struct {
+    enum {
+        MF_Int = 0x1,  // interact
+        MF_Color = 0x2,  // color
+        MF_Trans = 0x4,  // transform
+        // MF_Term managed manually because can use any key
+    } mode;
+    Key key;
+} Action;
 
 enum {
     A_Cardinal,
@@ -664,6 +749,8 @@ static void cleanup(struct Ctx* ctx);
 static Bool is_verbose_output = False;
 static Atom atoms[A_Last];
 static XImage* images[I_Last];
+
+#include "config.h"
 
 // clang-format off
 static void main_die_if_no_val_for_arg(char const* cmd_name, i32 argc, char** argv, u32 pos);

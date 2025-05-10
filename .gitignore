@@ -4,13 +4,13 @@
 !README.md
 !xpaint.1
 
-!config.h
-!types.h
+!config.def.h
 !xpaint.c
 !/res/
 !/lib/
 
 !Makefile
+!.clangd
 !.clang-format
 !.clang-tidy
 !flake.nix

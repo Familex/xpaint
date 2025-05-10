@@ -1,8 +1,3 @@
-#include <X11/X.h>
-#include <X11/extensions/Xrender.h>
-
-#include "types.h"
-
 char const title[] = "xpaint";
 
 // lag prevention

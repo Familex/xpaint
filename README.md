@@ -25,7 +25,8 @@ Execute `make help` command to see list of all available targets.
 
 ## Configure
 
-Change [config.h](./config.h) file to configure application.
+Create and modify [config.h](./config.h) file to configure the application (recompilation is required).
+See [config.def.h](./config.def.h) for default configuration.
 
 ## Install
 
