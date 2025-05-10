@@ -1668,7 +1668,6 @@ static void ioctx_write_part(void* pctx, void* data, i32 size) {
             }
             if (!fwrite(data, sizeof(char), size, fd)) {
                 trace("xpaint: failed to write to file");
-                return;
             }
             if (fclose(fd) == EOF) {
                 trace("xpaint: failed to close file");
