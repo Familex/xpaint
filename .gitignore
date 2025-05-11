@@ -17,8 +17,6 @@
 !flake.lock
 !/share/
 
-!.valgrind.supp
-
 !LICENSE
 !.gitignore
 !.gitattributes

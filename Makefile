@@ -46,6 +46,10 @@ xpaint-d-ns: $(DEPS) ## build debug (no symbols) application
 	$(MAKE) check-deps
 	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_NO_SYMBOLS_FLAGS)
 
+xpaint-d-no-asan: $(DEPS) ## build debug application without address sanitizer
+	$(MAKE) check-deps
+	@$(CC) -o $@ $(SRC) $(CCFLAGS) $(DEBUG_FLAGS) -fno-sanitize=address
+
 clean: ## remove generated files
 	@$(RM) ./xpaint ./xpaint-d ./xpaint-d-ns ./xpaint-d-no-asan
 
@@ -81,14 +85,7 @@ format: ## format code with clang-format
 dev: clean ## generate dev files
 	bear -- $(MAKE) ./xpaint-d
 
-valgrind: ## debug with valgrind
-	# sanitizer breaks valgrind
-	$(MAKE) DEBUG_FLAGS="$(DEBUG_FLAGS) -fno-sanitize=address" clean xpaint-d
-	mv ./xpaint-d ./xpaint-d-no-asan
-	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
-		--suppressions=./.valgrind.supp $(ARGS) ./xpaint-d-no-asan
-
-.PHONY: all help run clean install uninstall dist check-deps check format dev valgrind
+.PHONY: all help run clean install uninstall dist check-deps check format dev
 
 #### compiler and linker flags
 

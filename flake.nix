@@ -59,7 +59,6 @@
             packages = with pkgs; [
               cargo-flamegraph
               heaptrack
-              valgrind
               gdb
             ];
           };
