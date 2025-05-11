@@ -55,6 +55,7 @@ u32 const SEL_CIRC_INNER_R_PX = 40;
 u32 const SEL_CIRC_LINE_W = 2;
 i32 const SEL_CIRC_LINE_STYLE = LineSolid;
 u32 const SEL_CIRC_COLOR_ITEMS = 100;
+u32 const SEL_CIRC_ITEM_ICON_MARGIN_PX = 5;
 
 // selection tool
 u32 const SEL_TOOL_LINE_W = 2;

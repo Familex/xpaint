@@ -407,13 +407,17 @@ struct Ctx {
         i32 y;
         Bool draw_separators;
         struct Item {
-            void (*on_select)(struct Ctx*, union SCI_Arg);
+            void (*on_select)(struct Ctx* ctx, union SCI_Arg arg);
             union SCI_Arg {
-                enum ToolTag tool;  // in interaction mode
-                enum FigureType figure;  // in interaction mode with figure tool
-                argb col;  // in color mode
+                enum ToolTag tool;
+                enum FigureType figure;
+                argb col;
+                usize num;
+                void* custom;
             } arg;
-            enum Icon icon;
+
+            enum Icon icon;  // option icon
+            char const* desc;  // option description
             argb col_outer;
             argb col_inner;
         }* items_arr;
@@ -3579,12 +3583,12 @@ Pair canvas_size(struct DrawCtx const* dc) {
 
 void draw_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col) {
     XSetForeground(dc->dp, dc->screen_gc, col);
-    XDrawArc(dc->dp, dc->window, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
+    XDrawArc(dc->dp, dc->back_buffer, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
 }
 
 void fill_arc(struct DrawCtx* dc, Pair c, Pair dims, double a1, double a2, argb col) {
     XSetForeground(dc->dp, dc->screen_gc, col);
-    XFillArc(dc->dp, dc->window, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
+    XFillArc(dc->dp, dc->back_buffer, dc->screen_gc, c.x, c.y, dims.x, dims.y, (i32)(a1 * 64), (i32)(a2 * 64));
 }
 
 u32 draw_string(struct DrawCtx* dc, char const* str, Pair c, enum Schm sc, Bool invert) {
@@ -3685,33 +3689,46 @@ void draw_selection_circle(
         double const segment_deg = segment_rad / PI * 180;
 
         // item's properties
-        for (u32 item = 0; item < arrlen(sc->items_arr); ++item) {
-            XImage* image = images[sc->items_arr[item].icon];
-            if (image) {
+        for (u32 item_num = 0; item_num < arrlen(sc->items_arr); ++item_num) {
+            struct Item const* item = &sc->items_arr[item_num];
+            XImage* icon = images[item->icon];
+            Pair center = {
+                (i32)(sc->x + (cos(-segment_rad * (item_num + 0.5)) * ((outer_r + inner_r) * segment_icon_location))),
+                (i32)(sc->y + (sin(-segment_rad * (item_num + 0.5)) * ((outer_r + inner_r) * segment_icon_location))),
+            };
+
+            if (item->col_outer) {
+                fill_arc(dc, outer_c, outer_dims, item_num * segment_deg, segment_deg + (1.0 / 64.0), item->col_outer);
+            }
+
+            if (item->col_inner) {
+                fill_arc(dc, inner_c, inner_dims, item_num * segment_deg, segment_deg + (1.0 / 64.0), item->col_inner);
+            }
+
+            if (icon) {
                 XPutImage(
                     dc->dp,
-                    dc->window,
+                    dc->back_buffer,
                     dc->screen_gc,
-                    image,
+                    icon,
                     0,
                     0,
-                    (i32)(sc->x + (cos(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * segment_icon_location))
-                          - (image->width / 2.0)),
-                    (i32)(sc->y + (sin(-segment_rad * (item + 0.5)) * ((outer_r + inner_r) * segment_icon_location))
-                          - (image->height / 2.0)),
-                    image->width,
-                    image->height
+                    center.x - (icon->width / 2),
+                    center.y - (icon->height / 2),
+                    icon->width,
+                    icon->height
                 );
             }
 
-            argb const col_outer = sc->items_arr[item].col_outer;
-            if (col_outer) {
-                fill_arc(dc, outer_c, outer_dims, item * segment_deg, segment_deg + (1.0 / 64.0), col_outer);
-            }
+            if (item->desc) {
+                Rect const desc_rect = get_string_rect(dc, dc->fnt, item->desc, strlen(item->desc), (Pair) {0, 0});
+                Pair const desc_dims = rect_dims(desc_rect);
+                Pair text_center = {
+                    center.x - (desc_dims.x / 2),
+                    center.y + (desc_dims.y / 2) + (i32)SEL_CIRC_ITEM_ICON_MARGIN_PX + (icon ? icon->height / 2 : 0),
+                };
 
-            argb const col_inner = sc->items_arr[item].col_inner;
-            if (col_inner) {
-                fill_arc(dc, inner_c, inner_dims, item * segment_deg, segment_deg + (1.0 / 64.0), col_inner);
+                draw_string(dc, item->desc, text_center, SchmNorm, False);
             }
         }
 
@@ -3728,7 +3745,7 @@ void draw_selection_circle(
             for (u32 line_num = 0; line_num < arrlen(sc->items_arr); ++line_num) {
                 XDrawLine(
                     dc->dp,
-                    dc->window,
+                    dc->back_buffer,
                     dc->screen_gc,
                     sc->x + (i32)(cos(segment_rad * line_num) * inner_r),
                     sc->y + (i32)(sin(segment_rad * line_num) * inner_r),
@@ -3743,6 +3760,15 @@ void draw_selection_circle(
         draw_arc(dc, inner_c, inner_dims, 0.0, 360.0, COL_FG(dc, SchmNorm));
         draw_arc(dc, outer_c, outer_dims, 0.0, 360.0, COL_FG(dc, SchmNorm));
     }
+
+    XdbeSwapBuffers(
+        dc->dp,
+        &(XdbeSwapInfo) {
+            .swap_window = dc->window,
+            .swap_action = 0,
+        },
+        1
+    );
 }
 
 void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
