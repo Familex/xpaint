@@ -38,6 +38,16 @@ SLModule const RIGHT_MODULES[] = {
     {SLM_ColorList, .d = {0}},
 };
 
+struct Item const ALTERNATIVE_SEL_CIRC_ITEMS[] = {
+    {.arg.tool = Tool_Pencil, .on_select = sel_circ_on_select_tool, .desc = "tool: pencil"},
+    {.arg.col = 0xFF000000, .on_select = sel_circ_on_select_col, .desc = "col: black"},
+    {.arg.col = 0xFFFFFFFF, .on_select = sel_circ_on_select_col, .desc = "col: white"},
+    {.arg.num = 25, .on_select = sel_circ_on_select_set_linew, .desc = "line_w: 25"},
+    {.arg.num = 10, .on_select = sel_circ_on_select_set_linew, .desc = "line_w: 10"},
+    {.arg.num = 5, .on_select = sel_circ_on_select_set_linew, .desc = "line_w: 5"},
+    {.arg.num = 1, .on_select = sel_circ_on_select_set_linew, .desc = "line_w: 1"},
+};
+
 u32 const STATUSLINE_MODULE_SPACING_PX = 5;
 u32 const STATUSLINE_MODULE_SPACING_SMALL_PX = STATUSLINE_MODULE_SPACING_PX / 2;
 u32 const STATUSLINE_PADDING_BOTTOM = 4;

@@ -652,6 +652,17 @@ static void text_mode_rerender(struct Ctx* ctx);
 static void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y);
 static void sel_circ_free_and_hide(struct SelectionCircle* sel_circ);
 static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
+// selection circle item callbacks. Can be unused, if config changed
+__attribute__((unused))
+static void sel_circ_on_select_tool(struct Ctx* ctx, union SCI_Arg tool);
+__attribute__((unused))
+static void sel_circ_on_select_figure_toggle_fill(struct Ctx* ctx, __attribute__((unused)) union SCI_Arg arg);
+__attribute__((unused))
+static void sel_circ_on_select_figure(struct Ctx* ctx, union SCI_Arg figure);
+__attribute__((unused))
+static void sel_circ_on_select_col(struct Ctx* ctx, union SCI_Arg col);
+__attribute__((unused))
+static void sel_circ_on_select_set_linew(struct Ctx* ctx, union SCI_Arg num);
 
 // separate functions, because they are callbacks
 static Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
@@ -2582,19 +2593,32 @@ void text_mode_rerender(struct Ctx* ctx) {
     input_set_damage(inp, damage);
 }
 
-static void sel_circ_on_select_tool(struct Ctx* ctx, union SCI_Arg arg) {
-    tc_set_tool(&CURR_TC(ctx), arg.tool);
+void sel_circ_on_select_tool(struct Ctx* ctx, union SCI_Arg tool) {
+    tc_set_tool(&CURR_TC(ctx), tool.tool);
 }
-static void sel_circ_figure_toggle_fill(struct Ctx* ctx, __attribute__((unused)) union SCI_Arg arg) {
-    CURR_TC(ctx).d.fig.fill ^= 1;
-}
-static void sel_circ_on_select_figure(struct Ctx* ctx, union SCI_Arg arg) {
+
+void sel_circ_on_select_figure_toggle_fill(struct Ctx* ctx, __attribute__((unused)) union SCI_Arg arg) {
     struct ToolCtx* tc = &CURR_TC(ctx);
-    assert(tc->t == Tool_Figure);
-    tc->d.fig.curr = arg.figure;
+
+    if (tc->t == Tool_Figure) {
+        tc->d.fig.fill ^= 1;
+    }
 }
-static void sel_circ_on_select_col(struct Ctx* ctx, union SCI_Arg arg) {
-    *tc_curr_col(&CURR_TC(ctx)) = arg.col;
+
+void sel_circ_on_select_figure(struct Ctx* ctx, union SCI_Arg figure) {
+    struct ToolCtx* tc = &CURR_TC(ctx);
+
+    if (tc->t == Tool_Figure) {
+        tc->d.fig.curr = figure.figure;
+    }
+}
+
+void sel_circ_on_select_col(struct Ctx* ctx, union SCI_Arg col) {
+    *tc_curr_col(&CURR_TC(ctx)) = col.col;
+}
+
+void sel_circ_on_select_set_linew(struct Ctx* ctx, union SCI_Arg num) {
+    CURR_TC(ctx).line_w = num.num;
 }
 
 void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
@@ -2668,39 +2692,46 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
         case InputT_Interact: {
             sc->draw_separators = True;
 
-            switch (tc->t) {
-                case Tool_Text:
-                case Tool_Selection:
-                case Tool_Pencil:
-                case Tool_Fill:
-                case Tool_Picker:
-                case Tool_Brush: {
-                    struct Item items[] = {
-                        {.arg.tool = Tool_Text, .on_select = &sel_circ_on_select_tool, .icon = I_Text},
-                        {.arg.tool = Tool_Selection, .on_select = &sel_circ_on_select_tool, .icon = I_Select},
-                        {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
-                        {.arg.tool = Tool_Fill, .on_select = &sel_circ_on_select_tool, .icon = I_Fill},
-                        {.arg.tool = Tool_Picker, .on_select = &sel_circ_on_select_tool, .icon = I_Picker},
-                        {.arg.tool = Tool_Brush, .on_select = &sel_circ_on_select_tool, .icon = I_Brush},
-                        {.arg.tool = Tool_Figure, .on_select = &sel_circ_on_select_tool, .icon = I_Figure},
-                    };
-                    for (u32 i = 0; i < LENGTH(items); ++i) {
-                        arrpush(sc->items_arr, items[i]);
-                    }
-                } break;
-                case Tool_Figure: {
-                    struct Item items[] = {
-                        {.arg.figure = Figure_Circle, .on_select = &sel_circ_on_select_figure, .icon = I_FigCirc},
-                        {.arg.figure = Figure_Rectangle, .on_select = &sel_circ_on_select_figure, .icon = I_FigRect},
-                        {.arg.figure = Figure_Triangle, .on_select = &sel_circ_on_select_figure, .icon = I_FigTri},
-                        {.on_select = &sel_circ_figure_toggle_fill, .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn
-                        },
-                        {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
-                    };
-                    for (u32 i = 0; i < LENGTH(items); ++i) {
-                        arrpush(sc->items_arr, items[i]);
-                    }
-                } break;
+            if (btn_eq(button, BTN_SEL_CIRC)) {
+                switch (tc->t) {
+                    case Tool_Text:
+                    case Tool_Selection:
+                    case Tool_Pencil:
+                    case Tool_Fill:
+                    case Tool_Picker:
+                    case Tool_Brush: {
+                        struct Item items[] = {
+                            {.arg.tool = Tool_Text, .on_select = &sel_circ_on_select_tool, .icon = I_Text},
+                            {.arg.tool = Tool_Selection, .on_select = &sel_circ_on_select_tool, .icon = I_Select},
+                            {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
+                            {.arg.tool = Tool_Fill, .on_select = &sel_circ_on_select_tool, .icon = I_Fill},
+                            {.arg.tool = Tool_Picker, .on_select = &sel_circ_on_select_tool, .icon = I_Picker},
+                            {.arg.tool = Tool_Brush, .on_select = &sel_circ_on_select_tool, .icon = I_Brush},
+                            {.arg.tool = Tool_Figure, .on_select = &sel_circ_on_select_tool, .icon = I_Figure},
+                        };
+                        for (u32 i = 0; i < LENGTH(items); ++i) {
+                            arrpush(sc->items_arr, items[i]);
+                        }
+                    } break;
+                    case Tool_Figure: {
+                        struct Item items[] = {
+                            {.arg.figure = Figure_Circle, .on_select = &sel_circ_on_select_figure, .icon = I_FigCirc},
+                            {.arg.figure = Figure_Rectangle, .on_select = &sel_circ_on_select_figure, .icon = I_FigRect
+                            },
+                            {.arg.figure = Figure_Triangle, .on_select = &sel_circ_on_select_figure, .icon = I_FigTri},
+                            {.on_select = &sel_circ_on_select_figure_toggle_fill,
+                             .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn},
+                            {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
+                        };
+                        for (u32 i = 0; i < LENGTH(items); ++i) {
+                            arrpush(sc->items_arr, items[i]);
+                        }
+                    } break;
+                }
+            } else {
+                for (u32 i = 0; i < LENGTH(ALTERNATIVE_SEL_CIRC_ITEMS); ++i) {
+                    arrpush(sc->items_arr, ALTERNATIVE_SEL_CIRC_ITEMS[i]);
+                }
             }
         } break;
     }
