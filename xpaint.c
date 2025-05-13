@@ -558,6 +558,7 @@ static Bool btn_eq(Button a, Button b);
 static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
 static char* uri_to_path(char const* uri);
+static usize figure_side_count(enum FigureType type);
 
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
@@ -695,7 +696,9 @@ static Rect ximage_calc_damage(XImage* im);
 static Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, XftFont* font, argb col, char const* text, u32 text_len);
 static Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col1, argb col2);
 static Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col);
-static Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2);
+static Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col);
+// HACK variant argument not clear (used to alternate figure type)
+static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair p_dynamic);
 // line from `a` to `b` is a polygon height (a is a base);
 static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b);
 static Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c);
@@ -999,6 +1002,15 @@ char* uri_to_path(char const* uri) {
     *result_ptr = '\0';
 
     return result;
+}
+
+usize figure_side_count(enum FigureType type) {
+    switch (type) {
+        case Figure_Circle: return 250;
+        case Figure_Rectangle: return 4;
+        case Figure_Triangle: return 3;
+    }
+    return 0;
 }
 
 Rect rect_expand(Rect a, Rect b) {
@@ -2937,7 +2949,8 @@ Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
 }
 
 Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)
+    Button const btn = ctx->input.c.btn;
+    if ((!btn_eq(btn, BTN_MAIN) && !btn_eq(btn, BTN_MAIN_ALTERNATIVE))
         || (ctx->input.c.state != CS_Drag && !(state_match(event->state, ShiftMask)))) {
         return RNIL;
     }
@@ -2945,24 +2958,27 @@ Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
     struct DrawCtx* dc = &ctx->dc;
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
+    u32 const fig_variant = btn_eq(btn, BTN_MAIN_ALTERNATIVE) ? 1 : 0;
 
     overlay_clear(&ctx->input.ovr);
-    return canvas_figure(ctx, ctx->input.ovr.im, pointer, anchor);
+    return canvas_figure(ctx, ctx->input.ovr.im, fig_variant, anchor, pointer);
 }
 
 Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.c.btn, BTN_MAIN)) {
+    Button const btn = ctx->input.c.btn;
+    if (!btn_eq(btn, BTN_MAIN) && !btn_eq(btn, BTN_MAIN_ALTERNATIVE)) {
         return RNIL;
     }
 
     struct DrawCtx* dc = &ctx->dc;
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
+    u32 const fig_variant = btn_eq(btn, BTN_MAIN_ALTERNATIVE) ? 1 : 0;
 
     input_set_damage(&ctx->input, RNIL);  // also undo damage
     overlay_clear(&ctx->input.ovr);
 
-    return canvas_figure(ctx, ctx->input.ovr.im, pointer, anchor);
+    return canvas_figure(ctx, ctx->input.ovr.im, fig_variant, anchor, pointer);
 }
 
 Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
@@ -3230,7 +3246,7 @@ Rect canvas_dash_rect(XImage* im, Pair c, Pair dims, u32 w, u32 dash_w, argb col
         u32 iterations = 0;
         while (!PAIR_EQ(curr, to) && iterations < 10000000) {
             Pair const lt = (Pair) {curr.x - ((i32)w / 2), curr.y - ((i32)w / 2)};
-            argb col = iterations / dash_w % 2 ? col1 : col2;
+            argb col = !dash_w ? col1 : iterations / dash_w % 2 ? col1 : col2;
             Rect d = canvas_fill_rect(im, lt, (Pair) {(i32)w, (i32)w}, col);
             damage = rect_expand(damage, d);
 
@@ -3259,6 +3275,10 @@ Rect canvas_fill_rect(XImage* im, Pair c, Pair dims, argb col) {
     return damage;
 }
 
+Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col) {
+    return canvas_dash_rect(im, c, dims, line_w, 0, col, col);
+}
+
 // FIXME w unused (required because of circle_get_alpha_fn)
 static u8 canvas_brush_get_a(__attribute__((unused)) u32 w, double r, Pair p) {
     double const curr_r = sqrt(((p.x - r) * (p.x - r)) + ((p.y - r) * (p.y - r)));
@@ -3278,8 +3298,8 @@ static Pair get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) 
     return (Pair) {-1, -1};  // will not fill anything
 }
 
-Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2) {
-    if (IS_PNIL(p1) || IS_PNIL(p2)) {
+Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair p_dynamic) {
+    if (IS_PNIL(p_static) || IS_PNIL(p_dynamic)) {
         return RNIL;
     }
     struct ToolCtx* tc = &CURR_TC(ctx);
@@ -3289,18 +3309,51 @@ Rect canvas_figure(struct Ctx* ctx, XImage* im, Pair p1, Pair p2) {
     struct FigureData const* fig = &tc->d.fig;
     argb const col = *tc_curr_col(tc);
 
-    switch (fig->curr) {
-        case Figure_Circle:
-        case Figure_Rectangle:
-        case Figure_Triangle: {
-            u32 sides = fig->curr == Figure_Triangle ? 3 : fig->curr == Figure_Rectangle ? 4 : 250;
-            Rect damage = canvas_regular_poly(im, tc, sides, p2, p1);
-            if (fig->fill) {
-                Pair const im_dims = {im->width, im->height};
-                Pair const fill_pt = get_fig_fill_pt(fig->curr, p2, p1, im_dims);
-                ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
+    if (variant == 1) {
+        switch (fig->curr) {
+            case Figure_Rectangle: {
+                Rect const damage = canvas_rect(
+                    im,
+                    p_static,
+                    (Pair) {p_dynamic.x - p_static.x, p_dynamic.y - p_static.y},
+                    tc->line_w,
+                    col
+                );
+                if (fig->fill) {
+                    Pair const im_dims = {im->width, im->height};
+                    Pair const fill_pt = get_fig_fill_pt(fig->curr, p_dynamic, p_static, im_dims);
+                    ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
+                }
+                return damage;
             }
-            return damage;
+            case Figure_Circle:
+            case Figure_Triangle: {
+                // d_static at figure center
+                Pair const diff = {p_dynamic.x - p_static.x, p_dynamic.y - p_static.y};
+                Pair const p_opposite = {p_static.x - diff.x, p_static.y - diff.y};
+
+                Rect damage = canvas_regular_poly(im, tc, figure_side_count(fig->curr), p_dynamic, p_opposite);
+                if (fig->fill) {
+                    Pair const im_dims = {im->width, im->height};
+                    Pair const fill_pt = get_fig_fill_pt(fig->curr, p_dynamic, p_opposite, im_dims);
+                    ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
+                }
+                return damage;
+            }
+        }
+    } else {
+        switch (fig->curr) {
+            case Figure_Circle:
+            case Figure_Rectangle:
+            case Figure_Triangle: {
+                Rect damage = canvas_regular_poly(im, tc, figure_side_count(fig->curr), p_dynamic, p_static);
+                if (fig->fill) {
+                    Pair const im_dims = {im->width, im->height};
+                    Pair const fill_pt = get_fig_fill_pt(fig->curr, p_dynamic, p_static, im_dims);
+                    ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
+                }
+                return damage;
+            }
         }
     }
 
