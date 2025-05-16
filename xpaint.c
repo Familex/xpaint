@@ -559,6 +559,7 @@ static Bool key_eq(Key a, Key b);
 static Bool can_action(struct Input const* input, Key curr_key, Action act);
 static char* uri_to_path(char const* uri);
 static usize figure_side_count(enum FigureType type);
+static char* path_expand_home(char const* path);
 
 static Rect rect_expand(Rect a, Rect b);
 static Pair rect_dims(Rect a);
@@ -1013,6 +1014,24 @@ usize figure_side_count(enum FigureType type) {
     return 0;
 }
 
+char* path_expand_home(char const* path) {
+    if (!path) {
+        return NULL;
+    }
+
+    if (path[0] != '~') {
+        return str_new("%s", path);
+    }
+
+    char* home = getenv("HOME");
+    if (home == NULL) {
+        trace("xpaint: $HOME environment variable not found (requested by ~)");
+        return str_new("%s", path);
+    }
+
+    return str_new("%s%s", home, path + 1);
+}
+
 Rect rect_expand(Rect a, Rect b) {
     return (Rect) {
         .l = MIN(a.l, b.l),
@@ -1335,9 +1354,11 @@ struct IOCtx ioctx_new(char const* input) {
             .d.file.path_dyn = uri_to_path(input),
         };
     }
+
+    char* expanded_path_dyn = path_expand_home(input);
     return (struct IOCtx) {
         .t = IO_File,
-        .d.file.path_dyn = str_new("%s", input),
+        .d.file.path_dyn = expanded_path_dyn,
     };
 }
 
@@ -1693,23 +1714,25 @@ static void ioctx_write_part(void* pctx, void* data, i32 size) {
                 trace("xpaint: failed to open file");
                 return;
             }
-            if (!fwrite(data, sizeof(char), size, fd)) {
+
+            if (fwrite(data, sizeof(char), size, fd)) {
+                ctx->result_out = True;
+            } else {
                 trace("xpaint: failed to write to file");
             }
+
             if (fclose(fd) == EOF) {
                 trace("xpaint: failed to close file");
-                return;
             }
         } break;
         case IO_Stdio: {
-            if (!fwrite(data, sizeof(char), size, stdout)) {
+            if (fwrite(data, sizeof(char), size, stdout)) {
+                ctx->result_out = True;
+            } else {
                 trace("xpaint: failed to write to stdout");
-                return;
             }
         } break;
     }
-
-    ctx->result_out = True;
 }
 
 Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx) {
@@ -2276,24 +2299,6 @@ static char const* get_base_part(char const* path) {
     return last_slash + 1;
 }
 
-static char* expand_home(char const* path) {
-    if (!path) {
-        return NULL;
-    }
-
-    if (path[0] != '~') {
-        return str_new("%s", path);
-    }
-
-    char* home = getenv("HOME");
-    if (home == NULL) {
-        trace("xpaint: $HOME environment variable not found (requested by ~)");
-        return str_new("%s", path);
-    }
-
-    return str_new("%s%s", home, path + 1);
-}
-
 static void cl_compls_update_dirs(struct ComplsItem** result, char const* token, Bool only_dirs, Bool add_delim) {
     if (!token || !result) {
         return;
@@ -2301,7 +2306,7 @@ static void cl_compls_update_dirs(struct ComplsItem** result, char const* token,
 
     // Get directory to search in and base name to match against
     char* dir_part_dyn = get_dir_part(token);
-    char* search_dir_dyn = expand_home(dir_part_dyn);
+    char* search_dir_dyn = path_expand_home(dir_part_dyn);
     free(dir_part_dyn);
     char const* base_name = get_base_part(token);
 
