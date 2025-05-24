@@ -99,12 +99,12 @@ LIBS = $(shell $(PKG_CONFIG) --libs x11 xext xft xrender fontconfig) -lm
 DEFINES = \
 	-D_POSIX_C_SOURCE=200809L \
 	-DVERSION=\"$(VERSION)\" \
-		$(shell \
-			for res in ./res/* ; do \
-				echo -n $$(basename $$res) \
-					| tr '-' '_' \
-					| sed -En 's/(.*)\..*/\U-DRES_SZ_\1/p'; \
-				echo -n "=$$(stat -c %s $$res) "; \
-			done \
-		)
+	$(shell \
+		for res in ./res/* ; do \
+			echo -n $$(basename $$res) \
+				| tr '-' '_' \
+				| sed -En 's/(.*)\..*/\U-DRES_SZ_\1/p'; \
+			echo -n "=$$(stat -c %s $$res) "; \
+		done \
+	)
 CCFLAGS = $(LANG_FLAGS) $(INCS) $(LIBS) $(DEFINES)
