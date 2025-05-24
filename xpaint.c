@@ -3202,9 +3202,16 @@ Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, XftFont* font, argb 
         return damage;
     }
 
-    XRenderColor renderColor = argb_to_xrender_color(col);
+    XRenderColor xrendercol = argb_to_xrender_color(col);
+    XRenderColor transp_xrendercol = argb_to_xrender_color(0x00000000);
     XftColor color;
-    if (!XftColorAllocValue(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &renderColor, &color)) {
+    XftColor transp;
+    if (!XftColorAllocValue(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &xrendercol, &color)) {
+        trace("xpaint: canvas_text: failed to create xft color");
+        return damage;
+    }
+    if (!XftColorAllocValue(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &transp_xrendercol, &transp)) {
+        XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &color);
         trace("xpaint: canvas_text: failed to create xft color");
         return damage;
     }
@@ -3216,22 +3223,28 @@ Rect canvas_text(struct DrawCtx* dc, XImage* im, Pair lt_c, XftFont* font, argb 
     XftDraw* d = XftDrawCreate(dc->dp, pm, dc->sys.vinfo.visual, dc->sys.colmap);
     if (!d) {
         XFreePixmap(dc->dp, pm);
+        XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &transp);
+        XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &color);
         trace("xpaint: canvas_text: failed to create xft draw");
         return damage;
     }
 
+    // initial contents of Pixmap are undefined
+    XftDrawRect(d, &transp, 0, 0, text_dims.x, text_dims.y);
     // x, y == left-baseline
     XftDrawStringUtf8(d, &color, font, 0, font->height - font->descent, (FcChar8*)text, (i32)text_len);
     damage = rect_expand(damage, text_rect);
 
-    // apply pixmap with text on input image
-    XImage* image = XGetImage(dc->dp, pm, 0, 0, text_dims.x, text_dims.y, AllPlanes, ZPixmap);
-    canvas_copy_region(im, image, (Pair) {0, 0}, text_dims, (Pair) {text_rect.l, text_rect.t});
-    XDestroyImage(image);
+    /* apply pixmap with text on input image */ {
+        XImage* image = XGetImage(dc->dp, pm, 0, 0, text_dims.x, text_dims.y, AllPlanes, ZPixmap);
+        canvas_copy_region(im, image, (Pair) {0, 0}, text_dims, (Pair) {text_rect.l, text_rect.t});
+        XDestroyImage(image);
+    }
 
-    XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &color);
     XftDrawDestroy(d);
     XFreePixmap(dc->dp, pm);
+    XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &transp);
+    XftColorFree(dc->dp, dc->sys.vinfo.visual, dc->sys.colmap, &color);
 
     return damage;
 }
