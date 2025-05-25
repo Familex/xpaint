@@ -4423,6 +4423,15 @@ void setup(Display* dp, struct Ctx* ctx) {
         ) {.value = (unsigned char*)title, .nitems = strlen(title), .format = 8, .encoding = atoms[A_Utf8string]}
     );
 
+    XSetClassHint(
+        dp,
+        ctx->dc.window,
+        &(XClassHint) {
+            .res_name = "xpaint",
+            .res_class = "xpaint",
+        }
+    );
+
     /* turn on protocol support */ {
         Atom wm_delete_window = XInternAtom(dp, "WM_DELETE_WINDOW", False);
 
