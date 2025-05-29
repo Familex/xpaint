@@ -3981,8 +3981,12 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
     if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor)
         && inp->c.state == CS_None) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
-        Pair c = point_from_cv_to_scr(dc, inp->anchor);
-        Rect const rect = {c.x - size, c.y - size, c.x + size, c.y + size};
+
+        Pair lt = point_from_cv_to_scr(dc, inp->anchor);
+        Pair rb = point_from_cv_to_scr(dc, (Pair) {inp->anchor.x + 1, inp->anchor.y + 1});
+        Pair center = (Pair) {(lt.x + rb.x) / 2, (lt.y + rb.y) / 2};
+        Rect const rect = {center.x - size, center.y - size, center.x + size, center.y + size};
+
         draw_dash_line(dc, (Pair) {rect.l, rect.b}, (Pair) {rect.r, rect.t}, 1);
         draw_dash_line(dc, (Pair) {rect.l, rect.t}, (Pair) {rect.r, rect.b}, 1);
     }
