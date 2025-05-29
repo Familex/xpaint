@@ -85,7 +85,7 @@ argb const CANVAS_BACKGROUND = 0xFFAA0000;
 u32 const CANVAS_DEFAULT_WIDTH = 1000;
 u32 const CANVAS_DEFAULT_HEIGHT = 700;
 i32 const CANVAS_MIN_ZOOM = -10;
-i32 const CANVAS_MAX_ZOOM = 30;  // at high values visual glitches appear
+i32 const CANVAS_MAX_ZOOM = 22;  // at high values visual glitches appear
 
 Bool const CONSOLE_AUTO_COMPLETIONS = True;
 
