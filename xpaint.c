@@ -268,7 +268,7 @@ struct Ctx {
             XImage* im;
             enum ImageType type;
             i32 zoom;  // 0 == no zoom
-            Pair scroll;
+            DPt scroll;
         } cv;
         XftFont* fnt;
         struct Scheme {
@@ -711,7 +711,7 @@ static Bool canvas_load(struct Ctx* ctx, struct Image* image);
 static void canvas_free(struct Canvas* cv);
 static void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta);
 static void canvas_resize(struct Ctx* ctx, u32 new_width, u32 new_height);
-static void canvas_scroll(struct Canvas* cv, Pair delta);
+static void canvas_scroll(struct Canvas* cv, DPt delta);
 static void overlay_clear(struct InputOverlay* ovr);
 static void overlay_expand_rect(struct InputOverlay* ovr, Rect rect);
 static struct InputOverlay get_transformed_overlay(struct DrawCtx* dc, struct Input const* inp);
@@ -3586,9 +3586,9 @@ void canvas_change_zoom(struct DrawCtx* dc, Pair cursor, i32 delta) {
     // keep cursor at same position
     canvas_scroll(
         &dc->cv,
-        (Pair) {
-            (i32)((dc->cv.scroll.x - cursor.x) * (ZOOM_C(dc) / old_zoom - 1)),
-            (i32)((dc->cv.scroll.y - cursor.y) * (ZOOM_C(dc) / old_zoom - 1)),
+        (DPt) {
+            (dc->cv.scroll.x - cursor.x) * (ZOOM_C(dc) / old_zoom - 1.0),
+            (dc->cv.scroll.y - cursor.y) * (ZOOM_C(dc) / old_zoom - 1.0),
         }
     );
 }
@@ -3636,7 +3636,7 @@ void canvas_resize(struct Ctx* ctx, u32 new_width, u32 new_height) {
     }
 }
 
-void canvas_scroll(struct Canvas* cv, Pair delta) {
+void canvas_scroll(struct Canvas* cv, DPt delta) {
     cv->scroll.x += delta.x;
     cv->scroll.y += delta.y;
 }
@@ -3927,7 +3927,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
                 bb_pict,
                 0, 0,
                 0, 0,
-                dc->cv.scroll.x, dc->cv.scroll.y,
+                (i32)round(dc->cv.scroll.x), (i32)round(dc->cv.scroll.y),
                 cv_size.x, cv_size.y
             );
             XRenderComposite(
@@ -3936,7 +3936,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
                 bb_pict,
                 0, 0,
                 0, 0,
-                dc->cv.scroll.x, dc->cv.scroll.y,
+                (i32)round(dc->cv.scroll.x), (i32)round(dc->cv.scroll.y),
                 cv_size.x, cv_size.y
             );
             // clang-format on
@@ -4313,7 +4313,7 @@ struct Ctx ctx_init(Display* dp) {
                         .im = NULL,
                         .type = IMT_Png,  // save as png by default
                         .zoom = 0,
-                        .scroll = {0, 0},
+                        .scroll = {0.0, 0.0},
                     },
                 .cache = (struct Cache) {.pm = 0},
             },
@@ -4638,13 +4638,13 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     Button const e_btn = get_btn(e);
 
     if (btn_eq(e_btn, BTN_SCROLL_UP)) {
-        canvas_scroll(&dc->cv, (Pair) {0, 10});
+        canvas_scroll(&dc->cv, (DPt) {0.0, 10.0});
     } else if (btn_eq(e_btn, BTN_SCROLL_DOWN)) {
-        canvas_scroll(&dc->cv, (Pair) {0, -10});
+        canvas_scroll(&dc->cv, (DPt) {0.0, -10.0});
     } else if (btn_eq(e_btn, BTN_SCROLL_LEFT)) {
-        canvas_scroll(&dc->cv, (Pair) {-10, 0});
+        canvas_scroll(&dc->cv, (DPt) {-10.0, 0.0});
     } else if (btn_eq(e_btn, BTN_SCROLL_RIGHT)) {
-        canvas_scroll(&dc->cv, (Pair) {10, 0});
+        canvas_scroll(&dc->cv, (DPt) {10.0, 0.0});
     } else if (btn_eq(e_btn, BTN_ZOOM_IN)) {
         canvas_change_zoom(dc, inp->prev_c, 1);
     } else if (btn_eq(e_btn, BTN_ZOOM_OUT)) {
@@ -5034,7 +5034,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         u64 const elapsed_from_last = current_time.tv_usec - ctx->input.last_proc_drag_ev_us;
 
         if (btn_eq(inp->c.btn, BTN_SCROLL_DRAG)) {
-            canvas_scroll(&ctx->dc.cv, (Pair) {e->x - inp->prev_c.x, e->y - inp->prev_c.y});
+            canvas_scroll(&ctx->dc.cv, (DPt) {e->x - inp->prev_c.x, e->y - inp->prev_c.y});
             // last update will be in button_release_hdlr
             if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
                 ctx->input.last_proc_drag_ev_us = current_time.tv_usec;
@@ -5158,8 +5158,8 @@ HdlrResult configure_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     // if canvas fits in client area
     if (cv_size.x <= clientarea.x && cv_size.y <= clientarea.y) {
         // place canvas to center of screen
-        dc->cv.scroll.x = (clientarea.x - cv_size.x) / 2;
-        dc->cv.scroll.y = (clientarea.y - cv_size.y) / 2;
+        dc->cv.scroll.x = (clientarea.x - cv_size.x) / 2.0;
+        dc->cv.scroll.y = (clientarea.y - cv_size.y) / 2.0;
     }
 
     return HR_Ok;
