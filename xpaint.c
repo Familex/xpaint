@@ -733,10 +733,11 @@ static void draw_dash_rect(struct DrawCtx* dc, Pair points[4]);
 // FIXME merge with get_string_rect?
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static Rect get_string_rect(struct DrawCtx const* dc, XftFont* font, char const* str, u32 len, Pair lt_c);
-static void draw_selection_circle(struct DrawCtx* dc, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
+static void draw_selection_circle(struct Ctx* ctx, struct SelectionCircle const* sc, i32 pointer_x, i32 pointer_y);
 static void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw);
 static void update_statusline(struct Ctx* ctx);
 static void show_message(struct Ctx* ctx, char const* msg);
+static void swap_backbuffer(struct Ctx* ctx);
 
 static void dc_cache_init(struct Ctx* ctx);
 static void dc_cache_free(struct DrawCtx* dc);
@@ -3766,11 +3767,12 @@ Rect get_string_rect(struct DrawCtx const* dc, XftFont* font, char const* str, u
 }
 
 void draw_selection_circle(
-    struct DrawCtx* dc,
+    struct Ctx* ctx,
     struct SelectionCircle const* sc,
     i32 const pointer_x,
     i32 const pointer_y
 ) {
+    struct DrawCtx* dc = &ctx->dc;
     if (sc->items_arr == NULL || arrlen(sc->items_arr) == 0) {
         return;
     }
@@ -3863,14 +3865,7 @@ void draw_selection_circle(
         draw_arc(dc, outer_c, outer_dims, 0.0, 360.0, COL_FG(dc, SchmNorm));
     }
 
-    XdbeSwapBuffers(
-        dc->dp,
-        &(XdbeSwapInfo) {
-            .swap_window = dc->window,
-            .swap_action = 0,
-        },
-        1
-    );
+    swap_backbuffer(ctx);
 }
 
 void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
@@ -4216,16 +4211,7 @@ void update_statusline(struct Ctx* ctx) {
         }
     }
 
-    XdbeSwapBuffers(
-        dc->dp,
-        &(XdbeSwapInfo) {
-            .swap_window = dc->window,
-            .swap_action = 0,
-        },
-        1
-    );
-
-    XSyncSetCounter(dc->dp, ctx->xsync.counter, ctx->xsync.last_request_value);
+    swap_backbuffer(ctx);
 }
 
 // FIXME DRY
@@ -4238,6 +4224,11 @@ void show_message(struct Ctx* ctx, char const* msg) {
         COL_BG(&ctx->dc, SchmNorm)
     );
     draw_string(&ctx->dc, msg, (Pair) {0, (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM)}, SchmNorm, False);
+
+    swap_backbuffer(ctx);
+}
+
+void swap_backbuffer(struct Ctx* ctx) {
     XdbeSwapBuffers(
         ctx->dc.dp,
         &(XdbeSwapInfo) {
@@ -4246,6 +4237,8 @@ void show_message(struct Ctx* ctx, char const* msg) {
         },
         1
     );
+
+    XSyncSetCounter(ctx->dc.dp, ctx->xsync.counter, ctx->xsync.last_request_value);
 }
 
 static void dc_cache_update_pm(struct DrawCtx* dc, Pixmap pm, XImage* im, Rect damage) {
@@ -4623,7 +4616,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     update_screen(ctx, (Pair) {e->x, e->y}, False);
-    draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
+    draw_selection_circle(ctx, &ctx->sc, e->x, e->y);
 
     inp->c = (struct CursorState) {
         .state = CS_Hold,
@@ -5135,7 +5128,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
 
-    draw_selection_circle(&ctx->dc, &ctx->sc, e->x, e->y);
+    draw_selection_circle(ctx, &ctx->sc, e->x, e->y);
 
     inp->prev_c.x = e->x;
     inp->prev_c.y = e->y;
