@@ -398,8 +398,19 @@ struct Ctx {
     u32 curr_tc;
 
     struct HistItem {
-        Pair pivot;  // top left corner position
-        XImage* patch;  // changed canvas part
+        enum HistType {
+            HT_Damage,
+            HT_Resize,
+        } t;
+        union HistData {
+            struct HistDamage {
+                Pair pivot;  // top left corner position
+                XImage* patch;  // changed canvas part
+            } damage;
+            struct HistResize {
+                XImage* cv;  // resize can delete canvas contents, need to store
+            } resize;
+        } d;
     } *hist_prevarr, *hist_nextarr;
 
     struct SelectionCircle {
@@ -679,7 +690,8 @@ static Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 
-static struct HistItem history_new_item(XImage* im, Rect rect);
+static struct HistItem history_new_as_damage(XImage* im, Rect rect);
+static struct HistItem history_new_as_resize(XImage* im);
 static Bool history_move(struct Ctx* ctx, Bool forward);
 static void history_forward(struct Ctx* ctx, struct HistItem hist);
 static void history_apply(struct Ctx* ctx, struct HistItem* hist);
@@ -1883,7 +1895,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
 
             XImage* old_cv = ctx->dc.cv.im;
             Rect old_cv_rect = (Rect) {0, 0, old_cv->width, old_cv->height};
-            struct HistItem to_push = history_new_item(old_cv, old_cv_rect);
+            struct HistItem to_push = history_new_as_damage(old_cv, old_cv_rect);
 
             if (canvas_load(ctx, &im)) {
                 history_forward(ctx, to_push);
@@ -2495,7 +2507,7 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             struct InputOverlay transformed = get_transformed_overlay(dc, inp);
 
             if (!IS_RNIL(transformed.rect)) {
-                history_forward(ctx, history_new_item(dc->cv.im, transformed.rect));
+                history_forward(ctx, history_new_as_damage(dc->cv.im, transformed.rect));
                 ximage_blend(dc->cv.im, transformed.im);
             }
             overlay_free(&transformed);
@@ -2817,7 +2829,7 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
     if (!IS_RNIL(damage)) {
         // move on BTN_MAIN, copy on BTN_COPY_SELECTION
         if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
-            history_forward(ctx, history_new_item(dc->cv.im, damage));
+            history_forward(ctx, history_new_as_damage(dc->cv.im, damage));
 
             argb bg_col = CANVAS_BACKGROUND;  // FIXME set in runtime?
             canvas_fill_rect(dc->cv.im, p, dims, bg_col);
@@ -3021,19 +3033,30 @@ Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
     return RNIL;
 }
 
-struct HistItem history_new_item(XImage* im, Rect rect) {
+struct HistItem history_new_as_damage(XImage* im, Rect rect) {
     assert(!IS_RNIL(rect) && rect.l <= rect.r && rect.t <= rect.b);
 
     return (struct HistItem) {
-        .pivot = (Pair) {rect.l, rect.t},
-        .patch = XSubImage(
-            im,
-            rect.l,
-            rect.t,
-            // inclusive
-            rect.r - rect.l + 1,
-            rect.b - rect.t + 1
-        ),
+        .t = HT_Damage,
+        .d.damage =
+            (struct HistDamage) {
+                .pivot = (Pair) {rect.l, rect.t},
+                .patch = XSubImage(
+                    im,
+                    rect.l,
+                    rect.t,
+                    // inclusive
+                    rect.r - rect.l + 1,
+                    rect.b - rect.t + 1
+                ),
+            },
+    };
+}
+
+struct HistItem history_new_as_resize(XImage* im) {
+    return (struct HistItem) {
+        .t = HT_Resize,
+        .d.resize = (struct HistResize) {.cv = XSubImage(im, 0, 0, im->width, im->height)},
     };
 }
 
@@ -3046,10 +3069,18 @@ Bool history_move(struct Ctx* ctx, Bool forward) {
     }
 
     struct HistItem curr = arrpop(*hist_pop);
-    Rect curr_rect =
-        (Rect) {curr.pivot.x, curr.pivot.y, curr.pivot.x + curr.patch->width, curr.pivot.y + curr.patch->height};
+    switch (curr.t) {
+        case HT_Damage: {
+            struct HistDamage const* d = &curr.d.damage;
+            Rect curr_rect =
+                (Rect) {d->pivot.x, d->pivot.y, d->pivot.x + d->patch->width, d->pivot.y + d->patch->height};
 
-    arrpush(*hist_save, history_new_item(ctx->dc.cv.im, curr_rect));
+            arrpush(*hist_save, history_new_as_damage(ctx->dc.cv.im, curr_rect));
+        } break;
+        case HT_Resize: {
+            arrpush(*hist_save, history_new_as_resize(ctx->dc.cv.im));
+        } break;
+    }
     history_apply(ctx, &curr);
     history_free(&curr);
 
@@ -3064,17 +3095,30 @@ void history_forward(struct Ctx* ctx, struct HistItem hist) {
 }
 
 void history_apply(struct Ctx* ctx, struct HistItem* hist) {
-    canvas_copy_region(
-        ctx->dc.cv.im,
-        hist->patch,
-        (Pair) {0, 0},
-        (Pair) {hist->patch->width, hist->patch->height},
-        hist->pivot
-    );
+    switch (hist->t) {
+        case HT_Damage: {
+            canvas_copy_region(
+                ctx->dc.cv.im,
+                hist->d.damage.patch,
+                (Pair) {0, 0},
+                (Pair) {hist->d.damage.patch->width, hist->d.damage.patch->height},
+                hist->d.damage.pivot
+            );
+        } break;
+        case HT_Resize: {
+            u32 w = hist->d.resize.cv->width;
+            u32 h = hist->d.resize.cv->height;
+            canvas_resize(ctx, w, h);
+            canvas_copy_region(ctx->dc.cv.im, hist->d.resize.cv, (Pair) {0, 0}, (Pair) {(i32)w, (i32)h}, (Pair) {0, 0});
+        } break;
+    }
 }
 
 void history_free(struct HistItem* hist) {
-    XDestroyImage(hist->patch);
+    switch (hist->t) {
+        case HT_Damage: XDestroyImage(hist->d.damage.patch); break;
+        case HT_Resize: XDestroyImage(hist->d.resize.cv); break;
+    }
 }
 
 void historyarr_clear(struct HistItem** histarr) {
@@ -4655,6 +4699,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         // do not run tool handlers
     } else if (btn_eq(e_btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
+        history_forward(ctx, history_new_as_resize(dc->cv.im));
         canvas_resize(ctx, cur.x, cur.y);
     } else if (btn_eq(e_btn, BTN_SEL_CIRC) || btn_eq(e_btn, BTN_SEL_CIRC_ALTERNATIVE)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
@@ -4669,7 +4714,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         Rect final_damage = rect_expand(inp->damage, curr_damage);
         if (!IS_RNIL(final_damage)) {
             input_set_damage(inp, final_damage);
-            history_forward(ctx, history_new_item(dc->cv.im, final_damage));
+            history_forward(ctx, history_new_as_damage(dc->cv.im, final_damage));
             ximage_blend(dc->cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
         }
