@@ -1167,8 +1167,9 @@ struct ToolCtx tc_new(struct DrawCtx* dc) {
         .prev_col = 0,
         .line_w = TOOLS_DEFAULT_LINE_W,
     };
-    arrpush(result.colarr, 0xFF000000);
-    arrpush(result.colarr, 0xFFFFFFFF);
+    for (usize i = 0; i < LENGTH(COLOR_LIST_DEFAULT); ++i) {
+        arrpush(result.colarr, COLOR_LIST_DEFAULT[i]);
+    }
     if (!xft_font_set(dc, TEXT_TOOL_DEFAULT_FONT, &result.text_font)) {
         die("xpaint: tc_new: failed to load font: ", TEXT_TOOL_DEFAULT_FONT);
     }

@@ -48,6 +48,14 @@ struct Item const ALTERNATIVE_SEL_CIRC_ITEMS[] = {
     {.arg.num = 1, .on_select = sel_circ_on_select_set_linew, .desc = "line_w: 1"},
 };
 
+argb const COLOR_LIST_DEFAULT[] = {
+    0xFFFFFF00,
+    0xFFFF8000,
+    0xFFFF00FF,
+    0xFFFFE8BB,
+    0xFF000000,
+};
+
 u32 const STATUSLINE_MODULE_SPACING_PX = 5;
 u32 const STATUSLINE_MODULE_SPACING_SMALL_PX = STATUSLINE_MODULE_SPACING_PX / 2;
 u32 const STATUSLINE_PADDING_BOTTOM = 4;
@@ -81,7 +89,7 @@ u32 const TOOLS_BRUSH_DEFAULT_SPACING = 1;  // '1' to disable. must be >= 1
 
 double const TFM_MODE_ROTATE_SENSITIVITY = 0.01;
 
-argb const CANVAS_BACKGROUND = 0xFFAA0000;
+argb const CANVAS_BACKGROUND = 0xFF000000;
 u32 const CANVAS_DEFAULT_WIDTH = 1000;
 u32 const CANVAS_DEFAULT_HEIGHT = 700;
 i32 const CANVAS_MIN_ZOOM = -10;
