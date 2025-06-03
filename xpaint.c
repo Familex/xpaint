@@ -5337,6 +5337,9 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         ioctx_free(&ioctx);
 
         if (im) {
+            if (im->width > ctx->dc.cv.im->width || im->height > ctx->dc.cv.im->height) {
+                canvas_resize(ctx, MAX(im->width, ctx->dc.cv.im->width), MAX(im->height, ctx->dc.cv.im->height));
+            }
             copy_image_to_transform_mode(ctx, im);
             update_screen(ctx, PNIL, False);
             XDestroyImage(im);
