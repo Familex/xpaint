@@ -100,62 +100,62 @@ Bool const CONSOLE_AUTO_COMPLETIONS = True;
 // ---------------------------- keymap ---------------------------------------
 // use `xev` command to check keycodes
 
-Button const BTN_MAIN = {Button1, ANY_MOD};
-Button const BTN_MAIN_ALTERNATIVE = {Button1, AltMask};
-Button const BTN_SEL_CIRC = {Button3, NO_MOD};
-Button const BTN_SEL_CIRC_ALTERNATIVE = {Button3, AltMask};
-Button const BTN_CANVAS_RESIZE = {Button3, ControlMask};
-Button const BTN_SCROLL_DRAG = {Button2, NO_MOD};
-Button const BTN_SCROLL_UP = {Button4, ControlMask};
-Button const BTN_SCROLL_DOWN = {Button5, ControlMask};
-Button const BTN_SCROLL_LEFT = {Button4, ControlMask | ShiftMask};
-Button const BTN_SCROLL_RIGHT = {Button5, ControlMask | ShiftMask};
-Button const BTN_ZOOM_IN = {Button4, NO_MOD};
-Button const BTN_ZOOM_OUT = {Button5, NO_MOD};
+Button const BTN_MAIN[] = {{Button1, ANY_MOD}};
+Button const BTN_MAIN_ALTERNATIVE[] = {{Button1, AltMask}};
+Button const BTN_SEL_CIRC[] = {{Button3, NO_MOD}};
+Button const BTN_SEL_CIRC_ALTERNATIVE[] = {{Button3, AltMask}};
+Button const BTN_CANVAS_RESIZE[] = {{Button3, ControlMask}};
+Button const BTN_SCROLL_DRAG[] = {{Button2, NO_MOD}};
+Button const BTN_SCROLL_UP[] = {{Button4, ControlMask}};
+Button const BTN_SCROLL_DOWN[] = {{Button5, ControlMask}};
+Button const BTN_SCROLL_LEFT[] = {{Button4, ControlMask | ShiftMask}, {Button6, ControlMask}};
+Button const BTN_SCROLL_RIGHT[] = {{Button5, ControlMask | ShiftMask}, {Button7, ControlMask}};
+Button const BTN_ZOOM_IN[] = {{Button4, NO_MOD}};
+Button const BTN_ZOOM_OUT[] = {{Button5, NO_MOD}};
 // by default area moves
-Button const BTN_COPY_SELECTION = {Button1, ShiftMask};
-Button const BTN_TRANS_MOVE = {Button1, NO_MOD};
-Button const BTN_TRANS_MOVE_LOCK = {Button1, ShiftMask};
-Button const BTN_TRANS_SCALE = {Button3, AltMask};
-Button const BTN_TRANS_SCALE_UNIFORM = {Button3, AltMask | ShiftMask};
-Button const BTN_TRANS_ROTATE = {Button3, ControlMask};
-Button const BTN_TRANS_ROTATE_SNAP = {Button3, ControlMask | ShiftMask};
+Button const BTN_COPY_SELECTION[] = {{Button1, ShiftMask}};
+Button const BTN_TRANS_MOVE[] = {{Button1, NO_MOD}};
+Button const BTN_TRANS_MOVE_LOCK[] = {{Button1, ShiftMask}};
+Button const BTN_TRANS_SCALE[] = {{Button3, AltMask}};
+Button const BTN_TRANS_SCALE_UNIFORM[] = {{Button3, AltMask | ShiftMask}};
+Button const BTN_TRANS_ROTATE[] = {{Button3, ControlMask}};
+Button const BTN_TRANS_ROTATE_SNAP[] = {{Button3, ControlMask | ShiftMask}};
 
 // actions {allowed modes, {key, modifier mask}}
-Action const ACT_UNDO = {MF_Int, {XK_z, ControlMask}};
-Action const ACT_REVERT = {MF_Int, {XK_Z, ShiftMask | ControlMask}};
-Action const ACT_COPY_AREA = {ANY_MODE, {XK_c, ControlMask}};  // to clipboard
-Action const ACT_PASTE_IMAGE = {ANY_MODE, {XK_v, ControlMask}};
-Action const ACT_SWAP_COLOR = {MF_Int, {XK_x, NO_MOD}};
-Action const ACT_ZOOM_IN = {ANY_MODE, {XK_equal, ControlMask}};
-Action const ACT_ZOOM_OUT = {ANY_MODE, {XK_minus, ControlMask}};
-Action const ACT_NEXT_COLOR = {MF_Int | MF_Color, {XK_Up, NO_MOD}};
-Action const ACT_PREV_COLOR = {MF_Int | MF_Color, {XK_Down, NO_MOD}};
-Action const ACT_SAVE_TO_FILE = {MF_Int | MF_Color, {XK_s, ControlMask}};
-Action const ACT_EXIT = {ANY_MODE, {XK_q, NO_MOD}};
-Action const ACT_ADD_COLOR = {MF_Color, {XK_Up, ControlMask}};
-Action const ACT_TO_RIGHT_COL_DIGIT = {MF_Color, {XK_Right, NO_MOD}};
-Action const ACT_TO_LEFT_COL_DIGIT = {MF_Color, {XK_Left, NO_MOD}};
+Key const ACT_UNDO[] = {{XK_z, ControlMask}};
+Key const ACT_REVERT[] = {{XK_Z, ShiftMask | ControlMask}};
+Key const ACT_COPY_AREA[] = {{XK_c, ControlMask}};  // to clipboard
+Key const ACT_PASTE_IMAGE[] = {{XK_v, ControlMask}};
+Key const ACT_SWAP_COLOR[] = {{XK_x, NO_MOD}};
+Key const ACT_ZOOM_IN[] = {{XK_equal, ControlMask}};
+Key const ACT_ZOOM_OUT[] = {{XK_minus, ControlMask}};
+Key const ACT_NEXT_COLOR[] = {{XK_Up, NO_MOD}};
+Key const ACT_PREV_COLOR[] = {{XK_Down, NO_MOD}};
+Key const ACT_SAVE_TO_FILE[] = {{XK_s, ControlMask}};
+Key const ACT_EXIT[] = {{XK_q, NO_MOD}};
+Key const ACT_ADD_COLOR[] = {{XK_Up, ControlMask}};
+Key const ACT_TO_RIGHT_COL_DIGIT[] = {{XK_Right, NO_MOD}};
+Key const ACT_TO_LEFT_COL_DIGIT[] = {{XK_Left, NO_MOD}};
 
 // mode switch
-Action const ACT_MODE_INTERACT = {ANY_MODE, {XK_Escape, NO_MOD}};  // return to interact
-Action const ACT_MODE_COLOR = {MF_Int, {XK_c, NO_MOD}};
-Action const ACT_MODE_CONSOLE = {MF_Int, {XK_colon, ShiftMask}};
+Key const ACT_MODE_INTERACT[] = {{XK_Escape, NO_MOD}};  // return to interact
+Key const ACT_MODE_COLOR[] = {{XK_c, NO_MOD}};
+Key const ACT_MODE_CONSOLE[] = {{XK_colon, ShiftMask}};
 
 // only in text mode
-Key const KEY_TX_CONFIRM = {XK_Return, NO_MOD};  // typing '\n' not supported by implementation
-Key const KEY_TX_MODE_INTERACT = ACT_MODE_INTERACT.key;
-Key const KEY_TX_PASTE_TEXT = ACT_PASTE_IMAGE.key;
-Key const KEY_TX_ERASE_CHAR = {XK_BackSpace, NO_MOD};
-Key const KEY_TX_ERASE_ALL = {XK_BackSpace, ControlMask};
+Key const KEY_TX_CONFIRM[] = {{XK_Return, NO_MOD}};  // typing '\n' not supported by implementation
+Key const KEY_TX_MODE_INTERACT[] = {{XK_Escape, NO_MOD}};
+Key const KEY_TX_PASTE_TEXT[] = {{XK_v, ControlMask}};
+Key const KEY_TX_ERASE_CHAR[] = {{XK_BackSpace, NO_MOD}};
+Key const KEY_TX_ERASE_ALL[] = {{XK_BackSpace, ControlMask}};
 
 // only in console mode
-Key const KEY_CL_REQ_COMPLT = {NO_KEY, NO_MOD};
-Key const KEY_CL_NEXT_COMPLT = {XK_Tab, NO_MOD};
-Key const KEY_CL_PREV_COMPLT = {XK_ISO_Left_Tab, ShiftMask};
-Key const KEY_CL_APPLY_COMPLT = {XK_Return, NO_MOD};
-Key const KEY_CL_ERASE_CHAR = KEY_TX_ERASE_CHAR;
-Key const KEY_CL_ERASE_ALL = KEY_TX_ERASE_ALL;
-Key const KEY_CL_RUN = {XK_Return, NO_MOD};
-Key const KEY_CL_CLIPBOARD_PASTE = ACT_PASTE_IMAGE.key;
-Key const KEY_CL_MODE_INTERACT = ACT_MODE_INTERACT.key;
+Key const KEY_CL_REQ_COMPLT[] = {{NO_KEY, NO_MOD}};
+Key const KEY_CL_NEXT_COMPLT[] = {{XK_Tab, NO_MOD}};
+Key const KEY_CL_PREV_COMPLT[] = {{XK_ISO_Left_Tab, ShiftMask}};
+Key const KEY_CL_APPLY_COMPLT[] = {{XK_Return, NO_MOD}};
+Key const KEY_CL_ERASE_CHAR[] = {{XK_BackSpace, NO_MOD}};
+Key const KEY_CL_ERASE_ALL[] = {{XK_BackSpace, ControlMask}};
+Key const KEY_CL_RUN[] = {{XK_Return, NO_MOD}};
+Key const KEY_CL_CLIPBOARD_PASTE[] = {{XK_v, ControlMask}};
+Key const KEY_CL_MODE_INTERACT[] = {{XK_v, ControlMask}};

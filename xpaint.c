@@ -79,7 +79,21 @@ enum { NO_MOD = 0 };
 #define NO_KEY  XK_VoidSymbol
 #define ANY_KEY UINT_MAX
 enum { NO_MODE = 0 };
-#define ANY_MODE         UINT_MAX
+#define ANY_MODE UINT_MAX
+// <X11/X.h> doesn't define these, but it is commonly supported
+#ifndef Button6
+    #define Button6 6
+#endif
+#ifndef Button7
+    #define Button7 7
+#endif
+#ifndef Button8
+    #define Button8 8
+#endif
+#ifndef Button9
+    #define Button9 9
+#endif
+
 // default value for signed integers
 #define NIL              (-1)
 #define PNIL             ((Pair) {NIL, NIL})
@@ -102,9 +116,13 @@ enum { NO_MODE = 0 };
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define OVERLAY_TRANSFORM(p_mode) \
     ((p_mode)->t != InputT_Transform ? TRANSFORM_DEFAULT : trans_add((p_mode)->d.trans.curr, (p_mode)->d.trans.acc))
-#define TC_IS_DRAWER(p_tc) ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
-#define ZOOM_C(p_dc)       (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
-#define TRANSFORM_DEFAULT  ((Transform) {.scale = {1.0, 1.0}})
+#define TC_IS_DRAWER(p_tc)       ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush)
+#define ZOOM_C(p_dc)             (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
+#define TRANSFORM_DEFAULT        ((Transform) {.scale = {1.0, 1.0}})
+#define BTN_EQ(p_btn, p_btn_arr) ((btn_eq_impl((p_btn), (p_btn_arr), (LENGTH((p_btn_arr))))))
+#define KEY_EQ(p_key, p_key_arr) ((key_eq_impl((p_key), (p_key_arr), (LENGTH((p_key_arr))))))
+#define CAN_ACTION(p_input, p_key, p_mode, p_arr) \
+    can_action_impl((p_input), (p_key), (p_mode), (p_arr), (LENGTH((p_arr))))
 
 typedef u32 argb;
 
@@ -160,15 +178,12 @@ typedef struct {
     } d;  // data for corresponding type
 } SLModule;  // status line modules
 
-typedef struct {
-    enum {
-        MF_Int = 0x1,  // interact
-        MF_Color = 0x2,  // color
-        MF_Trans = 0x4,  // transform
-        // MF_Term managed manually because can use any key
-    } mode;
-    Key key;
-} Action;
+enum InputModeFlag {
+    MF_Int = 0x1,  // interact
+    MF_Color = 0x2,  // color
+    MF_Trans = 0x4,  // transform
+    // MF_Term managed manually because can use any key
+};
 
 enum {
     A_Cardinal,
@@ -565,9 +580,9 @@ static struct IconData get_icon_data(enum Icon icon);
 static double brush_ease(double v);
 static Bool state_match(u32 a, u32 b);
 static Button get_btn(XButtonEvent const* e);
-static Bool btn_eq(Button a, Button b);
-static Bool key_eq(Key a, Key b);
-static Bool can_action(struct Input const* input, Key curr_key, Action act);
+static Bool btn_eq_impl(Button a, Button const* arr, u32 arr_len);
+static Bool key_eq_impl(Key a, Key const* arr, u32 arr_len);
+static Bool can_action_impl(struct Input const* input, Key curr_key, enum InputModeFlag mode, Key const* arr, u32 arr_len);
 static char* uri_to_path(char const* uri);
 static usize figure_side_count(enum FigureType type);
 static char* path_expand_home(char const* path);
@@ -657,6 +672,7 @@ static void input_mode_set(struct Ctx* ctx, enum InputTag mode_tag);
 static void input_mode_free(struct InputMode* input_mode);
 static char const* input_mode_as_str(enum InputTag mode_tag);
 static void input_free(struct Input* input);
+static enum InputModeFlag input_mode_to_flag(enum InputTag mode);
 
 static void text_mode_push(struct Ctx* ctx, char c);
 static Bool text_mode_pop(struct Ctx* ctx);
@@ -972,26 +988,31 @@ Button get_btn(XButtonEvent const* e) {
     return (Button) {e->button, e->state};
 }
 
-Bool btn_eq(Button a, Button b) {
-    return state_match(a.mask, b.mask) && (a.button == ANY_KEY || b.button == ANY_KEY || a.button == b.button);
+Bool btn_eq_impl(Button a, Button const* arr, u32 arr_len) {
+    for (u32 i = 0; i < arr_len; ++i) {
+        Button const b = arr[i];
+        if (state_match(a.mask, b.mask) && (a.button == ANY_KEY || b.button == ANY_KEY || a.button == b.button)) {
+            return True;
+        }
+    }
+    return False;
 }
 
-Bool key_eq(Key a, Key b) {
-    return state_match(a.mask, b.mask) && (a.sym == ANY_KEY || b.sym == ANY_KEY || a.sym == b.sym);
+Bool key_eq_impl(Key a, Key const* arr, u32 arr_len) {
+    for (u32 i = 0; i < arr_len; ++i) {
+        Key const b = arr[i];
+        if (state_match(a.mask, b.mask) && (a.sym == ANY_KEY || b.sym == ANY_KEY || a.sym == b.sym)) {
+            return True;
+        }
+    }
+    return False;
 }
 
-static Bool can_action(struct Input const* input, Key curr_key, Action act) {
-    if (!key_eq(curr_key, act.key)) {
-        return False;
+Bool can_action_impl(struct Input const* input, Key curr_key, enum InputModeFlag mode, Key const* arr, u32 arr_len) {
+    if (!(input_mode_to_flag(input->mode.t) & mode)) {
+        return False;  // wrong mode
     }
-    switch (input->mode.t) {
-        case InputT_Interact: return (i32)act.mode & MF_Int;
-        case InputT_Color: return (i32)act.mode & MF_Color;
-        case InputT_Transform: return (i32)act.mode & MF_Trans;
-        case InputT_Text:
-        case InputT_Console: return False;  // managed manually
-    }
-    UNREACHABLE();
+    return key_eq_impl(curr_key, arr, arr_len);
 }
 
 char* uri_to_path(char const* uri) {
@@ -2570,6 +2591,19 @@ void input_free(struct Input* input) {
     overlay_free(&input->ovr);
 }
 
+enum InputModeFlag input_mode_to_flag(enum InputTag mode) {
+    switch (mode) {
+        case InputT_Interact: return MF_Int;
+        case InputT_Color: return MF_Color;
+        case InputT_Transform: return MF_Trans;
+        // managed manually, don't have mode flag
+        case InputT_Console:
+        case InputT_Text: return 0;
+    }
+    UNREACHABLE();
+    return 0;
+}
+
 void text_mode_push(struct Ctx* ctx, char c) {
     if (ctx->input.mode.t != InputT_Text) {
         return;
@@ -2668,7 +2702,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
         case InputT_Color: {
             sc->draw_separators = False;
 
-            if (btn_eq(button, BTN_SEL_CIRC)) {
+            if (BTN_EQ(button, BTN_SEL_CIRC)) {
                 for (u32 hue_int = 0; hue_int < SEL_CIRC_COLOR_ITEMS; ++hue_int) {
                     double hue = (double)hue_int / SEL_CIRC_COLOR_ITEMS;
                     argb col = argb_from_hsl(hue, 1.0, 0.5);
@@ -2723,7 +2757,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
         case InputT_Interact: {
             sc->draw_separators = True;
 
-            if (btn_eq(button, BTN_SEL_CIRC)) {
+            if (BTN_EQ(button, BTN_SEL_CIRC)) {
                 switch (tc->t) {
                     case Tool_Text:
                     case Tool_Selection:
@@ -2804,7 +2838,7 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
 }
 
 Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN) && !btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
+    if (!BTN_EQ(get_btn(event), BTN_MAIN) && !BTN_EQ(get_btn(event), BTN_COPY_SELECTION)) {
         return RNIL;
     }
 
@@ -2828,7 +2862,7 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
 
     if (!IS_RNIL(damage)) {
         // move on BTN_MAIN, copy on BTN_COPY_SELECTION
-        if (!btn_eq(get_btn(event), BTN_COPY_SELECTION)) {
+        if (!BTN_EQ(get_btn(event), BTN_COPY_SELECTION)) {
             history_forward(ctx, history_new_as_damage(dc->cv.im, damage));
 
             argb bg_col = CANVAS_BACKGROUND;  // FIXME set in runtime?
@@ -2843,7 +2877,7 @@ Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* even
 }
 
 Rect tool_text_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)) {
+    if (!BTN_EQ(get_btn(event), BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2857,7 +2891,7 @@ Rect tool_text_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
 }
 
 Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.c.btn, BTN_MAIN) && !btn_eq(ctx->input.c.btn, BTN_COPY_SELECTION)) {
+    if (!BTN_EQ(ctx->input.c.btn, BTN_MAIN) && !BTN_EQ(ctx->input.c.btn, BTN_COPY_SELECTION)) {
         return RNIL;
     }
 
@@ -2888,7 +2922,7 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 }
 
 Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)) {
+    if (!BTN_EQ(get_btn(event), BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2909,7 +2943,7 @@ Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
 }
 
 Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)) {
+    if (!BTN_EQ(get_btn(event), BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2932,7 +2966,7 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 }
 
 Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
-    if (!btn_eq(ctx->input.c.btn, BTN_MAIN)) {
+    if (!BTN_EQ(ctx->input.c.btn, BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2954,7 +2988,7 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 }
 
 Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
-    if (!btn_eq(get_btn(event), BTN_MAIN)) {
+    if (!BTN_EQ(get_btn(event), BTN_MAIN)) {
         return RNIL;
     }
 
@@ -2969,7 +3003,7 @@ Rect tool_figure_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
 
 Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
     Button const btn = ctx->input.c.btn;
-    if ((!btn_eq(btn, BTN_MAIN) && !btn_eq(btn, BTN_MAIN_ALTERNATIVE))
+    if ((!BTN_EQ(btn, BTN_MAIN) && !BTN_EQ(btn, BTN_MAIN_ALTERNATIVE))
         || (ctx->input.c.state != CS_Drag && !(state_match(event->state, ShiftMask)))) {
         return RNIL;
     }
@@ -2977,7 +3011,7 @@ Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
     struct DrawCtx* dc = &ctx->dc;
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
-    u32 const fig_variant = btn_eq(btn, BTN_MAIN_ALTERNATIVE) ? 1 : 0;
+    u32 const fig_variant = BTN_EQ(btn, BTN_MAIN_ALTERNATIVE) ? 1 : 0;
 
     overlay_clear(&ctx->input.ovr);
     return canvas_figure(ctx, ctx->input.ovr.im, fig_variant, anchor, pointer);
@@ -2985,14 +3019,14 @@ Rect tool_figure_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 
 Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
     Button const btn = ctx->input.c.btn;
-    if (!btn_eq(btn, BTN_MAIN) && !btn_eq(btn, BTN_MAIN_ALTERNATIVE)) {
+    if (!BTN_EQ(btn, BTN_MAIN) && !BTN_EQ(btn, BTN_MAIN_ALTERNATIVE)) {
         return RNIL;
     }
 
     struct DrawCtx* dc = &ctx->dc;
     Pair pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair anchor = ctx->input.anchor;
-    u32 const fig_variant = btn_eq(btn, BTN_MAIN_ALTERNATIVE) ? 1 : 0;
+    u32 const fig_variant = BTN_EQ(btn, BTN_MAIN_ALTERNATIVE) ? 1 : 0;
 
     input_set_damage(&ctx->input, RNIL);  // also undo damage
     overlay_clear(&ctx->input.ovr);
@@ -3001,7 +3035,7 @@ Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 }
 
 Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
-    if (!btn_eq(ctx->input.c.btn, BTN_MAIN)) {
+    if (!BTN_EQ(ctx->input.c.btn, BTN_MAIN)) {
         return RNIL;
     }
 
@@ -4031,7 +4065,7 @@ void update_screen(struct Ctx* ctx, Pair cur_scr, Bool full_redraw) {
         draw_dash_line(dc, (Pair) {rect.l, rect.t}, (Pair) {rect.r, rect.b}, 1);
     }
 
-    if (inp->c.state == CS_Drag && btn_eq(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
+    if (inp->c.state == CS_Drag && BTN_EQ(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
 
         draw_dash_rect(
@@ -4652,7 +4686,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
     if (inp->mode.t == InputT_Transform || inp->mode.t == InputT_Text) {
         // do nothing
-    } else if (inp->c.state == CS_None && (btn_eq(button, BTN_SEL_CIRC) | btn_eq(button, BTN_SEL_CIRC_ALTERNATIVE))) {
+    } else if (inp->c.state == CS_None && (BTN_EQ(button, BTN_SEL_CIRC) | BTN_EQ(button, BTN_SEL_CIRC_ALTERNATIVE))) {
         sel_circ_init_and_show(ctx, button, e->x, e->y);
     } else if (tc->on_press) {
         Rect const curr_damage = tc->on_press(ctx, e);
@@ -4679,17 +4713,17 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
     struct Input* inp = &ctx->input;
     Button const e_btn = get_btn(e);
 
-    if (btn_eq(e_btn, BTN_SCROLL_UP)) {
+    if (BTN_EQ(e_btn, BTN_SCROLL_UP)) {
         canvas_scroll(&dc->cv, (DPt) {0.0, 10.0});
-    } else if (btn_eq(e_btn, BTN_SCROLL_DOWN)) {
+    } else if (BTN_EQ(e_btn, BTN_SCROLL_DOWN)) {
         canvas_scroll(&dc->cv, (DPt) {0.0, -10.0});
-    } else if (btn_eq(e_btn, BTN_SCROLL_LEFT)) {
+    } else if (BTN_EQ(e_btn, BTN_SCROLL_LEFT)) {
         canvas_scroll(&dc->cv, (DPt) {-10.0, 0.0});
-    } else if (btn_eq(e_btn, BTN_SCROLL_RIGHT)) {
+    } else if (BTN_EQ(e_btn, BTN_SCROLL_RIGHT)) {
         canvas_scroll(&dc->cv, (DPt) {10.0, 0.0});
-    } else if (btn_eq(e_btn, BTN_ZOOM_IN)) {
+    } else if (BTN_EQ(e_btn, BTN_ZOOM_IN)) {
         canvas_change_zoom(dc, inp->prev_c, 1);
-    } else if (btn_eq(e_btn, BTN_ZOOM_OUT)) {
+    } else if (BTN_EQ(e_btn, BTN_ZOOM_OUT)) {
         canvas_change_zoom(dc, inp->prev_c, -1);
     } else if (inp->mode.t == InputT_Transform) {
         struct InputTransformData* transd = &inp->mode.d.trans;
@@ -4697,11 +4731,11 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         transd->curr = TRANSFORM_DEFAULT;
     } else if (inp->mode.t == InputT_Text) {
         // do not run tool handlers
-    } else if (btn_eq(e_btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
+    } else if (BTN_EQ(e_btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         Pair const cur = point_from_scr_to_cv_xy(dc, e->x, e->y);
         history_forward(ctx, history_new_as_resize(dc->cv.im));
         canvas_resize(ctx, cur.x, cur.y);
-    } else if (btn_eq(e_btn, BTN_SEL_CIRC) || btn_eq(e_btn, BTN_SEL_CIRC_ALTERNATIVE)) {
+    } else if (BTN_EQ(e_btn, BTN_SEL_CIRC) || BTN_EQ(e_btn, BTN_SEL_CIRC_ALTERNATIVE)) {
         i32 const selected_item = sel_circ_curr_item(&ctx->sc, e->x, e->y);
         if (selected_item != NIL && ctx->sc.items_arr[selected_item].on_select) {
             struct Item* item = &ctx->sc.items_arr[selected_item];
@@ -4824,16 +4858,16 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // else-if chain to filter keys
     if (mode->t == InputT_Console) {
         struct InputConsoleData* cl = &ctx->input.mode.d.cl;
-        if (key_eq(curr, KEY_CL_MODE_INTERACT)) {
+        if (KEY_EQ(curr, KEY_CL_MODE_INTERACT)) {
             if (cl->compls_arr) {
                 cl_compls_free(cl);
             } else {
                 input_mode_set(ctx, InputT_Interact);
             }
-        } else if (key_eq(curr, KEY_CL_CLIPBOARD_PASTE)) {
+        } else if (KEY_EQ(curr, KEY_CL_CLIPBOARD_PASTE)) {
             trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
             // handled in selection_notify_hdlr
-        } else if (key_eq(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
+        } else if (KEY_EQ(curr, KEY_CL_APPLY_COMPLT) && cl->compls_arr) {
             char* complt = cl->compls_arr[cl->compls_curr].val_dyn;
             while (*complt) {
                 arrpush(cl->cmdarr, *complt);
@@ -4844,7 +4878,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             if (!cl->dont_append_delimeter_after_apply) {
                 cl_push(cl, CL_DELIM[0]);
             }
-        } else if (key_eq(curr, KEY_CL_RUN)) {  // run command
+        } else if (KEY_EQ(curr, KEY_CL_RUN)) {  // run command
             char* cmd_dyn = cl_cmd_get_str_dyn(cl);
             input_mode_set(ctx, InputT_Interact);
             ClCPrsResult parse_res = cl_cmd_parse(ctx, cmd_dyn);
@@ -4891,23 +4925,23 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             if (is_exit) {
                 return HR_Quit;
             }
-        } else if (key_eq(curr, KEY_CL_REQ_COMPLT) && !cl->compls_arr) {
+        } else if (KEY_EQ(curr, KEY_CL_REQ_COMPLT) && !cl->compls_arr) {
             cl_compls_new(cl);
-        } else if (key_eq(curr, KEY_CL_PREV_COMPLT) && cl->compls_arr) {
+        } else if (KEY_EQ(curr, KEY_CL_PREV_COMPLT) && cl->compls_arr) {
             usize len = (usize)arrlen(cl->compls_arr);
             usize last = len ? len - 1 : 0;
             cl->compls_curr = cl->compls_curr == 0 ? last : cl->compls_curr - 1;
-        } else if (key_eq(curr, KEY_CL_NEXT_COMPLT) && cl->compls_arr) {
+        } else if (KEY_EQ(curr, KEY_CL_NEXT_COMPLT) && cl->compls_arr) {
             usize max = arrlen(cl->compls_arr);
             if (max) {
                 cl->compls_curr = (cl->compls_curr + 1) % max;
             }
-        } else if (key_eq(curr, KEY_CL_ERASE_ALL)) {
+        } else if (KEY_EQ(curr, KEY_CL_ERASE_ALL)) {
             usize is_not_infinite_loop = 100000;
             while (cl_pop(cl) && --is_not_infinite_loop) {
                 // empty body
             }
-        } else if (key_eq(curr, KEY_CL_ERASE_CHAR)) {
+        } else if (KEY_EQ(curr, KEY_CL_ERASE_CHAR)) {
             cl_pop(cl);
         } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
             for (i32 i = 0; i < text_len; ++i) {
@@ -4917,17 +4951,17 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     }
 
     // actions
-    if (can_action(inp, curr, ACT_UNDO)) {
+    if (CAN_ACTION(inp, curr, MF_Int, ACT_UNDO)) {
         if (!history_move(ctx, False)) {
             trace("xpaint: can't undo history");
         }
     }
-    if (can_action(inp, curr, ACT_REVERT)) {
+    if (CAN_ACTION(inp, curr, MF_Int, ACT_REVERT)) {
         if (!history_move(ctx, True)) {
             trace("xpaint: can't revert history");
         }
     }
-    if (can_action(inp, curr, ACT_PASTE_IMAGE)) {
+    if (CAN_ACTION(inp, curr, ANY_MODE, ACT_PASTE_IMAGE)) {
         switch (mode->t) {
             case InputT_Interact:
                 trigger_clipboard_paste(&ctx->dc, atoms[A_ImagePng]);
@@ -4942,7 +4976,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             case InputT_Transform: trace("xpaint: can't paste in transform mode"); break;
         }
     }
-    if (can_action(inp, curr, ACT_COPY_AREA)) {
+    if (CAN_ACTION(inp, curr, ANY_MODE, ACT_COPY_AREA)) {
         XSetSelectionOwner(ctx->dc.dp, atoms[A_Clipboard], ctx->dc.window, CurrentTime);
 
         if (ctx->sel_buf.im != NULL) {
@@ -4964,52 +4998,52 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
         assert(ctx->sel_buf.im != NULL);
     }
-    if (can_action(inp, curr, ACT_SWAP_COLOR)) {
+    if (CAN_ACTION(inp, curr, MF_Int, ACT_SWAP_COLOR)) {
         tc_set_curr_col_num(&CURR_TC(ctx), CURR_TC(ctx).prev_col);
     }
-    if (can_action(inp, curr, ACT_ZOOM_IN)) {
+    if (CAN_ACTION(inp, curr, ANY_MODE, ACT_ZOOM_IN)) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, 1);
     }
-    if (can_action(inp, curr, ACT_ZOOM_OUT)) {
+    if (CAN_ACTION(inp, curr, ANY_MODE, ACT_ZOOM_OUT)) {
         canvas_change_zoom(&ctx->dc, ctx->input.prev_c, -1);
     }
-    if (can_action(inp, curr, ACT_MODE_INTERACT)) {
+    if (CAN_ACTION(inp, curr, ANY_MODE, ACT_MODE_INTERACT)) {
         input_mode_set(ctx, InputT_Interact);
     }
-    if (can_action(inp, curr, ACT_MODE_COLOR)) {
+    if (CAN_ACTION(inp, curr, MF_Int, ACT_MODE_COLOR)) {
         input_mode_set(ctx, InputT_Color);
     }
-    if (can_action(inp, curr, ACT_MODE_CONSOLE)) {
+    if (CAN_ACTION(inp, curr, MF_Int, ACT_MODE_CONSOLE)) {
         input_mode_set(ctx, InputT_Console);
     }
-    if (can_action(inp, curr, ACT_ADD_COLOR)) {
+    if (CAN_ACTION(inp, curr, MF_Color, ACT_ADD_COLOR)) {
         u32 const len = arrlen(CURR_TC(ctx).colarr);
         if (len != MAX_COLORS) {
             tc_set_curr_col_num(&CURR_TC(ctx), len);
             arrpush(CURR_TC(ctx).colarr, 0xFF000000);
         }
     }
-    if (can_action(inp, curr, ACT_TO_RIGHT_COL_DIGIT)) {
+    if (CAN_ACTION(inp, curr, MF_Color, ACT_TO_RIGHT_COL_DIGIT)) {
         to_next_input_digit(&ctx->input, True);
     }
-    if (can_action(inp, curr, ACT_TO_LEFT_COL_DIGIT)) {
+    if (CAN_ACTION(inp, curr, MF_Color, ACT_TO_LEFT_COL_DIGIT)) {
         to_next_input_digit(&ctx->input, False);
     }
-    if (can_action(inp, curr, ACT_EXIT)) {
+    if (CAN_ACTION(inp, curr, ANY_MODE, ACT_EXIT)) {
         return HR_Quit;
     }
-    if (can_action(inp, curr, ACT_NEXT_COLOR)) {
+    if (CAN_ACTION(inp, curr, MF_Int | MF_Color, ACT_NEXT_COLOR)) {
         u32 const curr_col = CURR_TC(ctx).curr_col;
         u32 const col_num = arrlen(CURR_TC(ctx).colarr);
         tc_set_curr_col_num(&CURR_TC(ctx), curr_col + 1 == col_num ? 0 : curr_col + 1);
     }
-    if (can_action(inp, curr, ACT_PREV_COLOR)) {
+    if (CAN_ACTION(inp, curr, MF_Int | MF_Color, ACT_PREV_COLOR)) {
         u32 const curr_col = CURR_TC(ctx).curr_col;
         u32 const col_num = arrlen(CURR_TC(ctx).colarr);
         assert(col_num != 0);
         tc_set_curr_col_num(&CURR_TC(ctx), curr_col == 0 ? col_num - 1 : curr_col - 1);
     }
-    if (can_action(inp, curr, ACT_SAVE_TO_FILE)) {  // save to current file
+    if (CAN_ACTION(inp, curr, MF_Int | MF_Color, ACT_SAVE_TO_FILE)) {  // save to current file
         if (write_io(&ctx->dc, inp, ctx->dc.cv.type, &ctx->out)) {
             cl_msg_to_show = str_new("changes saved");
         } else {
@@ -5019,20 +5053,20 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
     // else-if chain to filter keys
     if (mode->t == InputT_Text) {
-        if (key_eq(curr, KEY_TX_MODE_INTERACT)) {
+        if (KEY_EQ(curr, KEY_TX_MODE_INTERACT)) {
             input_set_damage(inp, RNIL);
             overlay_clear(&inp->ovr);
             input_mode_set(ctx, InputT_Interact);
-        } else if (key_eq(curr, KEY_TX_CONFIRM)) {
+        } else if (KEY_EQ(curr, KEY_TX_CONFIRM)) {
             input_mode_set(ctx, InputT_Transform);
-        } else if (key_eq(curr, KEY_TX_PASTE_TEXT)) {
+        } else if (KEY_EQ(curr, KEY_TX_PASTE_TEXT)) {
             trigger_clipboard_paste(&ctx->dc, atoms[A_Utf8string]);
-        } else if (key_eq(curr, KEY_TX_ERASE_ALL)) {
+        } else if (KEY_EQ(curr, KEY_TX_ERASE_ALL)) {
             usize is_not_infinite_loop = 100000;
             while (text_mode_pop(ctx) && --is_not_infinite_loop) {
                 // empty body
             }
-        } else if (key_eq(curr, KEY_TX_ERASE_CHAR)) {
+        } else if (KEY_EQ(curr, KEY_TX_ERASE_CHAR)) {
             text_mode_pop(ctx);
         }
         // FIXME add way to type (and render) '\n'?
@@ -5076,7 +5110,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         // XXX mouse scroll and drag event are shared
         u64 const elapsed_from_last = current_time.tv_usec - ctx->input.last_proc_drag_ev_us;
 
-        if (btn_eq(inp->c.btn, BTN_SCROLL_DRAG)) {
+        if (BTN_EQ(inp->c.btn, BTN_SCROLL_DRAG)) {
             canvas_scroll(&ctx->dc.cv, (DPt) {e->x - inp->prev_c.x, e->y - inp->prev_c.y});
             // last update will be in button_release_hdlr
             if (elapsed_from_last >= MOUSE_SCROLL_UPDATE_PERIOD_US) {
@@ -5088,7 +5122,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 struct InputTransformData* transd = &inp->mode.d.trans;
                 Pair const cur_delta = {cur.x - inp->c.pos.x, cur.y - inp->c.pos.y};
 
-                if (btn_eq(inp->c.btn, BTN_TRANS_SCALE) || btn_eq(inp->c.btn, BTN_TRANS_SCALE_UNIFORM)) {
+                if (BTN_EQ(inp->c.btn, BTN_TRANS_SCALE) || BTN_EQ(inp->c.btn, BTN_TRANS_SCALE_UNIFORM)) {
                     // adjust scale to match cursor
 
                     Transform trans = transd->acc;
@@ -5100,15 +5134,15 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     Pair dims = {rb_trans.x - lt_trans.x, rb_trans.y - lt_trans.y};
                     DPt scale = {((double)dims.x + delta.x) / dims.x, ((double)dims.y + delta.y) / dims.y};
 
-                    transd->curr.scale = btn_eq(inp->c.btn, BTN_TRANS_SCALE)
+                    transd->curr.scale = BTN_EQ(inp->c.btn, BTN_TRANS_SCALE)
                         ? scale
                         : (DPt) {MAX(scale.x, scale.y), MAX(scale.x, scale.y)};
-                } else if (btn_eq(inp->c.btn, BTN_TRANS_ROTATE) | btn_eq(inp->c.btn, BTN_TRANS_ROTATE_SNAP)) {
+                } else if (BTN_EQ(inp->c.btn, BTN_TRANS_ROTATE) | BTN_EQ(inp->c.btn, BTN_TRANS_ROTATE_SNAP)) {
                     double const snap_interval = PI / 4;  // 45 degrees in radians
 
                     double angle_delta = cur_delta.y * TFM_MODE_ROTATE_SENSITIVITY;
 
-                    if (btn_eq(inp->c.btn, BTN_TRANS_ROTATE_SNAP)) {
+                    if (BTN_EQ(inp->c.btn, BTN_TRANS_ROTATE_SNAP)) {
                         // Snap to nearest 45° increment relative to accumulated rotation
                         double const total_angle = transd->acc.rotate + angle_delta;
                         double const snapped_total = round(total_angle / snap_interval) * snap_interval;
@@ -5116,9 +5150,9 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     }
 
                     transd->curr.rotate = angle_delta;
-                } else if (btn_eq(inp->c.btn, BTN_TRANS_MOVE)) {
+                } else if (BTN_EQ(inp->c.btn, BTN_TRANS_MOVE)) {
                     transd->curr.move = cur_delta;
-                } else if (btn_eq(inp->c.btn, BTN_TRANS_MOVE_LOCK)) {
+                } else if (BTN_EQ(inp->c.btn, BTN_TRANS_MOVE_LOCK)) {
                     Pair snapped = cur_delta;
                     double const angle_threshold = 0.4142;  // tan(22.5°)
                     i32 const min_move = 2;  // Minimum pixels to trigger snapping
