@@ -2819,7 +2819,9 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
     if (pointer_x_rel == 0 && pointer_y_rel == 0) {
         return NIL;  // prevent 0.0 / 0.0 division
     }
-    double const segment_rad = PI * 2 / MAX(1, arrlen(sc->items_arr));
+
+    i32 const items_len = MAX(1, arrlen(sc->items_arr));
+    double const segment_rad = PI * 2.0 / (double)items_len;
     double const segment_deg = segment_rad / PI * 180;
     double const pointer_r = sqrt((pointer_x_rel * pointer_x_rel) + (pointer_y_rel * pointer_y_rel));
 
@@ -2834,7 +2836,10 @@ i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y) {
         angle += 360;
     }
 
-    return (i32)(angle / segment_deg);
+    i32 const result = (i32)floor(angle / segment_deg);
+
+    // on 360 degrees result is equal to items_len
+    return CLAMP(result, 0, items_len - 1);
 }
 
 Rect tool_selection_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) {
