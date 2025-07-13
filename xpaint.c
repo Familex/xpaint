@@ -386,7 +386,9 @@ struct Ctx {
             struct DrawerData {
                 enum DrawerShape {
                     DS_Circle,
+                    DS_CircleHard,
                     DS_Square,
+                    DS_Point,
                 } shape;
                 u32 spacing;
             } drawer;
@@ -720,7 +722,8 @@ static Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col);
 // HACK variant argument not clear (used to alternate figure type)
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair p_dynamic);
 // line from `a` to `b` is a polygon height (a is a base);
-static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b);
+static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, Bool fill);
+// FIXME directly pass params instead of tc
 static Rect canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to, Bool draw_first_pt);
 static Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to);
@@ -3376,7 +3379,8 @@ Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col) {
     return canvas_dash_rect(im, c, dims, line_w, 0, col, col);
 }
 
-static Pair get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
+// FIXME only used for Figure_Rectangle, rest handled in canvas_regular_poly
+static Pair canvas_figure_fill_pt_helper(enum FigureType type, Pair a, Pair b, Pair im_dims) {
     switch (type) {
         case Figure_Circle:
         case Figure_Rectangle:
@@ -3412,7 +3416,7 @@ Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair
                 );
                 if (fig->fill) {
                     Pair const im_dims = {im->width, im->height};
-                    Pair const fill_pt = get_fig_fill_pt(fig->curr, p_dynamic, p_static, im_dims);
+                    Pair const fill_pt = canvas_figure_fill_pt_helper(fig->curr, p_dynamic, p_static, im_dims);
                     ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
                 }
                 return damage;
@@ -3423,12 +3427,8 @@ Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair
                 Pair const diff = {p_dynamic.x - p_static.x, p_dynamic.y - p_static.y};
                 Pair const p_opposite = {p_static.x - diff.x, p_static.y - diff.y};
 
-                Rect damage = canvas_regular_poly(im, tc, figure_side_count(fig->curr), p_dynamic, p_opposite);
-                if (fig->fill) {
-                    Pair const im_dims = {im->width, im->height};
-                    Pair const fill_pt = get_fig_fill_pt(fig->curr, p_dynamic, p_opposite, im_dims);
-                    ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
-                }
+                Rect damage =
+                    canvas_regular_poly(im, tc, figure_side_count(fig->curr), p_dynamic, p_opposite, fig->fill);
                 return damage;
             }
         }
@@ -3437,12 +3437,7 @@ Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair
             case Figure_Circle:
             case Figure_Rectangle:
             case Figure_Triangle: {
-                Rect damage = canvas_regular_poly(im, tc, figure_side_count(fig->curr), p_dynamic, p_static);
-                if (fig->fill) {
-                    Pair const im_dims = {im->width, im->height};
-                    Pair const fill_pt = get_fig_fill_pt(fig->curr, p_dynamic, p_static, im_dims);
-                    ximage_flood_fill(im, col, fill_pt.x, fill_pt.y);
-                }
+                Rect damage = canvas_regular_poly(im, tc, figure_side_count(fig->curr), p_dynamic, p_static, fig->fill);
                 return damage;
             }
         }
@@ -3464,7 +3459,16 @@ static DPt get_inr_circmr_cfs(u32 n) {
     return (DPt) {inradius, circumradius};
 }
 
-Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b) {
+// FIXME remove tc argument
+Rect canvas_regular_poly_frame_helper(
+    XImage* im,
+    struct ToolCtx* tc,
+    u32 n,
+    Pair a,
+    Pair b,
+    enum DrawerShape shape,
+    DPt** edges_optout
+) {
     Rect damage = RNIL;
     DPt const inr_circmr = get_inr_circmr_cfs(n);
     DPt c = {
@@ -3478,11 +3482,95 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b) 
     DPt prev = curr;
     for (u32 i = 0; i < n; ++i) {
         curr = dpt_rotate(curr, 360.0 / n);
-        Rect line_damage =
-            canvas_line(im, tc, DS_Square, dpt_to_pt(dpt_add(c, prev)), dpt_to_pt(dpt_add(c, curr)), True);
+
+        DPt const curr_adjusted = dpt_add(c, curr);
+        if (edges_optout) {
+            arrpush(*edges_optout, curr_adjusted);
+        }
+        Rect line_damage = canvas_line(im, tc, shape, dpt_to_pt(dpt_add(c, prev)), dpt_to_pt(curr_adjusted), True);
         damage = rect_expand(damage, line_damage);
         prev = curr;
     }
+
+    return damage;
+}
+
+// moves `a` to `b` by `distance` and stores to `c`. and `d` = `b` --> `a`
+static void canvas_regular_poly_point_helper(Pair a, Pair b, u32 distance, Pair* c, Pair* d) {
+    DPt const delta = {(double)b.x - a.x, b.y - a.y};
+    double const dist = sqrt((delta.x * delta.x) + (delta.y * delta.y));
+
+    if (dist <= distance) {
+        return;
+    }
+
+    DPt const unit = {delta.x / dist, delta.y / dist};  // unit vector from a to b
+
+    double const t = dist - distance;  // move-in amount for each point
+    if (c) {
+        *c = (Pair) {b.x - (i32)(unit.x * t), b.y - (i32)(unit.y * t)};
+    }
+    if (d) {
+        *d = (Pair) {a.x + (i32)(unit.x * t), a.y + (i32)(unit.y * t)};
+    }
+}
+
+static DPt circumcenter_from_height(u32 N, DPt V, DPt H) {
+    if (N < 3) {
+        /* Degenerate */
+        return (DPt) {NIL, NIL};
+    }
+    double c = cos(PI / N);
+    double denom = 1.0 + c;
+    DPt O;
+    O.x = (c * V.x + H.x) / denom;
+    O.y = (c * V.y + H.y) / denom;
+    return O;
+}
+
+Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, Bool fill) {
+    // fill strategy will not work for small line_w
+    if (!fill && tc->line_w < 10) {
+        Pair c = PNIL;
+        Pair d = PNIL;
+        canvas_regular_poly_point_helper(a, b, tc->line_w / 2, &c, &d);
+        if (!IS_PNIL(c) && !IS_PNIL(d)) {
+            return canvas_regular_poly_frame_helper(im, tc, n, c, d, DS_CircleHard, NULL);
+        }
+        return canvas_regular_poly_frame_helper(im, tc, n, a, b, DS_CircleHard, NULL);
+    }
+
+    // draw outer frame
+    DPt* edges = NULL;
+    Rect const damage = canvas_regular_poly_frame_helper(im, tc, n, a, b, DS_Point, &edges);
+
+    // draw inner frame to restrict fill
+    if (!fill && arrlen(edges) > 1) {
+        Pair center = dpt_to_pt(circumcenter_from_height(n, (DPt) {b.x, b.y}, (DPt) {a.x, a.y}));
+        // canvas_regular_poly_frame_helper on moved a and b will draw Figure_Triangle badly
+        for (u32 i = 0; i < arrlen(edges); ++i) {
+            u32 prev_index = MIN(i - 1, arrlen(edges) - 1);
+            Pair prev = PNIL;
+            Pair curr = PNIL;
+            canvas_regular_poly_point_helper(dpt_to_pt(edges[prev_index]), center, tc->line_w, &prev, NULL);
+            canvas_regular_poly_point_helper(dpt_to_pt(edges[i]), center, tc->line_w, &curr, NULL);
+            canvas_line(im, tc, DS_Point, prev, curr, True);
+        }
+    }
+
+    // // fill between outer and inner frame (will fill whole figure without inner frame)
+    // Pair fill_pt1 = PNIL;
+    // Pair fill_pt2 = PNIL;
+    // canvas_regular_poly_point_helper(a, b, tc->line_w / 2, &fill_pt1, &fill_pt2);
+    // if (!IS_PNIL(fill_pt1) || !IS_PNIL(fill_pt2)) {
+    //     ximage_flood_fill(im, *tc_curr_col(tc), fill_pt1.x, fill_pt1.y);
+    //     ximage_flood_fill(im, *tc_curr_col(tc), fill_pt2.x, fill_pt2.y);
+    // } else {
+    //     // here line_w larger than distance between a and b, so fill manually
+    //     ximage_flood_fill(im, *tc_curr_col(tc), (a.x + b.x) / 2, (a.y + b.y) / 2);
+    // }
+
+    arrfree(edges);
 
     return damage;
 }
@@ -3631,12 +3719,23 @@ Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape,
                 brush = new_circle_brush(col_cached, hardness_cached, w_cached);
                 break;
             }
+            case DS_CircleHard: {
+                brush_dims = (Pair) {(i32)w_cached, (i32)w_cached};
+                brush = new_circle_brush(col_cached, 1.0, w_cached);
+                break;
+            }
             case DS_Square: {
                 brush_dims = (Pair) {(i32)w_cached, (i32)w_cached};
                 brush = ecalloc(brush_dims.x * brush_dims.y, sizeof(argb));
                 for (i32 i = 0; i < brush_dims.x * brush_dims.y; ++i) {
                     brush[i] = col_cached;
                 }
+                break;
+            }
+            case DS_Point: {
+                brush_dims = (Pair) {1, 1};
+                brush = ecalloc(1, sizeof(argb));
+                brush[0] = col_cached;
                 break;
             }
         }
