@@ -4740,6 +4740,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     inp->damage = RNIL;
     inp->redraw_track[0] = RNIL;
     inp->redraw_track[1] = RNIL;
+    overlay_clear(&ctx->input.ovr);
 
     if (inp->mode.t == InputT_Transform || inp->mode.t == InputT_Text) {
         // do nothing
@@ -4751,7 +4752,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         input_set_damage(inp, curr_damage);
     }
 
-    update_screen(ctx, (Pair) {e->x, e->y}, False);
+    update_screen(ctx, (Pair) {e->x, e->y}, True);
     draw_selection_circle(ctx, &ctx->sc, e->x, e->y);
 
     inp->c = (struct CursorState) {
