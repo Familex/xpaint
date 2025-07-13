@@ -103,9 +103,6 @@ enum { NO_MODE = 0 };
 #define ARGB_ALPHA       ((argb)(0xFF000000))
 #define CL_DELIM         " "
 #define IOCTX_STDIO_STR  "-"
-// adjust brush line width to pencil's line width
-// XXX kinda works only for small values of line_w
-#define BRUSH_LINE_W_MOD 4.0
 #define TEXT_FONT_PROMPT "font: "
 #define TEXT_MODE_PROMPT "text: "
 #define CL_CMD_PROMPT    ":"
@@ -249,12 +246,6 @@ struct ToolCtx;
 union SCI_Arg;
 
 typedef void (*draw_fn)(struct Ctx* ctx, Pair p);
-
-typedef u8 (*circle_get_alpha_fn)(
-    u32 line_w,
-    double circle_radius,
-    Pair p  // point relative circle center
-);
 
 typedef enum {
     HR_Quit,
@@ -577,7 +568,7 @@ static u32 digit_count(u32 number);
 static void arrpoputf8(char const* strarr);
 static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 static struct IconData get_icon_data(enum Icon icon);
-static double brush_ease(double v);
+static double brush_ease(double hardness, double v);
 static Bool state_match(u32 a, u32 b);
 static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq_impl(Button a, Button const* arr, u32 arr_len);
@@ -730,7 +721,6 @@ static Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair p_dynamic);
 // line from `a` to `b` is a polygon height (a is a base);
 static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b);
-static Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c);
 static Rect canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to, Bool draw_first_pt);
 static Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to);
@@ -970,8 +960,12 @@ struct IconData get_icon_data(enum Icon icon) {
     UNREACHABLE();
 }
 
-double brush_ease(double v) {
-    return (v == 1.0) ? v : 1 - pow(2, -10 * v);
+double brush_ease(double hardness, double v) {
+    hardness = CLAMP(hardness, 0.0, 1.0);
+    // remap v based on hardness
+    double const t = CLAMP((v - hardness) / (1.0 - hardness), 0.0, 1.0);
+    // cubic ease-out on remapped t
+    return 1.0 - pow(1.0 - t, 3);
 }
 
 Bool state_match(u32 a, u32 b) {
@@ -3382,12 +3376,6 @@ Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col) {
     return canvas_dash_rect(im, c, dims, line_w, 0, col, col);
 }
 
-// FIXME w unused (required because of circle_get_alpha_fn)
-static u8 canvas_brush_get_a(__attribute__((unused)) u32 w, double r, Pair p) {
-    double const curr_r = sqrt(((p.x - r) * (p.x - r)) + ((p.y - r) * (p.y - r)));
-    return (u32)((1.0 - brush_ease(curr_r / r)) * 0xFF);
-}
-
 static Pair get_fig_fill_pt(enum FigureType type, Pair a, Pair b, Pair im_dims) {
     switch (type) {
         case Figure_Circle:
@@ -3555,51 +3543,115 @@ Rect canvas_line(
     return damage;
 }
 
-Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c) {
-    u32 const w = tc->line_w;
-    switch (shape) {
-        case DS_Circle: {
-            u32 stroke_d = (u32)(w * BRUSH_LINE_W_MOD);
-            return canvas_circle(im, tc, &canvas_brush_get_a, stroke_d, c);
-        }
-        case DS_Square: {
-            Pair c2 = (Pair) {c.x - ((i32)w / 2), c.y - ((i32)w / 2)};
-            Pair dims = (Pair) {(i32)w, (i32)w};
-            return canvas_fill_rect(im, c2, dims, *tc_curr_col(tc));
-        }
+static argb* new_circle_brush(argb col, double hardness, u32 d) {
+    if (d == 0) {
+        return NULL;
     }
-    return RNIL;
-}
-
-Rect canvas_circle(XImage* im, struct ToolCtx* tc, circle_get_alpha_fn get_a, u32 d, Pair c) {
-    Rect damage = RNIL;
-    argb const col = *tc_curr_col(tc);
-    u32 const w = tc->line_w;
+    argb* result = ecalloc((usize)d * d, sizeof(argb));
 
     if (d == 1) {
-        ximage_put_checked(im, c.x, c.y, col);
-        return RNIL;
+        result[0] = col;
+        return result;
     }
+
+    double const c = (d - 1) / 2.0;
     double const r = d / 2.0;
     double const r_sq = r * r;
-    i32 const l = c.x - (i32)r;
-    i32 const t = c.y - (i32)r;
-    for (i32 dx = 0; dx < (i32)d; ++dx) {
-        for (i32 dy = 0; dy < (i32)d; ++dy) {
-            double const dr = ((dx - r) * (dx - r)) + ((dy - r) * (dy - r));
-            i32 const x = l + dx;
-            i32 const y = t + dy;
-            if (!ximage_is_valid_point(im, x, y) || dr > r_sq) {
-                continue;
+
+    for (i32 y = 0; y < (i32)d; ++y) {
+        double dy = (y - c);
+        for (i32 x = 0; x < (i32)d; ++x) {
+            double dx = (x - c);
+            double const dist_sq = (dx * dx) + (dy * dy);
+            if (dist_sq < r_sq) {
+                u8 const alpha = (u8)((1.0 - brush_ease(hardness, dist_sq / r_sq)) * 0xFF);
+                argb const curr_col = (col & 0x00FFFFFF) | ((u32)alpha << (8 * 3));
+                result[(y * d) + x] = curr_col;
             }
-            argb const bg = XGetPixel(im, x, y);
-            argb const blended = argb_blend(col, bg, get_a(w, r, (Pair) {dx, dy}));
-            XPutPixel(im, x, y, blended);
-            damage = rect_expand(damage, (Rect) {x, y, x, y});
         }
     }
 
-    return damage;
+    return result;
+}
+
+// copy `brush_arr` to `im` at `lt` corner
+static Pair canvas_apply_brush(XImage* im, argb* brush_arr, Pair brush_dims, Pair lt) {
+    // XXX this implementation assumes XImage::data is flattened 2D array of `argb` values
+    if (!im || !brush_arr || IS_PNIL(brush_dims)) {
+        return PNIL;
+    }
+    Pair dims = {
+        .x = MAX(0, MIN(brush_dims.x, im->width - lt.x)),
+        .y = MAX(0, MIN(brush_dims.y, im->height - lt.y)),
+    };
+
+    // all messy logic is needed to crop brush_arr to im dimentions
+    for (i32 row = 0; row < dims.y; ++row) {
+        if (dims.y < -lt.x || row < -lt.y) {
+            continue;  // code below assumes what at least one row/column will be affected
+        }
+        argb* const brush_row = brush_arr + (ptrdiff_t)(brush_dims.x * row);
+        argb* const im_row_offseted = (argb*)im->data + (ptrdiff_t)(((MAX(0, row + lt.y) * im->width) + MAX(0, lt.x)));
+
+        for (i32 col = 0; col < (dims.x - (lt.x < 0 ? -lt.x : 0)); ++col) {
+            argb const bg = im_row_offseted[col];
+            argb const fg = brush_row[col];
+            // use brush pixel transparency as blending alpha value
+            im_row_offseted[col] = argb_blend(fg | ARGB_ALPHA, bg, (fg >> 0x18) & 0xFF);
+        }
+    }
+
+    return dims;
+}
+
+Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c) {
+    // cache
+    static argb* brush = NULL;  // will `free`d at program end, I guess
+    static Pair brush_dims = {0};
+    // for cache validation
+    static u32 w_cached = NIL;
+    static enum DrawerShape shape_cached = 0;  // can be valid for first time, but w_cached will fail anyway
+    static argb col_cached = 0;
+    static double hardness_cached = 0.0;  // XXX placeholder value
+
+    // cache update
+    if (w_cached != tc->line_w || shape_cached != shape || col_cached != *tc_curr_col(tc)
+        /* XXX hardness_cached not checked */) {
+        free(brush);
+        brush_dims = PNIL;
+
+        w_cached = tc->line_w;
+        shape_cached = shape;
+        col_cached = *tc_curr_col(tc);
+        /* XXX hardness_cached not updated */
+
+        switch (shape_cached) {
+            case DS_Circle: {
+                brush_dims = (Pair) {(i32)w_cached, (i32)w_cached};
+                brush = new_circle_brush(col_cached, hardness_cached, w_cached);
+                break;
+            }
+            case DS_Square: {
+                brush_dims = (Pair) {(i32)w_cached, (i32)w_cached};
+                brush = ecalloc(brush_dims.x * brush_dims.y, sizeof(argb));
+                for (i32 i = 0; i < brush_dims.x * brush_dims.y; ++i) {
+                    brush[i] = col_cached;
+                }
+                break;
+            }
+        }
+    }
+
+    Pair lt = (Pair) {c.x - (brush_dims.x / 2), c.y - (brush_dims.y / 2)};
+    canvas_apply_brush(im, brush, brush_dims, lt);
+
+    // inclusive
+    return (Rect) {
+        CLAMP(lt.x, 0, im->width + 1),
+        CLAMP(lt.y, 0, im->height + 1),
+        CLAMP(lt.x + brush_dims.x, 0, im->width + 1),
+        CLAMP(lt.y + brush_dims.y, 0, im->height + 1),
+    };
 }
 
 Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to) {
