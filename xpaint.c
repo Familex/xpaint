@@ -70,6 +70,7 @@ INCBIN(u8, pic_fig_fill_off, "res/figure-fill-off.png");
 #define COALESCE(A, B)    ((A) ? (A) : (B))
 #define UNREACHABLE()     __builtin_unreachable()
 #define IS_PNIL(p_pair)   ((p_pair).x == NIL && (p_pair).y == NIL)
+#define IS_DPNIL(p_dpt)   ((p_dpt).x == NIL && (p_dpt).y == NIL)
 #define PAIR_EQ(p_a, p_b) ((p_a).x == (p_b).x && (p_a).y == (p_b).y)
 #define IS_RNIL(p_rect) \
     (((p_rect).l) == INT32_MAX && ((p_rect).t) == INT32_MAX && ((p_rect).r) == INT32_MIN && ((p_rect).b) == INT32_MIN)
@@ -98,6 +99,7 @@ enum { NO_MODE = 0 };
 #define NIL              (-1)
 #define PNIL             ((Pair) {NIL, NIL})
 #define RNIL             ((Rect) {.l = INT32_MAX, .t = INT32_MAX, .r = INT32_MIN, .b = INT32_MIN})
+#define DPNIL            ((DPt) {NIL, NIL})
 #define PI               (3.141)
 // only one one-byte symbol allowed
 #define ARGB_ALPHA       ((argb)(0xFF000000))
@@ -3496,8 +3498,8 @@ Rect canvas_regular_poly_frame_helper(
 }
 
 // moves `a` to `b` by `distance` and stores to `c`. and `d` = `b` --> `a`
-static void canvas_regular_poly_point_helper(Pair a, Pair b, u32 distance, Pair* c, Pair* d) {
-    DPt const delta = {(double)b.x - a.x, b.y - a.y};
+static void canvas_regular_poly_point_helper(DPt a, DPt b, u32 distance, DPt* c, DPt* d) {
+    DPt const delta = {b.x - a.x, b.y - a.y};
     double const dist = sqrt((delta.x * delta.x) + (delta.y * delta.y));
 
     if (dist <= distance) {
@@ -3508,34 +3510,49 @@ static void canvas_regular_poly_point_helper(Pair a, Pair b, u32 distance, Pair*
 
     double const t = dist - distance;  // move-in amount for each point
     if (c) {
-        *c = (Pair) {b.x - (i32)(unit.x * t), b.y - (i32)(unit.y * t)};
+        *c = (DPt) {b.x - (unit.x * t), b.y - (unit.y * t)};
     }
     if (d) {
-        *d = (Pair) {a.x + (i32)(unit.x * t), a.y + (i32)(unit.y * t)};
+        *d = (DPt) {a.x + (unit.x * t), a.y + (unit.y * t)};
     }
 }
 
-static DPt circumcenter_from_height(u32 N, DPt V, DPt H) {
+static DPt circumcenter_from_height(unsigned N, DPt V, DPt H) {
+    DPt O = DPNIL;
     if (N < 3) {
-        /* Degenerate */
-        return (DPt) {NIL, NIL};
+        return O;
     }
-    double c = cos(PI / N);
-    double denom = 1.0 + c;
-    DPt O;
-    O.x = (c * V.x + H.x) / denom;
-    O.y = (c * V.y + H.y) / denom;
+
+    double dx = H.x - V.x;
+    double dy = H.y - V.y;
+    double d = sqrt((dx * dx) + (dy * dy));
+    double angle = PI / N;
+    double c = cos(angle);
+
+    if (N & 1) {
+        double R = d / (1.0 + c);
+        double t = R / d;
+        O.x = V.x + dx * t;
+        O.y = V.y + dy * t;
+    } else {
+        // Center is midpoint between V and the midpoint of the opposite side (H)
+        O.x = (V.x + H.x) * 0.5;
+        O.y = (V.y + H.y) * 0.5;
+    }
     return O;
 }
 
 Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, Bool fill) {
+    DPt const a_dpt = {a.x, a.y};
+    DPt const b_dpt = {b.x, b.y};
+
     // fill strategy will not work for small line_w
     if (!fill && tc->line_w < 10) {
-        Pair c = PNIL;
-        Pair d = PNIL;
-        canvas_regular_poly_point_helper(a, b, tc->line_w / 2, &c, &d);
+        DPt c = DPNIL;
+        DPt d = DPNIL;
+        canvas_regular_poly_point_helper(a_dpt, b_dpt, tc->line_w / 2, &c, &d);
         if (!IS_PNIL(c) && !IS_PNIL(d)) {
-            return canvas_regular_poly_frame_helper(im, tc, n, c, d, DS_CircleHard, NULL);
+            return canvas_regular_poly_frame_helper(im, tc, n, dpt_to_pt(c), dpt_to_pt(d), DS_CircleHard, NULL);
         }
         return canvas_regular_poly_frame_helper(im, tc, n, a, b, DS_CircleHard, NULL);
     }
@@ -3546,29 +3563,29 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, 
 
     // draw inner frame to restrict fill
     if (!fill && arrlen(edges) > 1) {
-        Pair center = dpt_to_pt(circumcenter_from_height(n, (DPt) {b.x, b.y}, (DPt) {a.x, a.y}));
+        DPt center = circumcenter_from_height(n, (DPt) {b.x, b.y}, (DPt) {a.x, a.y});
         // canvas_regular_poly_frame_helper on moved a and b will draw Figure_Triangle badly
         for (u32 i = 0; i < arrlen(edges); ++i) {
             u32 prev_index = MIN(i - 1, arrlen(edges) - 1);
-            Pair prev = PNIL;
-            Pair curr = PNIL;
-            canvas_regular_poly_point_helper(dpt_to_pt(edges[prev_index]), center, tc->line_w, &prev, NULL);
-            canvas_regular_poly_point_helper(dpt_to_pt(edges[i]), center, tc->line_w, &curr, NULL);
-            canvas_line(im, tc, DS_Point, prev, curr, True);
+            DPt prev = DPNIL;
+            DPt curr = DPNIL;
+            canvas_regular_poly_point_helper(edges[prev_index], center, tc->line_w, &prev, NULL);
+            canvas_regular_poly_point_helper(edges[i], center, tc->line_w, &curr, NULL);
+            canvas_line(im, tc, DS_Point, dpt_to_pt(prev), dpt_to_pt(curr), True);
         }
     }
 
-    // // fill between outer and inner frame (will fill whole figure without inner frame)
-    // Pair fill_pt1 = PNIL;
-    // Pair fill_pt2 = PNIL;
-    // canvas_regular_poly_point_helper(a, b, tc->line_w / 2, &fill_pt1, &fill_pt2);
-    // if (!IS_PNIL(fill_pt1) || !IS_PNIL(fill_pt2)) {
-    //     ximage_flood_fill(im, *tc_curr_col(tc), fill_pt1.x, fill_pt1.y);
-    //     ximage_flood_fill(im, *tc_curr_col(tc), fill_pt2.x, fill_pt2.y);
-    // } else {
-    //     // here line_w larger than distance between a and b, so fill manually
-    //     ximage_flood_fill(im, *tc_curr_col(tc), (a.x + b.x) / 2, (a.y + b.y) / 2);
-    // }
+    // fill between outer and inner frame (will fill whole figure without inner frame)
+    DPt fill_pt1 = DPNIL;
+    DPt fill_pt2 = DPNIL;
+    canvas_regular_poly_point_helper(a_dpt, b_dpt, tc->line_w / 2, &fill_pt1, &fill_pt2);
+    if (!IS_PNIL(fill_pt1) || !IS_PNIL(fill_pt2)) {
+        ximage_flood_fill(im, *tc_curr_col(tc), (i32)fill_pt1.x, (i32)fill_pt1.y);
+        ximage_flood_fill(im, *tc_curr_col(tc), (i32)fill_pt2.x, (i32)fill_pt2.y);
+    } else {
+        // here line_w larger than distance between a and b, so fill manually
+        ximage_flood_fill(im, *tc_curr_col(tc), (a.x + b.x) / 2, (a.y + b.y) / 2);
+    }
 
     arrfree(edges);
 
