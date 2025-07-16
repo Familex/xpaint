@@ -391,7 +391,6 @@ struct Ctx {
                     DS_CircleHard,
                     DS_Square,
                     DS_Point,
-                    DS_Special_FloodFill,
                 } shape;
                 u32 spacing;
             } drawer;
@@ -703,6 +702,20 @@ static Rect tool_figure_on_drag(struct Ctx* ctx, XMotionEvent const* event);
 static Rect tool_fill_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 static Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event);
 
+// canvas_line callbacks
+struct CanvasLineDrwCtxDrawer {
+    XImage* im;
+    enum DrawerShape shape;
+    u32 line_w;
+    argb col;
+};
+static Rect canvas_line_drawer_callback(void* drw_ctx, Pair p);
+struct CanvasLineDrwCtxFloodFill {
+    XImage* im;
+    argb col;
+};
+static Rect canvas_line_flood_fill_callback(void* drw_ctx, Pair p);
+
 static struct HistItem history_new_as_damage(XImage* im, Rect rect);
 static struct HistItem history_new_as_resize(XImage* im);
 static Bool history_move(struct Ctx* ctx, Bool forward);
@@ -727,9 +740,8 @@ static Rect canvas_rect(XImage* im, Pair c, Pair dims, u32 line_w, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pair p_static, Pair p_dynamic);
 // line from `a` to `b` is a polygon height (a is a base);
 static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, Bool fill);
-// FIXME directly pass params instead of tc
-static Rect canvas_line(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair from, Pair to, Bool draw_first_pt);
-static Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c);
+static Rect canvas_line(Rect (*drawer)(void* drw_ctx, Pair p), void* drw_ctx, Pair from, Pair to, u32 spacing, Bool draw_first_pt);
+static Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb col, Pair c);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pair from, Pair dims, Pair to);
 static void canvas_fill(XImage* im, argb col);
 static Bool canvas_load(struct Ctx* ctx, struct Image* image);
@@ -2945,8 +2957,9 @@ Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
         ctx->input.anchor = point_from_scr_to_cv_xy(dc, event->x, event->y);
         return canvas_apply_drawer(
             ctx->input.ovr.im,
-            tc,
             tc->d.drawer.shape,
+            tc->line_w,
+            *tc_curr_col(tc),
             point_from_scr_to_cv_xy(dc, event->x, event->y)
         );
     }
@@ -2961,6 +2974,7 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
+    assert(TC_IS_DRAWER(tc));
     struct DrawerData* drawer = &tc->d.drawer;
 
     Pair begin = ctx->input.anchor;
@@ -2971,7 +2985,19 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 
     // all points with drag motion drawn in on_drag
     if (ctx->input.c.state != CS_Drag && state_match(event->state, ShiftMask)) {
-        return canvas_line(im, tc, drawer->shape, begin, end, False);
+        return canvas_line(
+            &canvas_line_drawer_callback,
+            &(struct CanvasLineDrwCtxDrawer) {
+                .im = im,
+                .shape = drawer->shape,
+                .line_w = tc->line_w,
+                .col = *tc_curr_col(tc),
+            },
+            begin,
+            end,
+            drawer->spacing,
+            False
+        );
     }
 
     return RNIL;
@@ -2984,13 +3010,26 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
+    assert(TC_IS_DRAWER(tc));
     struct DrawerData const* drawer = &tc->d.drawer;
     XImage* const im = ctx->input.ovr.im;
 
     Pair const pointer = point_from_scr_to_cv_xy(dc, event->x, event->y);
     Pair const anchor = ctx->input.anchor;
 
-    Rect damage = canvas_line(im, tc, drawer->shape, anchor, pointer, False);
+    Rect damage = canvas_line(
+        &canvas_line_drawer_callback,
+        &(struct CanvasLineDrwCtxDrawer) {
+            .im = im,
+            .shape = drawer->shape,
+            .col = *tc_curr_col(tc),
+            .line_w = tc->line_w,
+        },
+        anchor,
+        pointer,
+        drawer->spacing,
+        False
+    );
 
     if (!IS_RNIL(damage)) {
         ctx->input.anchor = pointer;
@@ -3077,6 +3116,16 @@ Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 
     *tc_curr_col(tc) = XGetPixel(im, pointer.x, pointer.y);
     return RNIL;
+}
+
+Rect canvas_line_drawer_callback(void* drw_ctx, Pair p) {
+    struct CanvasLineDrwCtxDrawer* ctx = (struct CanvasLineDrwCtxDrawer*)drw_ctx;
+    return canvas_apply_drawer(ctx->im, ctx->shape, ctx->line_w, ctx->col, p);
+}
+
+Rect canvas_line_flood_fill_callback(void* drw_ctx, Pair p) {
+    struct CanvasLineDrwCtxFloodFill* ctx = (struct CanvasLineDrwCtxFloodFill*)drw_ctx;
+    return ximage_flood_fill(ctx->im, ctx->col, p.x, p.y);
 }
 
 struct HistItem history_new_as_damage(XImage* im, Rect rect) {
@@ -3469,14 +3518,14 @@ static DPt get_inr_circmr_cfs(u32 n) {
     return (DPt) {inradius, circumradius};
 }
 
-// FIXME remove tc argument
 Rect canvas_regular_poly_frame_helper(
     XImage* im,
-    struct ToolCtx* tc,
     u32 n,
     Pair a,
     Pair b,
     enum DrawerShape shape,
+    u32 line_w,
+    argb col,
     DPt** edges_optout
 ) {
     Rect damage = RNIL;
@@ -3497,7 +3546,19 @@ Rect canvas_regular_poly_frame_helper(
         if (edges_optout) {
             arrpush(*edges_optout, curr_adjusted);
         }
-        Rect line_damage = canvas_line(im, tc, shape, dpt_to_pt(dpt_add(c, prev)), dpt_to_pt(curr_adjusted), True);
+        Rect line_damage = canvas_line(
+            &canvas_line_drawer_callback,
+            &(struct CanvasLineDrwCtxDrawer) {
+                .im = im,
+                .shape = shape,
+                .line_w = line_w,
+                .col = col,
+            },
+            dpt_to_pt(dpt_add(c, prev)),
+            dpt_to_pt(curr_adjusted),
+            1,  // only hard lines, no spacing needed
+            True
+        );
         damage = rect_expand(damage, line_damage);
         prev = curr;
     }
@@ -3567,12 +3628,14 @@ static void canvas_regular_poly_fill_helper(XImage* im, DPt const* edges, DPt ce
         DPt curr = DPNIL;
         canvas_regular_poly_point_helper(edges[prev_index], center, (u32)indent, &prev, NULL);
         canvas_regular_poly_point_helper(edges[i], center, (u32)indent, &curr, NULL);
-        // HACK here before canvas_line refactor
-        struct ToolCtx tc = {
-            .colarr = &col,
-            .curr_col = 0,
-        };
-        canvas_line(im, &tc, DS_Special_FloodFill, dpt_to_pt(prev), dpt_to_pt(curr), True);
+        canvas_line(
+            &canvas_line_flood_fill_callback,
+            &(struct CanvasLineDrwCtxFloodFill) {.im = im, .col = col},
+            dpt_to_pt(prev),
+            dpt_to_pt(curr),
+            1,  // flood fill optimized for spam
+            True
+        );
     }
 }
 
@@ -3587,6 +3650,8 @@ static double canvas_regular_poly_line_w_helper(u32 n, u32 line_w) {
 Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, Bool fill) {
     DPt const a_dpt = {a.x, a.y};
     DPt const b_dpt = {b.x, b.y};
+    u32 const line_w = tc->line_w;
+    argb const col = *tc_curr_col(tc);
 
     // fill strategy will not work for small line_w
     if (!fill && tc->line_w < 10) {
@@ -3594,16 +3659,25 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, 
         DPt d = DPNIL;
         canvas_regular_poly_point_helper(a_dpt, b_dpt, tc->line_w / 2, &c, &d);
         if (!IS_PNIL(c) && !IS_PNIL(d)) {
-            return canvas_regular_poly_frame_helper(im, tc, n, dpt_to_pt(c), dpt_to_pt(d), DS_CircleHard, NULL);
+            return canvas_regular_poly_frame_helper(
+                im,
+                n,
+                dpt_to_pt(c),
+                dpt_to_pt(d),
+                DS_CircleHard,
+                line_w,
+                col,
+                NULL
+            );
         }
-        return canvas_regular_poly_frame_helper(im, tc, n, a, b, DS_CircleHard, NULL);
+        return canvas_regular_poly_frame_helper(im, n, a, b, DS_CircleHard, line_w, col, NULL);
     }
 
     // draw outer frame
     DPt* edges = NULL;
     DPt const center = circumcenter_from_height(n, (DPt) {b.x, b.y}, (DPt) {a.x, a.y});
     double const indent = canvas_regular_poly_line_w_helper(n, tc->line_w);
-    Rect const damage = canvas_regular_poly_frame_helper(im, tc, n, a, b, DS_Point, &edges);
+    Rect const damage = canvas_regular_poly_frame_helper(im, n, a, b, DS_Point, line_w, col, &edges);
 
     // draw inner frame to restrict fill
     if (!fill && arrlen(edges) > 1) {
@@ -3614,13 +3688,26 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, 
             DPt curr = DPNIL;
             canvas_regular_poly_point_helper(edges[prev_index], center, (u32)indent, &prev, NULL);
             canvas_regular_poly_point_helper(edges[i], center, (u32)indent, &curr, NULL);
-            canvas_line(im, tc, DS_Point, dpt_to_pt(prev), dpt_to_pt(curr), True);
+            canvas_line(
+                &canvas_line_drawer_callback,
+                &(struct CanvasLineDrwCtxDrawer) {
+                    .im = im,
+                    .line_w = line_w,
+                    .shape = DS_Point,
+                    .col = col,
+                },
+                dpt_to_pt(prev),
+                dpt_to_pt(curr),
+                1,  // only spacing 1 can be used with DS_Point
+                True
+            );
         }
     }
 
     // fill between outer and inner frame
     // without inner flame this will fill whole figure
-    canvas_regular_poly_fill_helper(im, edges, center, indent * 0.1, *tc_curr_col(tc));
+    double const fill_indent = (indent * 0.1) + 2.5;  // static part for indent == 1
+    canvas_regular_poly_fill_helper(im, edges, center, fill_indent, *tc_curr_col(tc));
 
     arrfree(edges);
 
@@ -3628,11 +3715,11 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pair a, Pair b, 
 }
 
 Rect canvas_line(
-    XImage* im,
-    struct ToolCtx* tc,
-    enum DrawerShape const shape,
+    Rect (*drawer)(void* drw_ctx, Pair p),
+    void* drw_ctx,
     Pair from,
     Pair const to,
+    u32 spacing,
     Bool draw_first_pt
 ) {
     // XXX tc may be NULL
@@ -3644,8 +3731,6 @@ Rect canvas_line(
         return RNIL;
     }
 
-    u32 const spacing = TC_IS_DRAWER(tc) ? tc->d.drawer.spacing : 1;
-
     i32 dx = abs(to.x - from.x);
     i32 sx = from.x < to.x ? 1 : -1;
     i32 dy = -abs(to.y - from.y);
@@ -3656,9 +3741,7 @@ Rect canvas_line(
     u32 steps = 0;  // prevent infinite loops
     while (++steps < CANVAS_LINE_MAX_STEPS) {
         if (draw_first_pt && spacing_cnt == 0) {
-            // HACK generalize this
-            Rect pt_damage = shape == DS_Special_FloodFill ? ximage_flood_fill(im, *tc_curr_col(tc), from.x, from.y)
-                                                           : canvas_apply_drawer(im, tc, shape, from);
+            Rect pt_damage = drawer(drw_ctx, from);
             damage = rect_expand(damage, pt_damage);
         }
         if (PAIR_EQ(from, to)) {
@@ -3747,7 +3830,7 @@ static Pair canvas_apply_brush(XImage* im, argb* brush_arr, Pair brush_dims, Pai
     return dims;
 }
 
-Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape, Pair c) {
+Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb col, Pair c) {
     // cache
     static argb* brush = NULL;  // will `free`d at program end, I guess
     static Pair brush_dims = {0};
@@ -3758,14 +3841,14 @@ Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape,
     static double hardness_cached = 0.0;  // XXX placeholder value
 
     // cache update
-    if (w_cached != tc->line_w || shape_cached != shape || col_cached != *tc_curr_col(tc)
+    if (w_cached != line_w || shape_cached != shape || col_cached != col
         /* XXX hardness_cached not checked */) {
         free(brush);
         brush_dims = PNIL;
 
-        w_cached = tc->line_w;
+        w_cached = line_w;
         shape_cached = shape;
-        col_cached = *tc_curr_col(tc);
+        col_cached = col;
         /* XXX hardness_cached not updated */
 
         switch (shape_cached) {
@@ -3791,10 +3874,6 @@ Rect canvas_apply_drawer(XImage* im, struct ToolCtx* tc, enum DrawerShape shape,
                 brush_dims = (Pair) {1, 1};
                 brush = ecalloc(1, sizeof(argb));
                 brush[0] = col_cached;
-                break;
-            }
-            case DS_Special_FloodFill: {
-                trace("canvas_apply_drawer: DS_Special_* brushes not supported");
                 break;
             }
         }
