@@ -54,6 +54,7 @@ INCBIN(u8, pic_tool_pencil, "res/tool-pencil.png");
 INCBIN(u8, pic_tool_picker, "res/tool-picker.png");
 INCBIN(u8, pic_tool_select, "res/tool-select.png");
 INCBIN(u8, pic_tool_brush, "res/tool-brush.png");
+INCBIN(u8, pic_tool_spray, "res/tool-spray.png");
 INCBIN(u8, pic_tool_figure, "res/tool-figure.png");
 INCBIN(u8, pic_tool_text, "res/tool-text.png");
 INCBIN(u8, pic_fig_rect, "res/figure-rectangle.png");
@@ -115,7 +116,8 @@ enum { NO_MODE = 0 };
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define OVERLAY_TRANSFORM(p_mode) \
     ((p_mode)->t != InputT_Transform ? TRANSFORM_DEFAULT : trans_add((p_mode)->d.trans.curr, (p_mode)->d.trans.acc))
-#define TC_IS_DRAWER(p_tc)       (((p_tc) != NULL) && ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush))
+#define TC_IS_DRAWER(p_tc) \
+    (((p_tc) != NULL) && ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush || (p_tc)->t == Tool_Spray))
 #define ZOOM_C(p_dc)             (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 #define TRANSFORM_DEFAULT        ((Transform) {.scale = {1.0, 1.0}})
 #define BTN_EQ(p_btn, p_btn_arr) ((btn_eq_impl((p_btn), (p_btn_arr), (LENGTH((p_btn_arr))))))
@@ -212,6 +214,7 @@ enum Icon {
     I_Fill,
     I_Picker,
     I_Brush,
+    I_Spray,
     I_Figure,
     I_Text,
     I_FigRect,
@@ -380,6 +383,7 @@ struct Ctx {
             Tool_Fill,
             Tool_Picker,
             Tool_Brush,
+            Tool_Spray,
             Tool_Figure,
             Tool_Text,
         } t;
@@ -389,6 +393,7 @@ struct Ctx {
                 enum DrawerShape {
                     DS_Circle,
                     DS_CircleHard,
+                    DS_CircleRandom,
                     DS_Square,
                     DS_Point,
                 } shape;
@@ -572,7 +577,8 @@ static u32 digit_count(u32 number);
 static void arrpoputf8(char const* strarr);
 static usize first_dismatch(char const* restrict s1, char const* restrict s2);
 static struct IconData get_icon_data(enum Icon icon);
-static double brush_ease(double hardness, double v);
+static double ease_out_cubic_hardness(double hardness, double v);
+static double ease_in_expo(double a);
 static Bool state_match(u32 a, u32 b);
 static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq_impl(Button a, Button const* arr, u32 arr_len);
@@ -965,6 +971,7 @@ struct IconData get_icon_data(enum Icon icon) {
         case I_Fill: return (D) {pic_tool_fill_data, RES_SZ_TOOL_FILL};
         case I_Picker: return (D) {pic_tool_picker_data, RES_SZ_TOOL_PICKER};
         case I_Brush: return (D) {pic_tool_brush_data, RES_SZ_TOOL_BRUSH};
+        case I_Spray: return (D) {pic_tool_spray_data, RES_SZ_TOOL_SPRAY};
         case I_Figure: return (D) {pic_tool_figure_data, RES_SZ_TOOL_FIGURE};
         case I_Text: return (D) {pic_tool_text_data, RES_SZ_TOOL_TEXT};
         case I_FigRect: return (D) {pic_fig_rect_data, RES_SZ_FIGURE_RECTANGLE};
@@ -979,12 +986,16 @@ struct IconData get_icon_data(enum Icon icon) {
     UNREACHABLE();
 }
 
-double brush_ease(double hardness, double v) {
+double ease_out_cubic_hardness(double hardness, double v) {
     hardness = CLAMP(hardness, 0.0, 1.0);
     // remap v based on hardness
     double const t = CLAMP((v - hardness) / (1.0 - hardness), 0.0, 1.0);
     // cubic ease-out on remapped t
     return 1.0 - pow(1.0 - t, 3);
+}
+
+double ease_in_expo(double a) {
+    return pow(2, (10.0 * CLAMP(a, 0.0, 1.0)) - 10.0);
 }
 
 Bool state_match(u32 a, u32 b) {
@@ -1257,6 +1268,15 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
                 .spacing = TOOLS_BRUSH_DEFAULT_SPACING,
             };
             break;
+        case Tool_Spray:
+            tc->on_press = &tool_drawer_on_press;
+            tc->on_release = &tool_drawer_on_release;
+            tc->on_drag = &tool_drawer_on_drag;
+            tc->d.drawer = (struct DrawerData) {
+                .shape = DS_CircleRandom,
+                .spacing = TOOLS_BRUSH_DEFAULT_SPACING,
+            };
+            break;
         case Tool_Pencil:
             tc->on_press = &tool_drawer_on_press;
             tc->on_release = &tool_drawer_on_release;
@@ -1285,6 +1305,7 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
         case Tool_Fill: return "fill   ";
         case Tool_Picker: return "picker ";
         case Tool_Brush: return "brush  ";
+        case Tool_Spray: return "spray  ";
         case Tool_Figure:
             switch (tc->d.fig.curr) {
                 case Figure_Circle: return "fig:cir";
@@ -2783,6 +2804,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
                     case Tool_Pencil:
                     case Tool_Fill:
                     case Tool_Picker:
+                    case Tool_Spray:
                     case Tool_Brush: {
                         struct Item items[] = {
                             {.arg.tool = Tool_Text, .on_select = &sel_circ_on_select_tool, .icon = I_Text},
@@ -2791,6 +2813,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
                             {.arg.tool = Tool_Fill, .on_select = &sel_circ_on_select_tool, .icon = I_Fill},
                             {.arg.tool = Tool_Picker, .on_select = &sel_circ_on_select_tool, .icon = I_Picker},
                             {.arg.tool = Tool_Brush, .on_select = &sel_circ_on_select_tool, .icon = I_Brush},
+                            {.arg.tool = Tool_Spray, .on_select = &sel_circ_on_select_tool, .icon = I_Spray},
                             {.arg.tool = Tool_Figure, .on_select = &sel_circ_on_select_tool, .icon = I_Figure},
                         };
                         for (u32 i = 0; i < LENGTH(items); ++i) {
@@ -3769,7 +3792,7 @@ Rect canvas_line(
     return damage;
 }
 
-static argb* new_circle_brush(argb col, double hardness, u32 d) {
+static argb* new_circle_brush(argb col, double hardness, u32 d, Bool random) {
     if (d == 0) {
         return NULL;
     }
@@ -3790,9 +3813,15 @@ static argb* new_circle_brush(argb col, double hardness, u32 d) {
             double dx = (x - c);
             double const dist_sq = (dx * dx) + (dy * dy);
             if (dist_sq < r_sq) {
-                u8 const alpha = (u8)((1.0 - brush_ease(hardness, dist_sq / r_sq)) * 0xFF);
-                argb const curr_col = (col & 0x00FFFFFF) | ((u32)alpha << (8 * 3));
-                result[(y * d) + x] = curr_col;
+                if (random) {
+                    double const curr_r = (double)rand() / (double)RAND_MAX;  // NOLINT(cert-msc30-c, cert-msc50-cpp)
+                    double const threshold = ease_in_expo(hardness + 0.1);
+                    result[(y * d) + x] = curr_r < threshold ? col : 0;
+                } else {
+                    u8 const alpha = (u8)((1.0 - ease_out_cubic_hardness(hardness, dist_sq / r_sq)) * 0xFF);
+                    argb const curr_col = (col & 0x00FFFFFF) | ((u32)alpha << (8 * 3));
+                    result[(y * d) + x] = curr_col;
+                }
             }
         }
     }
@@ -3839,9 +3868,10 @@ Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb co
     static enum DrawerShape shape_cached = 0;  // can be valid for first time, but w_cached will fail anyway
     static argb col_cached = 0;
     static double hardness_cached = 0.0;  // XXX placeholder value
+    static Bool force_cache_fail = False;
 
     // cache update
-    if (w_cached != line_w || shape_cached != shape || col_cached != col
+    if (force_cache_fail || w_cached != line_w || shape_cached != shape || col_cached != col
         /* XXX hardness_cached not checked */) {
         free(brush);
         brush_dims = PNIL;
@@ -3850,16 +3880,17 @@ Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb co
         shape_cached = shape;
         col_cached = col;
         /* XXX hardness_cached not updated */
+        force_cache_fail = shape == DS_CircleRandom;
 
         switch (shape_cached) {
             case DS_Circle: {
                 brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
-                brush = new_circle_brush(col_cached, hardness_cached, w_cached);
+                brush = new_circle_brush(col_cached, hardness_cached, w_cached, False);
                 break;
             }
             case DS_CircleHard: {
                 brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
-                brush = new_circle_brush(col_cached, 1.0, w_cached);
+                brush = new_circle_brush(col_cached, 1.0, w_cached, False);
                 break;
             }
             case DS_Square: {
@@ -3876,6 +3907,10 @@ Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb co
                 brush[0] = col_cached;
                 break;
             }
+            case DS_CircleRandom:
+                brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
+                brush = new_circle_brush(col_cached, hardness_cached, w_cached, True);
+                break;
         }
     }
 
@@ -4420,6 +4455,7 @@ static u32 draw_module(struct Ctx* ctx, SLModule const* module, Pt c) {
                         case Tool_Pencil: {
                             return draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
                         }
+                        case Tool_Spray:
                         case Tool_Brush: {
                             i32 const val = TC_IS_DRAWER(tc) ? (i32)tc->d.drawer.spacing : 0;
                             return draw_int(dc, val, c, SchmNorm, False);
