@@ -116,8 +116,6 @@ enum { NO_MODE = 0 };
 #define COL_BG(p_dc, p_sc) ((p_dc)->schemes_dyn[(p_sc)].bg.pixel | 0xFF000000)
 #define OVERLAY_TRANSFORM(p_mode) \
     ((p_mode)->t != InputT_Transform ? TRANSFORM_DEFAULT : trans_add((p_mode)->d.trans.curr, (p_mode)->d.trans.acc))
-#define TC_IS_DRAWER(p_tc) \
-    (((p_tc) != NULL) && ((p_tc)->t == Tool_Pencil || (p_tc)->t == Tool_Brush || (p_tc)->t == Tool_Spray))
 #define ZOOM_C(p_dc)             (pow(CANVAS_ZOOM_SPEED, (double)(p_dc)->cv.zoom))
 #define TRANSFORM_DEFAULT        ((Transform) {.scale = {1.0, 1.0}})
 #define BTN_EQ(p_btn, p_btn_arr) ((btn_eq_impl((p_btn), (p_btn_arr), (LENGTH((p_btn_arr))))))
@@ -379,11 +377,9 @@ struct Ctx {
 
         enum ToolTag {
             Tool_Selection,
-            Tool_Pencil,
+            Tool_Drawer,
             Tool_Fill,
             Tool_Picker,
-            Tool_Brush,
-            Tool_Spray,
             Tool_Figure,
             Tool_Text,
         } t;
@@ -391,8 +387,8 @@ struct Ctx {
             // Tool_Pencil | Tool_Brush
             struct DrawerData {
                 enum DrawerShape {
+                    DS_Brush,
                     DS_Circle,
-                    DS_CircleHard,
                     DS_CircleRandom,
                     DS_Square,
                     DS_Point,
@@ -436,6 +432,7 @@ struct Ctx {
             void (*on_select)(struct Ctx* ctx, union SCI_Arg arg);
             union SCI_Arg {
                 enum ToolTag tool;
+                enum DrawerShape drawer;
                 enum FigureType figure;
                 argb col;
                 usize num;
@@ -610,7 +607,7 @@ static void str_free(char** str_dyn);
 static struct ToolCtx tc_new(struct DrawCtx* dc);
 static void tc_set_curr_col_num(struct ToolCtx* tc, u32 value);
 static argb* tc_curr_col(struct ToolCtx* tc);
-static void tc_set_tool(struct ToolCtx* tc, enum ToolTag type);
+static void tc_set_tool(struct ToolCtx* tc, enum ToolTag type, union ToolData* td_opt);
 static char const* tc_get_tool_name(struct ToolCtx const* tc);
 static void tc_free(Display* dp, struct ToolCtx* tc);
 
@@ -686,6 +683,8 @@ static i32 sel_circ_curr_item(struct SelectionCircle const* sc, i32 x, i32 y);
 // selection circle item callbacks. Can be unused, if config changed
 __attribute__((unused))
 static void sel_circ_on_select_tool(struct Ctx* ctx, union SCI_Arg tool);
+__attribute__((unused))
+static void sel_circ_on_select_drawer(struct Ctx* ctx, union SCI_Arg tool);
 __attribute__((unused))
 static void sel_circ_on_select_figure_toggle_fill(struct Ctx* ctx, __attribute__((unused)) union SCI_Arg arg);
 __attribute__((unused))
@@ -1243,8 +1242,11 @@ argb* tc_curr_col(struct ToolCtx* tc) {
     return &tc->colarr[tc->curr_col];
 }
 
-void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
+void tc_set_tool(struct ToolCtx* tc, enum ToolTag type, union ToolData* td_opt) {
     tc->t = type;
+    if (td_opt) {
+        tc->d = *td_opt;
+    }
     tc->on_press = NULL;
     tc->on_release = NULL;
     tc->on_drag = NULL;
@@ -1259,32 +1261,13 @@ void tc_set_tool(struct ToolCtx* tc, enum ToolTag type) {
             tc->on_release = &tool_selection_on_release;
             tc->on_drag = &tool_selection_on_drag;
             break;
-        case Tool_Brush:
+        case Tool_Drawer:
             tc->on_press = &tool_drawer_on_press;
             tc->on_release = &tool_drawer_on_release;
             tc->on_drag = &tool_drawer_on_drag;
-            tc->d.drawer = (struct DrawerData) {
-                .shape = DS_Circle,
-                .spacing = TOOLS_BRUSH_DEFAULT_SPACING,
-            };
-            break;
-        case Tool_Spray:
-            tc->on_press = &tool_drawer_on_press;
-            tc->on_release = &tool_drawer_on_release;
-            tc->on_drag = &tool_drawer_on_drag;
-            tc->d.drawer = (struct DrawerData) {
-                .shape = DS_CircleRandom,
-                .spacing = TOOLS_BRUSH_DEFAULT_SPACING,
-            };
-            break;
-        case Tool_Pencil:
-            tc->on_press = &tool_drawer_on_press;
-            tc->on_release = &tool_drawer_on_release;
-            tc->on_drag = &tool_drawer_on_drag;
-            tc->d.drawer = (struct DrawerData) {
-                .shape = DS_Square,
-                tc->d.drawer.spacing = 1,
-            };
+            if (!td_opt) {
+                tc->d.drawer = (struct DrawerData) {0};
+            }
             break;
         case Tool_Fill: tc->on_release = &tool_fill_on_release; break;
         case Tool_Picker: tc->on_release = &tool_picker_on_release; break;
@@ -1301,17 +1284,24 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
     switch (tc->t) {
         case Tool_Text: return "text   ";
         case Tool_Selection: return "select ";
-        case Tool_Pencil: return "pencil ";
+        case Tool_Drawer:
+            switch (tc->d.drawer.shape) {
+                case DS_Brush:
+                case DS_Circle: return "brush  ";
+                case DS_CircleRandom: return "spray  ";
+                case DS_Square:
+                case DS_Point: return "pencil ";
+            }
+            break;
         case Tool_Fill: return "fill   ";
         case Tool_Picker: return "picker ";
-        case Tool_Brush: return "brush  ";
-        case Tool_Spray: return "spray  ";
         case Tool_Figure:
             switch (tc->d.fig.curr) {
                 case Figure_Circle: return "fig:cir";
                 case Figure_Rectangle: return "fig:rct";
                 case Figure_Triangle: return "fig:tri";
             }
+            break;
     }
     UNREACHABLE();
 }
@@ -1898,7 +1888,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                     ctx->input.jpg_quality_level = cl_cmd->d.set.d.jpg_qlt.quality;
                 } break;
                 case ClCDS_Spacing: {
-                    if (TC_IS_DRAWER(&CURR_TC(ctx))) {
+                    if (CURR_TC(ctx).t == Tool_Drawer) {
                         if (cl_cmd->d.set.d.spacing.val >= 1) {
                             CURR_TC(ctx).d.drawer.spacing = cl_cmd->d.set.d.spacing.val;
                         } else {
@@ -2699,7 +2689,21 @@ void text_mode_rerender(struct Ctx* ctx) {
 }
 
 void sel_circ_on_select_tool(struct Ctx* ctx, union SCI_Arg tool) {
-    tc_set_tool(&CURR_TC(ctx), tool.tool);
+    tc_set_tool(&CURR_TC(ctx), tool.tool, NULL);
+}
+
+void sel_circ_on_select_drawer(struct Ctx* ctx, union SCI_Arg tool) {
+    tc_set_tool(
+        &CURR_TC(ctx),
+        Tool_Drawer,
+        &(union ToolData) {
+            .drawer =
+                (struct DrawerData) {
+                    .shape = tool.drawer,
+                    .spacing = tool.drawer == DS_Square ? 1 : TOOLS_BRUSH_DEFAULT_SPACING,
+                },
+        }
+    );
 }
 
 void sel_circ_on_select_figure_toggle_fill(struct Ctx* ctx, __attribute__((unused)) union SCI_Arg arg) {
@@ -2801,19 +2805,17 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
                 switch (tc->t) {
                     case Tool_Text:
                     case Tool_Selection:
-                    case Tool_Pencil:
+                    case Tool_Drawer:
                     case Tool_Fill:
-                    case Tool_Picker:
-                    case Tool_Spray:
-                    case Tool_Brush: {
+                    case Tool_Picker: {
                         struct Item items[] = {
                             {.arg.tool = Tool_Text, .on_select = &sel_circ_on_select_tool, .icon = I_Text},
                             {.arg.tool = Tool_Selection, .on_select = &sel_circ_on_select_tool, .icon = I_Select},
-                            {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
+                            {.arg.drawer = DS_Square, .on_select = &sel_circ_on_select_drawer, .icon = I_Pencil},
                             {.arg.tool = Tool_Fill, .on_select = &sel_circ_on_select_tool, .icon = I_Fill},
                             {.arg.tool = Tool_Picker, .on_select = &sel_circ_on_select_tool, .icon = I_Picker},
-                            {.arg.tool = Tool_Brush, .on_select = &sel_circ_on_select_tool, .icon = I_Brush},
-                            {.arg.tool = Tool_Spray, .on_select = &sel_circ_on_select_tool, .icon = I_Spray},
+                            {.arg.drawer = DS_Brush, .on_select = &sel_circ_on_select_drawer, .icon = I_Brush},
+                            {.arg.drawer = DS_CircleRandom, .on_select = &sel_circ_on_select_drawer, .icon = I_Spray},
                             {.arg.tool = Tool_Figure, .on_select = &sel_circ_on_select_tool, .icon = I_Figure},
                         };
                         for (u32 i = 0; i < LENGTH(items); ++i) {
@@ -2828,7 +2830,7 @@ void sel_circ_init_and_show(struct Ctx* ctx, Button button, i32 x, i32 y) {
                             {.arg.figure = Figure_Triangle, .on_select = &sel_circ_on_select_figure, .icon = I_FigTri},
                             {.on_select = &sel_circ_on_select_figure_toggle_fill,
                              .icon = tc->d.fig.fill ? I_FigFillOff : I_FigFillOn},
-                            {.arg.tool = Tool_Pencil, .on_select = &sel_circ_on_select_tool, .icon = I_Pencil},
+                            {.arg.drawer = DS_Square, .on_select = &sel_circ_on_select_drawer, .icon = I_Pencil},
                         };
                         for (u32 i = 0; i < LENGTH(items); ++i) {
                             arrpush(sc->items_arr, items[i]);
@@ -2997,7 +2999,7 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    assert(TC_IS_DRAWER(tc));
+    assert(tc->t == Tool_Drawer);
     struct DrawerData* drawer = &tc->d.drawer;
 
     Pt begin = ctx->input.anchor;
@@ -3033,7 +3035,7 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     struct ToolCtx* tc = &CURR_TC(ctx);
     struct DrawCtx* dc = &ctx->dc;
-    assert(TC_IS_DRAWER(tc));
+    assert(tc->t == Tool_Drawer);
     struct DrawerData const* drawer = &tc->d.drawer;
     XImage* const im = ctx->input.ovr.im;
 
@@ -3682,18 +3684,9 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool
         DPt d = DPNIL;
         canvas_regular_poly_point_helper(a_dpt, b_dpt, tc->line_w / 2, &c, &d);
         if (!IS_PNIL(c) && !IS_PNIL(d)) {
-            return canvas_regular_poly_frame_helper(
-                im,
-                n,
-                dpt_to_pt(c),
-                dpt_to_pt(d),
-                DS_CircleHard,
-                line_w,
-                col,
-                NULL
-            );
+            return canvas_regular_poly_frame_helper(im, n, dpt_to_pt(c), dpt_to_pt(d), DS_Circle, line_w, col, NULL);
         }
-        return canvas_regular_poly_frame_helper(im, n, a, b, DS_CircleHard, line_w, col, NULL);
+        return canvas_regular_poly_frame_helper(im, n, a, b, DS_Circle, line_w, col, NULL);
     }
 
     // draw outer frame
@@ -3883,12 +3876,12 @@ Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb co
         force_cache_fail = shape == DS_CircleRandom;
 
         switch (shape_cached) {
-            case DS_Circle: {
+            case DS_Brush: {
                 brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
                 brush = new_circle_brush(col_cached, hardness_cached, w_cached, False);
                 break;
             }
-            case DS_CircleHard: {
+            case DS_Circle: {
                 brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
                 brush = new_circle_brush(col_cached, 1.0, w_cached, False);
                 break;
@@ -4452,13 +4445,15 @@ static u32 draw_module(struct Ctx* ctx, SLModule const* module, Pt c) {
                         case Tool_Picker:
                         case Tool_Figure:
                         case Tool_Text: return 0;
-                        case Tool_Pencil: {
-                            return draw_int(dc, (i32)tc->line_w, c, SchmNorm, False);
-                        }
-                        case Tool_Spray:
-                        case Tool_Brush: {
-                            i32 const val = TC_IS_DRAWER(tc) ? (i32)tc->d.drawer.spacing : 0;
-                            return draw_int(dc, val, c, SchmNorm, False);
+                        case Tool_Drawer: {
+                            // XXX shows spacing for pencil
+                            char const* fmt = "line_w: %d spacing: %d";
+                            u32 str_size = snprintf(NULL, 0, fmt, tc->line_w, tc->d.drawer.spacing);
+                            char str[str_size + 1];  // +1 for null-terminator
+                            (void)snprintf(str, sizeof(str), fmt, tc->line_w, tc->d.drawer.spacing);
+
+                            u32 const width = draw_string(dc, str, c, SchmNorm, False);
+                            return width;
                         }
                     }
                     UNREACHABLE();
@@ -4966,7 +4961,11 @@ void setup(Display* dp, struct Ctx* ctx) {
     dc_cache_init(ctx);
 
     for (u32 i = 0; i < TCS_NUM; ++i) {
-        tc_set_tool(&ctx->tcarr[i], Tool_Pencil);
+        tc_set_tool(
+            &ctx->tcarr[i],
+            Tool_Drawer,
+            &(union ToolData) {.drawer = (struct DrawerData) {.shape = DS_Square, .spacing = 1}}
+        );
     }
 
     update_screen(ctx, PNIL, True);

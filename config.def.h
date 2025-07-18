@@ -38,8 +38,9 @@ SLModule const RIGHT_MODULES[] = {
     {SLM_ColorList, .d = {0}},
 };
 
+// .arg and .on_select must match
 struct Item const ALTERNATIVE_SEL_CIRC_ITEMS[] = {
-    {.arg.tool = Tool_Pencil, .on_select = sel_circ_on_select_tool, .desc = "tool: pencil"},
+    {.arg.drawer = DS_Square, .on_select = sel_circ_on_select_drawer, .desc = "tool: pencil"},
     {.arg.col = 0xFF000000, .on_select = sel_circ_on_select_col, .desc = "col: black"},
     {.arg.col = 0xFFFFFFFF, .on_select = sel_circ_on_select_col, .desc = "col: white"},
     {.arg.num = 25, .on_select = sel_circ_on_select_set_linew, .desc = "line_w: 25"},
