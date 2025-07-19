@@ -5012,13 +5012,13 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     inp->damage = RNIL;
     inp->redraw_track[0] = RNIL;
     inp->redraw_track[1] = RNIL;
-    overlay_clear(&ctx->input.ovr);
 
     if (inp->mode.t == InputT_Transform || inp->mode.t == InputT_Text) {
         // do nothing
     } else if (inp->c.state == CS_None && (BTN_EQ(button, BTN_SEL_CIRC) | BTN_EQ(button, BTN_SEL_CIRC_ALTERNATIVE))) {
         sel_circ_init_and_show(ctx, button, e->x, e->y);
     } else if (tc->on_press) {
+        overlay_clear(&ctx->input.ovr);
         Rect const curr_damage = tc->on_press(ctx, e);
         overlay_expand_rect(&inp->ovr, curr_damage);
         input_set_damage(inp, curr_damage);
