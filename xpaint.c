@@ -5125,6 +5125,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
 
     struct Input* inp = &ctx->input;
     struct InputMode* mode = &inp->mode;
+    struct DrawCtx* dc = &ctx->dc;
 
     XKeyPressedEvent e = event->xkey;
     if (e.type == KeyRelease) {
@@ -5384,7 +5385,8 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     // else-if chain to filter keys
     if (mode->t == InputT_Text) {
         if (KEY_EQ(curr, KEY_TX_MODE_INTERACT)) {
-            input_set_damage(inp, RNIL);
+            history_forward(ctx, history_new_as_damage(dc->cv.im, inp->ovr.rect));
+            ximage_blend(dc->cv.im, inp->ovr.im);
             overlay_clear(&inp->ovr);
             input_mode_set(ctx, InputT_Interact);
         } else if (KEY_EQ(curr, KEY_TX_CONFIRM)) {
