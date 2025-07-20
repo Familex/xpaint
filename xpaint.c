@@ -5071,7 +5071,7 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
         input_set_damage(inp, curr_damage);
     }
 
-    update_screen(ctx, (Pt) {e->x, e->y}, True);
+    update_screen(ctx, (Pt) {e->x, e->y}, False);
     draw_selection_circle(ctx, &ctx->sc, e->x, e->y);
 
     inp->c = (struct CursorState) {
@@ -5454,12 +5454,10 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 text_mode_push(ctx, (char)(lookup_buf[i] & 0xFF));
             }
         }
-        // FIXME do full screen update?
-        update_screen(ctx, PNIL, True);
     }
 
     // FIXME extra updates on invalid events
-    update_screen(ctx, (Pt) {e.x, e.y}, True);
+    update_screen(ctx, (Pt) {e.x, e.y}, False);
     if (cl_msg_to_show) {
         show_message(ctx, cl_msg_to_show);
         str_free(&cl_msg_to_show);
@@ -5786,8 +5784,7 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                     char elem = (char)data_xdyn[i];
                     text_mode_push(ctx, elem);
                 }
-                // FIXME calc damage instead?
-                update_screen(ctx, PNIL, True);
+                update_screen(ctx, PNIL, False);
                 break;
             case InputT_Interact:
             case InputT_Transform:
