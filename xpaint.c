@@ -3912,10 +3912,10 @@ Rect canvas_apply_drawer(XImage* im, enum DrawerShape shape, u32 line_w, argb co
 
     // inclusive
     return (Rect) {
-        CLAMP(lt.x, 0, im->width + 1),
-        CLAMP(lt.y, 0, im->height + 1),
-        CLAMP(lt.x + brush_dims.x, 0, im->width + 1),
-        CLAMP(lt.y + brush_dims.y, 0, im->height + 1),
+        CLAMP(lt.x, 0, im->width - 1),
+        CLAMP(lt.y, 0, im->height - 1),
+        CLAMP(lt.x + brush_dims.x, 0, im->width - 1),
+        CLAMP(lt.y + brush_dims.y, 0, im->height - 1),
     };
 }
 
