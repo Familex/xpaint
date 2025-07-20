@@ -133,8 +133,8 @@ typedef struct {
 typedef struct {
     i32 l;
     i32 t;
-    i32 r;
-    i32 b;
+    i32 r;  // inclusive
+    i32 b;  // inclusive
 } Rect;
 
 typedef struct {
@@ -736,7 +736,7 @@ static void historyarr_clear(struct HistItem** hist);
 static usize ximage_data_len(XImage const* im);
 static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
 static void ximage_blend(XImage* dest, XImage* overlay, Rect blend_mask);
-static void ximage_clear(XImage* im);
+static void ximage_clear(XImage* im, Rect mask);
 static Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
 static Rect ximage_calc_damage(XImage* im);
@@ -3323,10 +3323,22 @@ void ximage_blend(XImage* dest, XImage* overlay, Rect blend_mask) {
     }
 }
 
-void ximage_clear(XImage* im) {
-    u32 const data_size = ximage_data_len(im);
-    // XXX is data a public member?
-    memset(im->data, 0x0, data_size);
+void ximage_clear(XImage* im, Rect mask) {
+    if (IS_RNIL(mask)) {
+        return;
+    }
+    assert(is_subrect(ximage_rect(im), mask));
+    assert(im->format == ZPixmap);
+    assert(im->bits_per_pixel % 8 == 0);
+
+    u32 const bpp = (im->bits_per_pixel + 7) / 8;
+    u8* base = (u8*)im->data;
+
+    for (i32 y = mask.t; y <= mask.b; y++) {
+        u8* row_start = base + (size_t)(y * im->bytes_per_line) + (size_t)(mask.l * bpp);
+        u32 bytes = (mask.r - mask.l + 1) * bpp;
+        memset(row_start, 0, bytes);
+    }
 }
 
 Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col) {
@@ -4078,7 +4090,7 @@ void canvas_scroll(struct Canvas* cv, DPt delta) {
 }
 
 void overlay_clear(struct InputOverlay* ovr) {
-    ximage_clear(ovr->im);
+    ximage_clear(ovr->im, ovr->rect);
     ovr->rect = RNIL;
 }
 
