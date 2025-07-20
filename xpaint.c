@@ -587,6 +587,9 @@ static char* path_expand_home(char const* path);
 
 static Rect rect_expand(Rect a, Rect b);
 static Pt rect_dims(Rect a);
+// only used in assert's, which breaks release builds
+__attribute__((unused)) static Bool is_subrect(Rect outer, Rect inner);
+__attribute__((unused)) static Bool is_valid_rect(Rect rect);
 
 static Transform trans_add(Transform a, Transform b);
 static XTransform xtrans_overlay_transform_mode(struct Input const* input);
@@ -634,6 +637,7 @@ static double dpt_dist(DPt a, DPt b);
 static enum ImageType file_type(u8 const* data, u32 len);
 static u8* ximage_to_rgb(XImage const* image, Bool rgba);
 static Bool ximage_is_valid_pt(XImage const* im, i32 x, i32 y);
+static Rect ximage_rect(XImage const* im);
 // coefficient c is proportional to the significance of component a
 static argb argb_blend(argb a, argb b, u8 c);
 // receives premultiplied argb value
@@ -731,7 +735,7 @@ static void historyarr_clear(struct HistItem** hist);
 
 static usize ximage_data_len(XImage const* im);
 static XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans);
-static void ximage_blend(XImage* dest, XImage* overlay);
+static void ximage_blend(XImage* dest, XImage* overlay, Rect blend_mask);
 static void ximage_clear(XImage* im);
 static Bool ximage_put_checked(XImage* im, i32 x, i32 y, argb col);
 static Rect ximage_flood_fill(XImage* im, argb targ_col, i32 x, i32 y);
@@ -1106,6 +1110,14 @@ Rect rect_expand(Rect a, Rect b) {
 
 Pt rect_dims(Rect a) {
     return (Pt) {a.r - a.l + 1, a.b - a.t + 1};  // inclusive
+}
+
+Bool is_subrect(Rect outer, Rect inner) {
+    return outer.l <= inner.l && outer.t <= inner.t && outer.r >= inner.r && outer.b >= inner.b;
+}
+
+Bool is_valid_rect(Rect rect) {
+    return !IS_RNIL(rect) && (rect.l <= rect.r) && (rect.t <= rect.b);
 }
 
 Transform trans_add(Transform a, Transform b) {
@@ -1569,6 +1581,11 @@ u8* ximage_to_rgb(XImage const* image, Bool rgba) {
 
 Bool ximage_is_valid_pt(XImage const* im, i32 x, i32 y) {
     return BETWEEN(x, 0, im->width - 1) && BETWEEN(y, 0, im->height - 1);
+}
+
+Rect ximage_rect(XImage const* im) {
+    // Rect is inclusive
+    return (Rect) {.l = 0, .t = 0, .r = im->width - 1, .b = im->height - 1};
 }
 
 argb argb_blend(argb a, argb b, u8 c) {
@@ -2565,7 +2582,7 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
 
             if (!IS_RNIL(transformed.rect)) {
                 history_forward(ctx, history_new_as_damage(dc->cv.im, transformed.rect));
-                ximage_blend(dc->cv.im, transformed.im);
+                ximage_blend(dc->cv.im, transformed.im, transformed.rect);
             }
             overlay_free(&transformed);
 
@@ -3160,7 +3177,7 @@ Rect canvas_line_flood_fill_callback(void* drw_ctx, Pt p) {
 }
 
 struct HistItem history_new_as_damage(XImage* im, Rect rect) {
-    assert(!IS_RNIL(rect) && rect.l <= rect.r && rect.t <= rect.b);
+    assert(is_valid_rect(rect));
 
     return (struct HistItem) {
         .t = HT_Damage,
@@ -3285,15 +3302,22 @@ XImage* ximage_apply_xtrans(XImage* im, struct DrawCtx* dc, XTransform xtrans) {
     return result;
 }
 
-void ximage_blend(XImage* dest, XImage* overlay) {
-    for (i32 x = 0; x < overlay->width; ++x) {
-        for (i32 y = 0; y < overlay->height; ++y) {
+void ximage_blend(XImage* dest, XImage* overlay, Rect blend_mask) {
+    if (IS_RNIL(blend_mask)) {
+        blend_mask = ximage_rect(overlay);
+    }
+    assert(is_valid_rect(blend_mask));
+    assert(is_subrect(ximage_rect(dest), ximage_rect(overlay)));
+    assert(is_subrect(ximage_rect(overlay), blend_mask));
+
+    for (i32 x = blend_mask.l; x <= blend_mask.r; ++x) {
+        for (i32 y = blend_mask.t; y <= blend_mask.b; ++y) {
             argb ovr = XGetPixel(overlay, x, y);
             if (ovr & ARGB_ALPHA) {
                 argb bg = XGetPixel(dest, x, y);
                 // make first argument opaque and use its opacity as third argument.
                 argb result = argb_blend(argb_normalize(ovr), bg, (ovr >> 0x18) & 0xFF);
-                ximage_put_checked(dest, x, y, result);
+                XPutPixel(dest, x, y, result);
             }
         }
     }
@@ -5085,7 +5109,7 @@ HdlrResult button_release_hdlr(struct Ctx* ctx, XEvent* event) {
         if (!IS_RNIL(final_damage)) {
             input_set_damage(inp, final_damage);
             history_forward(ctx, history_new_as_damage(dc->cv.im, final_damage));
-            ximage_blend(dc->cv.im, inp->ovr.im);
+            ximage_blend(dc->cv.im, inp->ovr.im, final_damage);
             overlay_clear(&inp->ovr);
         }
 
@@ -5392,7 +5416,7 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
     if (mode->t == InputT_Text) {
         if (KEY_EQ(curr, KEY_TX_MODE_INTERACT)) {
             history_forward(ctx, history_new_as_damage(dc->cv.im, inp->ovr.rect));
-            ximage_blend(dc->cv.im, inp->ovr.im);
+            ximage_blend(dc->cv.im, inp->ovr.im, inp->ovr.rect);
             overlay_clear(&inp->ovr);
             input_mode_set(ctx, InputT_Interact);
         } else if (KEY_EQ(curr, KEY_TX_CONFIRM)) {
@@ -5644,7 +5668,7 @@ static void copy_image_to_transform_mode(struct Ctx* ctx, XImage* im) {
     struct InputOverlay* ovr = &ctx->input.ovr;
 
     overlay_clear(ovr);
-    ximage_blend(ovr->im, im);
+    ximage_blend(ovr->im, im, RNIL);
     ovr->rect = ximage_calc_damage(ovr->im);
     input_set_damage(&ctx->input, ovr->rect);
     input_mode_set(ctx, InputT_Transform);
