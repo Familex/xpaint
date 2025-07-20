@@ -4054,10 +4054,10 @@ void canvas_resize(struct Ctx* ctx, u32 new_width, u32 new_height) {
     // resize overlay too
     XImage* old_overlay = inp->ovr.im;
     inp->ovr.im = XSubImage(inp->ovr.im, 0, 0, new_width, new_height);
-    inp->ovr.rect.l = MIN(new_width, (u32)inp->ovr.rect.l);
-    inp->ovr.rect.r = MIN(new_width, (u32)inp->ovr.rect.r);
-    inp->ovr.rect.t = MIN(new_height, (u32)inp->ovr.rect.t);
-    inp->ovr.rect.b = MIN(new_height, (u32)inp->ovr.rect.b);
+    inp->ovr.rect.l = MIN(new_width - 1, (u32)inp->ovr.rect.l);
+    inp->ovr.rect.r = MIN(new_width - 1, (u32)inp->ovr.rect.r);
+    inp->ovr.rect.t = MIN(new_height - 1, (u32)inp->ovr.rect.t);
+    inp->ovr.rect.b = MIN(new_height - 1, (u32)inp->ovr.rect.b);
     XDestroyImage(old_overlay);
 
     // FIXME can fill color be changed?
