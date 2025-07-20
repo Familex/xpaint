@@ -811,6 +811,12 @@ static Atom atoms[A_Last];
 static XImage* images[I_Last];
 
 #include "config.h"
+// include debug.h if exists (for debug functions)
+#if defined(__has_include)
+    #if __has_include("debug.h")
+        #include "debug.h"  // IWYU pragma: keep
+    #endif
+#endif
 
 // clang-format off
 static void main_die_if_no_val_for_arg(char const* cmd_name, i32 argc, char** argv, u32 pos);
