@@ -4000,8 +4000,12 @@ static Bool canvas_load(struct Ctx* ctx, struct Image* image) {
     canvas_free(&dc->cv);
     dc->cv.im = image->im;
     dc->cv.type = image->type;
-    ctx->input.ovr.im = XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
-    overlay_clear(&ctx->input.ovr);
+
+    struct InputOverlay* ovr = &ctx->input.ovr;
+    ovr->im = XSubImage(dc->cv.im, 0, 0, dc->cv.im->width, dc->cv.im->height);
+    ovr->rect = ximage_rect(ovr->im);
+    overlay_clear(ovr);
+
     return True;
 }
 
@@ -4972,10 +4976,11 @@ void setup(Display* dp, struct Ctx* ctx) {
             XFreePixmap(dp, data);
             // initial canvas color
             canvas_fill(ctx->dc.cv.im, CANVAS_BACKGROUND);
-        }
-        /* overlay */ {
-            ctx->input.ovr.im = XSubImage(ctx->dc.cv.im, 0, 0, ctx->dc.cv.im->width, ctx->dc.cv.im->height);
-            overlay_clear(&ctx->input.ovr);
+
+            struct InputOverlay* ovr = &ctx->input.ovr;
+            ovr->im = XSubImage(ctx->dc.cv.im, 0, 0, ctx->dc.cv.im->width, ctx->dc.cv.im->height);
+            ovr->rect = ximage_rect(ovr->im);
+            overlay_clear(ovr);
         }
 
         ctx->dc.width = CLAMP(ctx->dc.cv.im->width, WND_LAUNCH_MIN_SIZE.x, WND_LAUNCH_MAX_SIZE.x);
