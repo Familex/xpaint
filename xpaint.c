@@ -3238,9 +3238,10 @@ void history_forward(struct Ctx* ctx, struct HistItem hist) {
 }
 
 void history_apply(struct Ctx* ctx, struct HistItem* hist) {
+    Rect damage = RNIL;
     switch (hist->t) {
         case HT_Damage: {
-            canvas_copy_region(
+            damage = canvas_copy_region(
                 ctx->dc.cv.im,
                 hist->d.damage.patch,
                 (Pt) {0, 0},
@@ -3252,9 +3253,11 @@ void history_apply(struct Ctx* ctx, struct HistItem* hist) {
             u32 w = hist->d.resize.cv->width;
             u32 h = hist->d.resize.cv->height;
             canvas_resize(ctx, w, h);
-            canvas_copy_region(ctx->dc.cv.im, hist->d.resize.cv, (Pt) {0, 0}, (Pt) {(i32)w, (i32)h}, (Pt) {0, 0});
+            damage =
+                canvas_copy_region(ctx->dc.cv.im, hist->d.resize.cv, (Pt) {0, 0}, (Pt) {(i32)w, (i32)h}, (Pt) {0, 0});
         } break;
     }
+    input_set_damage(&ctx->input, damage);
 }
 
 void history_free(struct HistItem* hist) {
@@ -4054,10 +4057,8 @@ void canvas_resize(struct Ctx* ctx, u32 new_width, u32 new_height) {
     // resize overlay too
     XImage* old_overlay = inp->ovr.im;
     inp->ovr.im = XSubImage(inp->ovr.im, 0, 0, new_width, new_height);
-    inp->ovr.rect.l = MIN(new_width - 1, (u32)inp->ovr.rect.l);
-    inp->ovr.rect.r = MIN(new_width - 1, (u32)inp->ovr.rect.r);
-    inp->ovr.rect.t = MIN(new_height - 1, (u32)inp->ovr.rect.t);
-    inp->ovr.rect.b = MIN(new_height - 1, (u32)inp->ovr.rect.b);
+    inp->ovr.rect = ximage_rect(inp->ovr.im);
+    overlay_clear(&inp->ovr);
     XDestroyImage(old_overlay);
 
     // FIXME can fill color be changed?
