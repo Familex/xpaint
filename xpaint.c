@@ -1954,6 +1954,11 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             } else {
                 struct IOCtx ioctx =
                     cl_cmd->d.save.path_dyn ? ioctx_new(cl_cmd->d.save.path_dyn) : ioctx_copy(&ctx->out);
+                /* relevant for long-running operations, as saving occurs on the main thread */ {
+                    char* save_msg = str_new("saving image to '%s'", ioctx_as_str(&ioctx));
+                    show_message(ctx, save_msg);
+                    str_free(&save_msg);
+                }
                 msg_to_show = str_new(
                     write_io(&ctx->dc, &ctx->input, cl_save_type_to_image_type(cl_cmd->d.save.im_type), &ioctx)
                         ? "image saved to '%s'"
@@ -4677,6 +4682,8 @@ void show_message(struct Ctx* ctx, char const* msg) {
     draw_string(&ctx->dc, msg, (Pt) {0, (i32)(ctx->dc.height - STATUSLINE_PADDING_BOTTOM)}, SchmNorm, False);
 
     swap_backbuffer(ctx);
+    // HACK? message may not display if called mid-function without this
+    XFlush(ctx->dc.dp);
 }
 
 void swap_backbuffer(struct Ctx* ctx) {
@@ -5423,7 +5430,13 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
         tc_set_curr_col_num(&CURR_TC(ctx), curr_col == 0 ? col_num - 1 : curr_col - 1);
     }
     if (CAN_ACTION(inp, curr, MF_Int | MF_Color, ACT_SAVE_TO_FILE)) {  // save to current file
-        if (write_io(&ctx->dc, inp, ctx->dc.cv.type, &ctx->out)) {
+        struct IOCtx const* ioctx = &ctx->out;
+        /* relevant for long-running operations, as saving occurs on the main thread */ {
+            char* save_msg = str_new("saving image to '%s'", ioctx_as_str(ioctx));
+            show_message(ctx, save_msg);
+            str_free(&save_msg);
+        }
+        if (write_io(&ctx->dc, inp, ctx->dc.cv.type, ioctx)) {
             cl_msg_to_show = str_new("changes saved");
         } else {
             cl_msg_to_show = str_new("failed to save changes");
