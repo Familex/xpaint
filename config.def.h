@@ -159,4 +159,4 @@ Key const KEY_CL_ERASE_CHAR[] = {{XK_BackSpace, NO_MOD}};
 Key const KEY_CL_ERASE_ALL[] = {{XK_BackSpace, ControlMask}};
 Key const KEY_CL_RUN[] = {{XK_Return, NO_MOD}};
 Key const KEY_CL_CLIPBOARD_PASTE[] = {{XK_v, ControlMask}};
-Key const KEY_CL_MODE_INTERACT[] = {{XK_v, ControlMask}};
+Key const KEY_CL_MODE_INTERACT[] = {{XK_Escape, NO_MOD}};

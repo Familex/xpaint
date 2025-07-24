@@ -668,7 +668,7 @@ static usize cl_compls_new(struct InputConsoleData* cl);
 static void cl_free(struct InputConsoleData* cl);
 static void cl_compls_free(struct InputConsoleData* cl);
 static void cl_push(struct InputConsoleData* cl, char c);
-static Bool cl_pop(struct InputConsoleData* cl);
+static Bool cl_pop(struct InputConsoleData* cl, Bool force_no_compls);
 
 static void input_set_damage(struct Input* inp, Rect damage);
 static void input_mode_set(struct Ctx* ctx, enum InputTag mode_tag);
@@ -2549,7 +2549,7 @@ void cl_push(struct InputConsoleData* cl, char c) {
     }
 }
 
-Bool cl_pop(struct InputConsoleData* cl) {
+Bool cl_pop(struct InputConsoleData* cl, Bool force_no_compls) {
     if (!cl->cmdarr) {
         return False;
     }
@@ -2559,7 +2559,7 @@ Bool cl_pop(struct InputConsoleData* cl) {
     }
 
     cl_compls_free(cl);
-    if (CONSOLE_AUTO_COMPLETIONS) {
+    if (CONSOLE_AUTO_COMPLETIONS && !force_no_compls) {
         cl_compls_new(cl);
     }
 
@@ -5324,11 +5324,16 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
             }
         } else if (KEY_EQ(curr, KEY_CL_ERASE_ALL)) {
             usize is_not_infinite_loop = 100000;
-            while (cl_pop(cl) && --is_not_infinite_loop) {
+            while (cl_pop(cl, False) && --is_not_infinite_loop) {
                 // empty body
             }
         } else if (KEY_EQ(curr, KEY_CL_ERASE_CHAR)) {
-            cl_pop(cl);
+            if (cl->compls_arr) {
+                cl_compls_free(cl);
+            } else {
+                // Will not show completions on sequential KEY_CL_ERASE_CHAR
+                cl_pop(cl, cl->compls_arr == NULL);
+            }
         } else if (!(iscntrl((u32)*lookup_buf)) && (lookup_status == XLookupBoth || lookup_status == XLookupChars)) {
             for (i32 i = 0; i < text_len; ++i) {
                 cl_push(cl, (char)(lookup_buf[i] & 0xFF));
