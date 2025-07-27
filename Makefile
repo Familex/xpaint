@@ -92,7 +92,7 @@ dev: clean ## generate dev files
 LANG_FLAGS = -std=c99 -pedantic -Wall -Wextra -Werror -Wshadow
 RELEASE_FLAGS = -flto=auto -O2 -DNDEBUG -D_FORTIFY_SOURCE=2
 DEBUG_FLAGS = -g -fsanitize=address -static-libasan
-DEBUG_NO_SYMBOLS_FLAGS = -O0 -DNDEBUG -Wno-error
+DEBUG_NO_SYMBOLS_FLAGS = -O0 -Wno-error
 
 INCS = $(shell $(PKG_CONFIG) --cflags x11 xext xft xrender fontconfig)
 LIBS = $(shell $(PKG_CONFIG) --libs x11 xext xft xrender fontconfig) -lm
