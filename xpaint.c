@@ -470,17 +470,46 @@ struct Ctx {
     } inp, out;
 };
 
+#define ENUM_DECL_HELPER(p_tag, p_str) p_tag,
+#define TO_STRING_CASE(tag, str) \
+    case tag: return str;
+#define STRING_TO_ENUM_ENTRY(tag, str) {str, tag},
+#define DEFINE_ENUM_WITH_STRING_CONVERSIONS(p_type, p_name, p_FOREACH) \
+    /* Declare enum */ \
+    enum p_type { p_type##_Invalid = -1, p_FOREACH(ENUM_DECL_HELPER) p_type##_Count }; \
+    /* Declare *_to_string */ \
+    const char* p_name##_to_string(enum p_type v) { \
+        switch (v) { \
+        p_FOREACH(TO_STRING_CASE) case p_type##_Count: \
+        case p_type##_Invalid: break; \
+        } \
+        return "<unknown " #p_type ">"; \
+    } \
+    /* Declare *_from_string */ \
+    enum p_type p_name##_from_string(const char* s) { \
+        static const struct { \
+            const char* name; \
+            enum p_type val; \
+        } _map[] = {p_FOREACH(STRING_TO_ENUM_ENTRY)}; \
+        for (size_t i = 0; i < LENGTH(_map); ++i) { \
+            if (strcmp(s, _map[i].name) == 0) \
+                return _map[i].val; \
+        } \
+        return (enum p_type)(p_type##_Invalid); /* NOLINT(bugprone-macro-parentheses) */ \
+    }
+
+#define FOREACH_ClCTag(X) \
+    X(ClC_Echo, "echo") \
+    X(ClC_Set, "set") \
+    X(ClC_Exit, "exit") \
+    X(ClC_Save, "save") \
+    X(ClC_W, "w") \
+    X(ClC_WQ, "wq") \
+    X(ClC_Load, "load")
+DEFINE_ENUM_WITH_STRING_CONVERSIONS(ClCTag, cl_cmd, FOREACH_ClCTag)
+
 struct ClCommand {
-    enum ClCTag {
-        ClC_Echo = 0,
-        ClC_Set,
-        ClC_Exit,
-        ClC_Save,
-        ClC_W,
-        ClC_WQ,
-        ClC_Load,
-        ClC_Last,
-    } t;
+    enum ClCTag t;
     union ClCData {
         struct ClCDSet {
             enum ClCDSTag {
@@ -662,7 +691,6 @@ static ClCPrsResult cl_prs_noarg(char* arg_desc_dyn, char* context_optdyn);
 static ClCPrsResult cl_prs_invarg(char* arg_dyn, char* error_dyn, char* context_optdyn);
 static void cl_cmd_parse_res_free(ClCPrsResult* res);
 static char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl);
-static char const* cl_cmd_from_enum(enum ClCTag t);
 static char const* cl_cmd_descr(enum ClCTag t);
 static char const* cl_set_prop_from_enum(enum ClCDSTag t);
 static char const* cl_set_prop_descr(enum ClCDSTag t);
@@ -1961,7 +1989,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 }
             } else {
                 msg_to_show =
-                    str_new("can't save: no path provided (use '%s' command to pass path)", cl_cmd_from_enum(ClC_Save));
+                    str_new("can't save: no path provided (use '%s' command to pass path)", cl_cmd_to_string(ClC_Save));
             }
         } break;
         case ClC_Save: {
@@ -2002,7 +2030,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             }
             ioctx_free(&ioctx);
         } break;
-        case ClC_Last: assert(!"invalid enum value");
+        case ClCTag_Invalid:
+        case ClCTag_Count: assert(!"invalid enum value");
     }
     bit_status |= msg_to_show ? ClCPrc_Msg : 0;
     return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
@@ -2013,163 +2042,176 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
     if (!cmd) {
         return cl_prs_noarg(str_new("command"), NULL);
     }
-    if (!strcmp(cmd, "echo")) {
-        char const* user_msg = strtok(NULL, "");
-        return (ClCPrsResult
-        ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Echo, .d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""))};
-    }
-    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Set))) {
-        char const* prop = strtok(NULL, CL_DELIM);
-        if (!prop) {
-            return cl_prs_noarg(str_new("prop to set"), NULL);
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
-            static const u32 MIN_LW = 1;
-            static const u32 MAX_LW = 5000;  // extremely large values may lag
 
-            char const* arg = strtok(NULL, "");
-            if (!arg) {
-                return cl_prs_noarg(str_new("line width"), NULL);
-            }
-            u32 const line_w = strtol(arg, NULL, 0);
-            if (!BETWEEN(line_w, MIN_LW, MAX_LW)) {
-                return cl_prs_invarg(str_new("%s", arg), str_new("value must be in [%d .. %d]", MIN_LW, MAX_LW), NULL);
-            }
-            return (ClCPrsResult) {
-                .t = ClCPrs_Ok,
-                .d.ok.t = ClC_Set,
-                .d.ok.d.set.t = ClCDS_LineW,
-                .d.ok.d.set.d.line_w.value = line_w,
-            };
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
-            char* arg = strtok(NULL, CL_DELIM);
-            argb value = 0;
-            if (!arg) {
-                return cl_prs_noarg(str_new("hex color"), str_new("%s", cl_set_prop_from_enum(ClCDS_Col)));
-            }
-            if (!argb_from_hex_col(arg, &value)) {
-                return cl_prs_invarg(
-                    str_new("%s", arg),
-                    str_new("failed to parse hex color"),
-                    str_new("%s", cl_set_prop_from_enum(ClCDS_Col))
-                );
-            }
+    switch (cl_cmd_from_string(cmd)) {
+        case ClC_Echo: {
+            char const* user_msg = strtok(NULL, "");
             return (ClCPrsResult
-            ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Set, .d.ok.d.set.t = ClCDS_Col, .d.ok.d.set.d.col.v = value};
+            ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Echo, .d.ok.d.echo.msg_dyn = str_new("%s", COALESCE(user_msg, ""))};
         }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_UiFont))) {
-            char const* font = strtok(NULL, "");  // font with spaces
-            if (!font) {
-                return cl_prs_noarg(str_new("ui font"), NULL);
+        case ClC_Set: {
+            char const* prop = strtok(NULL, CL_DELIM);
+            if (!prop) {
+                return cl_prs_noarg(str_new("prop to set"), NULL);
             }
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_UiFont,
-                                   .d.ok.d.set.d.ui_font.name_dyn = font ? str_new("%s", font) : NULL};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_TextFont))) {
-            char const* font = strtok(NULL, "");  // font with spaces
-            if (!font) {
-                return cl_prs_noarg(str_new("text tool font"), NULL);
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_LineW))) {
+                static const u32 MIN_LW = 1;
+                static const u32 MAX_LW = 5000;  // extremely large values may lag
+
+                char const* arg = strtok(NULL, "");
+                if (!arg) {
+                    return cl_prs_noarg(str_new("line width"), NULL);
+                }
+                u32 const line_w = strtol(arg, NULL, 0);
+                if (!BETWEEN(line_w, MIN_LW, MAX_LW)) {
+                    return cl_prs_invarg(
+                        str_new("%s", arg),
+                        str_new("value must be in [%d .. %d]", MIN_LW, MAX_LW),
+                        NULL
+                    );
+                }
+                return (ClCPrsResult) {
+                    .t = ClCPrs_Ok,
+                    .d.ok.t = ClC_Set,
+                    .d.ok.d.set.t = ClCDS_LineW,
+                    .d.ok.d.set.d.line_w.value = line_w,
+                };
             }
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_TextFont,
-                                   .d.ok.d.set.d.text_font.name_dyn = font ? str_new("%s", font) : NULL};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
-            char const* path = strtok(NULL, "");  // user can load NULL
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_Inp,
-                                   .d.ok.d.set.d.inp.path_dyn = path ? str_new("%s", path) : NULL};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Out))) {
-            char const* path = strtok(NULL, "");  // user can load NULL
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_Out,
-                                   .d.ok.d.set.d.out.path_dyn = path ? str_new("%s", path) : NULL};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
-            char const* compression = strtok(NULL, "");
-            if (!compression) {
-                return cl_prs_noarg(str_new("compression value"), NULL);
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Col))) {
+                char* arg = strtok(NULL, CL_DELIM);
+                argb value = 0;
+                if (!arg) {
+                    return cl_prs_noarg(str_new("hex color"), str_new("%s", cl_set_prop_from_enum(ClCDS_Col)));
+                }
+                if (!argb_from_hex_col(arg, &value)) {
+                    return cl_prs_invarg(
+                        str_new("%s", arg),
+                        str_new("failed to parse hex color"),
+                        str_new("%s", cl_set_prop_from_enum(ClCDS_Col))
+                    );
+                }
+                return (ClCPrsResult
+                ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Set, .d.ok.d.set.t = ClCDS_Col, .d.ok.d.set.d.col.v = value};
             }
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_PngCompression,
-                                   .d.ok.d.set.d.png_cpr.compression = (i32)strtol(compression, NULL, 0)};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
-            char const* quality = strtok(NULL, "");
-            if (!quality) {
-                return cl_prs_noarg(str_new("image quality"), NULL);
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_UiFont))) {
+                char const* font = strtok(NULL, "");  // font with spaces
+                if (!font) {
+                    return cl_prs_noarg(str_new("ui font"), NULL);
+                }
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_UiFont,
+                                       .d.ok.d.set.d.ui_font.name_dyn = font ? str_new("%s", font) : NULL};
             }
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_JpgQuality,
-                                   .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Spacing))) {
-            char const* spacing = strtok(NULL, "");
-            if (!spacing) {
-                return cl_prs_noarg(str_new("spacing"), NULL);
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_TextFont))) {
+                char const* font = strtok(NULL, "");  // font with spaces
+                if (!font) {
+                    return cl_prs_noarg(str_new("text tool font"), NULL);
+                }
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_TextFont,
+                                       .d.ok.d.set.d.text_font.name_dyn = font ? str_new("%s", font) : NULL};
             }
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_Spacing,
-                                   .d.ok.d.set.d.spacing.val = strtoul(spacing, NULL, 0)};
-        }
-        if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Hardness))) {
-            char const* hardness = strtok(NULL, "");
-            if (!hardness) {
-                return cl_prs_noarg(str_new("hardness"), NULL);
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Inp))) {
+                char const* path = strtok(NULL, "");  // user can load NULL
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_Inp,
+                                       .d.ok.d.set.d.inp.path_dyn = path ? str_new("%s", path) : NULL};
             }
-            return (ClCPrsResult) {.t = ClCPrs_Ok,
-                                   .d.ok.t = ClC_Set,
-                                   .d.ok.d.set.t = ClCDS_Hardness,
-                                   .d.ok.d.set.d.hardness.val = strtof(hardness, NULL)};
-        }
-        return cl_prs_invarg(str_new("%s", prop), str_new("unknown prop"), str_new("%s", cl_cmd_from_enum(ClC_Set)));
-    }
-    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Exit))) {
-        return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
-    }
-    if (!strcmp(cmd, cl_cmd_from_enum(ClC_W))) {
-        return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_W};
-    }
-    if (!strcmp(cmd, cl_cmd_from_enum(ClC_WQ))) {
-        return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_WQ};
-    }
-    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Save))) {
-        char const* type_str = strtok(NULL, CL_DELIM);
-        if (!type_str) {
-            return cl_prs_noarg(str_new("file type"), NULL);
-        }
-        enum ClCDSv type = 0;
-        for (; type < ClCDSv_Last; ++type) {
-            if (!strcmp(type_str, cl_save_type_from_enum(type))) {
-                break;
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Out))) {
+                char const* path = strtok(NULL, "");  // user can load NULL
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_Out,
+                                       .d.ok.d.set.d.out.path_dyn = path ? str_new("%s", path) : NULL};
             }
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_PngCompression))) {
+                char const* compression = strtok(NULL, "");
+                if (!compression) {
+                    return cl_prs_noarg(str_new("compression value"), NULL);
+                }
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_PngCompression,
+                                       .d.ok.d.set.d.png_cpr.compression = (i32)strtol(compression, NULL, 0)};
+            }
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_JpgQuality))) {
+                char const* quality = strtok(NULL, "");
+                if (!quality) {
+                    return cl_prs_noarg(str_new("image quality"), NULL);
+                }
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_JpgQuality,
+                                       .d.ok.d.set.d.jpg_qlt.quality = (i32)strtol(quality, NULL, 0)};
+            }
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Spacing))) {
+                char const* spacing = strtok(NULL, "");
+                if (!spacing) {
+                    return cl_prs_noarg(str_new("spacing"), NULL);
+                }
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_Spacing,
+                                       .d.ok.d.set.d.spacing.val = strtoul(spacing, NULL, 0)};
+            }
+            if (!strcmp(prop, cl_set_prop_from_enum(ClCDS_Hardness))) {
+                char const* hardness = strtok(NULL, "");
+                if (!hardness) {
+                    return cl_prs_noarg(str_new("hardness"), NULL);
+                }
+                return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                       .d.ok.t = ClC_Set,
+                                       .d.ok.d.set.t = ClCDS_Hardness,
+                                       .d.ok.d.set.d.hardness.val = strtof(hardness, NULL)};
+            }
+            return cl_prs_invarg(
+                str_new("%s", prop),
+                str_new("unknown prop"),
+                str_new("%s", cl_cmd_to_string(ClC_Set))
+            );
         }
-        if (type == ClCDSv_Last) {
-            return cl_prs_invarg(str_new("%s", type_str), str_new("unknown type"), NULL);
+        case ClC_Exit: {
+            return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_Exit};
         }
-        char const* path = strtok(NULL, "");  // path with spaces
-        return (ClCPrsResult) {.t = ClCPrs_Ok,
-                               .d.ok.t = ClC_Save,
-                               .d.ok.d.save.im_type = type,
-                               .d.ok.d.save.path_dyn = path ? str_new("%s", path) : NULL};
-    }
-    if (!strcmp(cmd, cl_cmd_from_enum(ClC_Load))) {
-        char const* path = strtok(NULL, "");  // path with spaces
-        return (ClCPrsResult
-        ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Load, .d.ok.d.load.path_dyn = path ? str_new("%s", path) : NULL};
+        case ClC_Save: {
+            char const* type_str = strtok(NULL, CL_DELIM);
+            if (!type_str) {
+                return cl_prs_noarg(str_new("file type"), NULL);
+            }
+            enum ClCDSv type = 0;
+            for (; type < ClCDSv_Last; ++type) {
+                if (!strcmp(type_str, cl_save_type_from_enum(type))) {
+                    break;
+                }
+            }
+            if (type == ClCDSv_Last) {
+                return cl_prs_invarg(str_new("%s", type_str), str_new("unknown type"), NULL);
+            }
+            char const* path = strtok(NULL, "");  // path with spaces
+            return (ClCPrsResult) {.t = ClCPrs_Ok,
+                                   .d.ok.t = ClC_Save,
+                                   .d.ok.d.save.im_type = type,
+                                   .d.ok.d.save.path_dyn = path ? str_new("%s", path) : NULL};
+        }
+        case ClC_W: {
+            return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_W};
+        }
+        case ClC_WQ: {
+            return (ClCPrsResult) {.t = ClCPrs_Ok, .d.ok.t = ClC_WQ};
+        }
+        case ClC_Load: {
+            char const* path = strtok(NULL, "");  // path with spaces
+            return (ClCPrsResult
+            ) {.t = ClCPrs_Ok, .d.ok.t = ClC_Load, .d.ok.d.load.path_dyn = path ? str_new("%s", path) : NULL};
+        }
+        case ClCTag_Invalid:
+        case ClCTag_Count: return cl_prs_invarg(str_new("%s", cmd), str_new("unknown command"), NULL);
     }
 
-    return cl_prs_invarg(str_new("%s", cmd), str_new("unknown command"), NULL);
+    UNREACHABLE();
 }
 
 ClCPrsResult cl_cmd_parse(struct Ctx* ctx, char const* cl) {
@@ -2218,7 +2260,8 @@ void cl_cmd_parse_res_free(ClCPrsResult* res) {
                 case ClC_W:
                 case ClC_WQ:
                 case ClC_Exit: break;
-                case ClC_Last: assert(!"invalid enum value");  // no default branch to enable warnings
+                case ClCTag_Invalid:
+                case ClCTag_Count: assert(!"invalid enum value");  // no default branch to enable warnings
             }
         } break;
         case ClCPrs_EInvArg: {
@@ -2241,20 +2284,6 @@ char* cl_cmd_get_str_dyn(struct InputConsoleData const* d_cl) {
     return cmd_dyn;
 }
 
-char const* cl_cmd_from_enum(enum ClCTag t) {
-    switch (t) {
-        case ClC_Echo: return "echo";
-        case ClC_Exit: return "q";
-        case ClC_Load: return "load";
-        case ClC_Save: return "save";
-        case ClC_W: return "w";
-        case ClC_WQ: return "wq";
-        case ClC_Set: return "set";
-        case ClC_Last: return "last";
-    }
-    UNREACHABLE();
-}
-
 char const* cl_cmd_descr(enum ClCTag t) {
     switch (t) {
         case ClC_Echo: return "print message";
@@ -2264,7 +2293,8 @@ char const* cl_cmd_descr(enum ClCTag t) {
         case ClC_W: return "save changes";
         case ClC_WQ: return "save changes and exit program";
         case ClC_Load: return "load file to canvas";
-        case ClC_Last: break;
+        case ClCTag_Invalid:
+        case ClCTag_Count: break;
     }
     UNREACHABLE();
 }
@@ -2511,7 +2541,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
 
     typedef char const* (*itos_f)(i32);
     // subcommands with own completions
-    if (!strcmp(tok1, cl_cmd_from_enum(ClC_Set))) {
+    if (!strcmp(tok1, cl_cmd_to_string(ClC_Set))) {
         if (!strcmp(tok2, cl_set_prop_from_enum(ClCDS_TextFont))
             || !strcmp(tok2, cl_set_prop_from_enum(ClCDS_UiFont))) {
             cl_compls_update_fonts(&result, tok3, add_delim);
@@ -2525,7 +2555,7 @@ usize cl_compls_new(struct InputConsoleData* cl) {
                 add_delim
             );
         }
-    } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Save))) {
+    } else if (!strcmp(tok1, cl_cmd_to_string(ClC_Save))) {
         // Check if tok2 is a valid save type
         if (is_valid_token(tok2, (itos_f)&cl_save_type_from_enum, ClCDSv_Last)) {
             // If we have a valid type, suggest directories
@@ -2535,12 +2565,19 @@ usize cl_compls_new(struct InputConsoleData* cl) {
             // If tok2 is empty or not a valid type, suggest types
             cl_compls_update_helper(&result, tok2, (itos_f)&cl_save_type_from_enum, NULL, ClCDSv_Last, add_delim);
         }
-    } else if (!strcmp(tok1, cl_cmd_from_enum(ClC_Load))) {
+    } else if (!strcmp(tok1, cl_cmd_to_string(ClC_Load))) {
         // Suggest directories to load
         cl_compls_update_dirs(&result, tok2, False, add_delim);
         cl->dont_append_delimeter_after_apply = True;
     } else if (strlen(tok2) == 0 && !last_char_is_space) {  // first token completion
-        cl_compls_update_helper(&result, tok1, (itos_f)&cl_cmd_from_enum, (itos_f)&cl_cmd_descr, ClC_Last, add_delim);
+        cl_compls_update_helper(
+            &result,
+            tok1,
+            (itos_f)&cl_cmd_to_string,
+            (itos_f)&cl_cmd_descr,
+            ClCTag_Count,
+            add_delim
+        );
     } else {
         free(cl_buf_dyn);
         return 0;
