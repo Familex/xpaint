@@ -5775,6 +5775,7 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
     if (e.target == atoms[A_ImagePng]) {
         XImage* im = read_file_from_memory(dc, data_xdyn, count, 0x00000000).im;
         if (im) {
+            canvas_resize(ctx, MAX(dc->cv.im->width, im->width), MAX(dc->cv.im->height, im->height));
             copy_image_to_transform_mode(ctx, im);
             update_screen(ctx, PNIL, False);
             XDestroyImage(im);
@@ -5801,9 +5802,7 @@ HdlrResult selection_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         ioctx_free(&ioctx);
 
         if (im) {
-            if (im->width > ctx->dc.cv.im->width || im->height > ctx->dc.cv.im->height) {
-                canvas_resize(ctx, MAX(im->width, ctx->dc.cv.im->width), MAX(im->height, ctx->dc.cv.im->height));
-            }
+            canvas_resize(ctx, MAX(im->width, ctx->dc.cv.im->width), MAX(im->height, ctx->dc.cv.im->height));
             copy_image_to_transform_mode(ctx, im);
             update_screen(ctx, PNIL, False);
             XDestroyImage(im);
