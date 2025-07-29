@@ -255,6 +255,11 @@ typedef enum {
     HR_Ok,
 } HdlrResult;
 
+struct IOCtxWriteCtx {
+    struct IOCtx const* ioctx;
+    Bool result_out;
+};
+
 struct Ctx {
     struct DrawCtx {
         // readonly outside setup and cleanup functions
@@ -684,6 +689,7 @@ static Bool argb_from_hex_col(char* hex, argb* argb_out);
 static XRenderColor argb_to_xrender_color(argb col);
 static struct Image read_file_from_memory(struct DrawCtx const* dc, u8 const* data, u32 len, argb bg);
 static struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, argb bg);
+static void ioctx_write_part(void* pctx, void* data, i32 size);
 static Bool write_io(struct DrawCtx* dc, struct Input const* input, enum ImageType type, struct IOCtx const* ioctx);
 static void image_free(struct Image* im);
 
@@ -1818,12 +1824,7 @@ struct Image read_image_io(struct DrawCtx const* dc, struct IOCtx const* ioctx, 
     return (struct Image) {0};
 }
 
-struct IOCtxWriteCtx {
-    struct IOCtx const* ioctx;
-    Bool result_out;
-};
-
-static void ioctx_write_part(void* pctx, void* data, i32 size) {
+void ioctx_write_part(void* pctx, void* data, i32 size) {
     struct IOCtxWriteCtx* ctx = (struct IOCtxWriteCtx*)pctx;
     ctx->result_out = False;
 
