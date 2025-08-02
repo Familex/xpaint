@@ -626,7 +626,10 @@ static char* uri_to_path(char const* uri);
 static usize figure_side_count(enum FigureType type);
 static char* path_expand_home(char const* path);
 
+static Rect rect_bound(Rect a, Rect bound);
 static Rect rect_expand(Rect a, Rect b);
+// from left-top clockwise
+static void rect_corners(Rect a, Pt corners_out[4]);
 static Pt rect_dims(Rect a);
 // only used in assert's, which breaks release builds
 __attribute__((unused)) static Bool is_subrect(Rect outer, Rect inner);
@@ -1138,6 +1141,15 @@ char* path_expand_home(char const* path) {
     return str_new("%s%s", home, path + 1);
 }
 
+Rect rect_bound(Rect a, Rect bound) {
+    return (Rect) {
+        .l = MAX(a.l, bound.l),
+        .t = MAX(a.t, bound.t),
+        .r = MIN(a.r, bound.r),
+        .b = MIN(a.b, bound.b),
+    };
+}
+
 Rect rect_expand(Rect a, Rect b) {
     return (Rect) {
         .l = MIN(a.l, b.l),
@@ -1145,6 +1157,13 @@ Rect rect_expand(Rect a, Rect b) {
         .r = MAX(a.r, b.r),
         .b = MAX(a.b, b.b),
     };
+}
+
+void rect_corners(Rect a, Pt corners_out[4]) {
+    corners_out[0] = (Pt) {a.l, a.t};
+    corners_out[1] = (Pt) {a.r, a.t};
+    corners_out[2] = (Pt) {a.r, a.b};
+    corners_out[3] = (Pt) {a.l, a.b};
 }
 
 Pt rect_dims(Rect a) {
@@ -2631,11 +2650,13 @@ void input_mode_set(struct Ctx* ctx, enum InputTag const mode_tag) {
             struct InputOverlay transformed = get_transformed_overlay(dc, inp);
 
             if (!IS_RNIL(transformed.rect)) {
+                input_set_damage(inp, transformed.rect);
                 history_forward(ctx, history_new_as_damage(dc->cv.im, transformed.rect));
                 ximage_blend(dc->cv.im, transformed.im, transformed.rect);
             }
             overlay_free(&transformed);
 
+            input_set_damage(inp, inp->ovr.rect);
             overlay_clear(&inp->ovr);
             update_screen(ctx, PNIL, False);
         } break;
@@ -3033,7 +3054,7 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     u32 const line_w = (u32)MAX(1, ceil(1.5 / ZOOM_C(dc)));
 
-    return canvas_dash_rect(
+    Rect damage = canvas_dash_rect(
         inp->ovr.im,
         (Pt) {begin_x, begin_y},
         (Pt) {w - 1, h - 1},  // inclusive
@@ -3042,6 +3063,7 @@ Rect tool_selection_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         COL_BG(dc, SchmNorm),
         COL_FG(dc, SchmNorm)
     );
+    return damage;
 }
 
 Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
@@ -3504,7 +3526,9 @@ Rect canvas_text(struct DrawCtx* dc, XImage* im, Pt lt_c, XftFont* font, argb co
 Rect canvas_dash_rect(XImage* im, Pt c, Pt dims, u32 w, u32 dash_w, argb col1, argb col2) {
     Rect damage = RNIL;
 
-    Pt const corners[] = {c, {c.x + dims.x, c.y}, {c.x + dims.x, c.y + dims.y}, {c.x, c.y + dims.y}};
+    Rect const rect = rect_bound((Rect) {c.x, c.y, c.x + dims.x, c.y + dims.y}, ximage_rect(im));
+    Pt corners[4] = {0};
+    rect_corners(rect, corners);
 
     for (u32 i = 0; i < LENGTH(corners); ++i) {
         Pt curr = corners[i];
@@ -5108,10 +5132,11 @@ HdlrResult button_press_hdlr(struct Ctx* ctx, XEvent* event) {
     } else if (inp->c.state == CS_None && (BTN_EQ(button, BTN_SEL_CIRC) | BTN_EQ(button, BTN_SEL_CIRC_ALTERNATIVE))) {
         sel_circ_init_and_show(ctx, button, e->x, e->y);
     } else if (tc->on_press) {
+        Rect ovr_damage = ctx->input.ovr.rect;
         overlay_clear(&ctx->input.ovr);
-        Rect const curr_damage = tc->on_press(ctx, e);
-        overlay_expand_rect(&inp->ovr, curr_damage);
-        input_set_damage(inp, curr_damage);
+        Rect const cv_damage = tc->on_press(ctx, e);
+        overlay_expand_rect(&inp->ovr, cv_damage);
+        input_set_damage(inp, rect_expand(ovr_damage, cv_damage));
     }
 
     update_screen(ctx, (Pt) {e->x, e->y}, False);
