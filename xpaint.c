@@ -260,6 +260,18 @@ struct IOCtxWriteCtx {
     Bool result_out;
 };
 
+struct DrawerData {
+    enum DrawerShape {
+        DS_Brush,
+        DS_Circle,
+        DS_CircleRandom,
+        DS_Square,
+        DS_Point,
+    } shape;
+    u32 spacing;
+    double hardness;  // 0.0 .. 1.0
+};
+
 struct Ctx {
     struct DrawCtx {
         // readonly outside setup and cleanup functions
@@ -380,6 +392,18 @@ struct Ctx {
         u32 line_w;
         XftFont* text_font;
 
+        // 2d array of brush pixels, used for drawer tool
+        // call brush_cache_update before using this field
+        struct Brush {
+            argb* data;
+            Pt dims;
+            struct BrushParams {
+                u32 line_w;
+                argb col;
+                struct DrawerData data;
+            } params;
+        } brush_cache;
+
         enum ToolTag {
             Tool_Selection,
             Tool_Drawer,
@@ -389,18 +413,7 @@ struct Ctx {
             Tool_Text,
         } t;
         union ToolData {
-            // Tool_Pencil | Tool_Brush
-            struct DrawerData {
-                enum DrawerShape {
-                    DS_Brush,
-                    DS_Circle,
-                    DS_CircleRandom,
-                    DS_Square,
-                    DS_Point,
-                } shape;
-                u32 spacing;
-                double hardness;  // 0.0 .. 1.0
-            } drawer;
+            struct DrawerData drawer;
             struct FigureData {
                 enum FigureType {
                     Figure_Circle,
@@ -756,6 +769,7 @@ static Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* 
 // canvas_line callbacks
 struct CanvasLineDrwCtxDrawer {
     XImage* im;
+    struct Brush* brush_in_out;
     struct DrawerData data;
     u32 line_w;
     argb col;
@@ -792,7 +806,7 @@ static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pt p_static,
 // line from `a` to `b` is a polygon height (a is a base);
 static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool fill);
 static Rect canvas_line(Rect (*drawer)(void* drw_ctx, Pt p), void* drw_ctx, Pt from, Pt to, u32 spacing, Bool draw_first_pt);
-static Rect canvas_apply_drawer(XImage* im, struct DrawerData data, u32 line_w, argb col, Pt c);
+static Rect canvas_apply_drawer(XImage* im, struct DrawerData data, u32 line_w, argb col, Pt c, struct Brush* brush_in_out);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pt from, Pt dims, Pt to);
 static void canvas_fill(XImage* im, argb col);
 static Bool canvas_load(struct Ctx* ctx, struct Image* image);
@@ -831,6 +845,9 @@ static void dc_cache_init(struct Ctx* ctx);
 static void dc_cache_free(struct DrawCtx* dc);
 // update Pixmaps for XRender interactions
 static void dc_cache_update(struct Ctx* ctx, Rect damage);
+
+static void brush_cache_free(struct Brush* brush);
+static void brush_cache_update(struct DrawerData const* data, u32 line_w, argb col, struct Brush* brush_in_out);
 
 static int trigger_clipboard_paste(struct DrawCtx* dc, Atom selection_target);
 
@@ -1383,6 +1400,7 @@ char const* tc_get_tool_name(struct ToolCtx const* tc) {
 }
 
 void tc_free(Display* dp, struct ToolCtx* tc) {
+    brush_cache_free(&tc->brush_cache);
     if (tc->text_font != NULL) {
         XftFontClose(dp, tc->text_font);
     }
@@ -3081,7 +3099,8 @@ Rect tool_drawer_on_press(struct Ctx* ctx, XButtonPressedEvent const* event) {
             tc->d.drawer,
             tc->line_w,
             *tc_curr_col(tc),
-            pt_from_scr_to_cv_xy(dc, event->x, event->y)
+            pt_from_scr_to_cv_xy(dc, event->x, event->y),
+            &tc->brush_cache
         );
     }
 
@@ -3108,7 +3127,13 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
     if (ctx->input.c.state != CS_Drag && state_match(event->state, ShiftMask)) {
         return canvas_line(
             &canvas_line_drawer_callback,
-            &(struct CanvasLineDrwCtxDrawer) {.im = im, .data = *drawer, .line_w = tc->line_w, .col = *tc_curr_col(tc)},
+            &(struct CanvasLineDrwCtxDrawer) {
+                .im = im,
+                .brush_in_out = &tc->brush_cache,
+                .data = *drawer,
+                .line_w = tc->line_w,
+                .col = *tc_curr_col(tc),
+            },
             begin,
             end,
             drawer->spacing,
@@ -3135,7 +3160,13 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
 
     Rect damage = canvas_line(
         &canvas_line_drawer_callback,
-        &(struct CanvasLineDrwCtxDrawer) {.im = im, .data = *drawer, .col = *tc_curr_col(tc), .line_w = tc->line_w},
+        &(struct CanvasLineDrwCtxDrawer) {
+            .im = im,
+            .brush_in_out = &tc->brush_cache,
+            .data = *drawer,
+            .col = *tc_curr_col(tc),
+            .line_w = tc->line_w,
+        },
         anchor,
         pointer,
         drawer->spacing,
@@ -3231,7 +3262,7 @@ Rect tool_picker_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
 
 Rect canvas_line_drawer_callback(void* drw_ctx, Pt p) {
     struct CanvasLineDrwCtxDrawer* ctx = (struct CanvasLineDrwCtxDrawer*)drw_ctx;
-    return canvas_apply_drawer(ctx->im, ctx->data, ctx->line_w, ctx->col, p);
+    return canvas_apply_drawer(ctx->im, ctx->data, ctx->line_w, ctx->col, p, ctx->brush_in_out);
 }
 
 Rect canvas_line_flood_fill_callback(void* drw_ctx, Pt p) {
@@ -3663,6 +3694,7 @@ Rect canvas_regular_poly_frame_helper(
     argb col,
     DPt** edges_optout
 ) {
+    struct Brush brush_cache = {0};
     Rect damage = RNIL;
     DPt const inr_circmr = get_inr_circmr_cfs(n);
     DPt c = {
@@ -3683,7 +3715,13 @@ Rect canvas_regular_poly_frame_helper(
         }
         Rect line_damage = canvas_line(
             &canvas_line_drawer_callback,
-            &(struct CanvasLineDrwCtxDrawer) {.im = im, .data = data, .line_w = line_w, .col = col},
+            &(struct CanvasLineDrwCtxDrawer) {
+                .im = im,
+                .brush_in_out = &brush_cache,
+                .data = data,
+                .line_w = line_w,
+                .col = col,
+            },
             dpt_to_pt(dpt_add(c, prev)),
             dpt_to_pt(curr_adjusted),
             1,  // only hard lines, no spacing needed
@@ -3693,6 +3731,7 @@ Rect canvas_regular_poly_frame_helper(
         prev = curr;
     }
 
+    brush_cache_free(&brush_cache);
     return damage;
 }
 
@@ -3813,7 +3852,13 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool
             canvas_regular_poly_point_helper(edges[i], center, (u32)indent, &curr, NULL);
             canvas_line(
                 &canvas_line_drawer_callback,
-                &(struct CanvasLineDrwCtxDrawer) {.im = im, .line_w = line_w, .data = point_data, .col = col},
+                &(struct CanvasLineDrwCtxDrawer) {
+                    .im = im,
+                    .brush_in_out = &tc->brush_cache,
+                    .line_w = line_w,
+                    .data = point_data,
+                    .col = col,
+                },
                 dpt_to_pt(prev),
                 dpt_to_pt(curr),
                 1,  // only spacing 1 can be used with DS_Point
@@ -3925,7 +3970,7 @@ static argb* new_circle_brush(argb col, double hardness, u32 d, Bool random) {
 }
 
 // copy `brush_arr` to `im` at `lt` corner
-static Pt canvas_apply_brush(XImage* im, argb* brush_arr, Pt brush_dims, Pt lt) {
+static Pt canvas_apply_brush(XImage* im, argb const* brush_arr, Pt brush_dims, Pt lt) {
     // XXX this implementation assumes XImage::data is flattened 2D array of `argb` values
     if (!im || !brush_arr || IS_PNIL(brush_dims)) {
         return PNIL;
@@ -3940,7 +3985,7 @@ static Pt canvas_apply_brush(XImage* im, argb* brush_arr, Pt brush_dims, Pt lt) 
         if (dims.y < -lt.x || row < -lt.y) {
             continue;  // code below assumes what at least one row/column will be affected
         }
-        argb* const brush_row = brush_arr + (ptrdiff_t)(brush_dims.x * row);
+        argb const* const brush_row = brush_arr + (ptrdiff_t)(brush_dims.x * row);
         argb* const im_row_offseted = (argb*)im->data + (ptrdiff_t)(((MAX(0, row + lt.y) * im->width) + MAX(0, lt.x)));
 
         for (i32 col = 0; col < (dims.x - (lt.x < 0 ? -lt.x : 0)); ++col) {
@@ -3954,63 +3999,12 @@ static Pt canvas_apply_brush(XImage* im, argb* brush_arr, Pt brush_dims, Pt lt) 
     return dims;
 }
 
-Rect canvas_apply_drawer(XImage* im, struct DrawerData data, u32 line_w, argb col, Pt c) {
-    // cache
-    static argb* brush = NULL;  // will `free`d at program end, I guess
-    static Pt brush_dims = {0};
-    // for cache validation
-    static u32 w_cached = NIL;
-    static enum DrawerShape shape_cached = 0;  // can be valid for first time, but w_cached will fail anyway
-    static argb col_cached = 0;
-    static double hardness_cached = 0.0;
-    static Bool force_cache_fail = False;
-
-    // cache update
-    if (force_cache_fail || w_cached != line_w || shape_cached != data.shape || col_cached != col
-        || hardness_cached != data.hardness) {
-        free(brush);
-        brush_dims = PNIL;
-
-        w_cached = line_w;
-        shape_cached = data.shape;
-        col_cached = col;
-        hardness_cached = data.hardness;
-        force_cache_fail = data.shape == DS_CircleRandom;
-
-        switch (shape_cached) {
-            case DS_Brush: {
-                brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
-                brush = new_circle_brush(col_cached, hardness_cached, w_cached, False);
-                break;
-            }
-            case DS_Circle: {
-                brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
-                brush = new_circle_brush(col_cached, 1.0, w_cached, False);
-                break;
-            }
-            case DS_Square: {
-                brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
-                brush = ecalloc(brush_dims.x * brush_dims.y, sizeof(argb));
-                for (i32 i = 0; i < brush_dims.x * brush_dims.y; ++i) {
-                    brush[i] = col_cached;
-                }
-                break;
-            }
-            case DS_Point: {
-                brush_dims = (Pt) {1, 1};
-                brush = ecalloc(1, sizeof(argb));
-                brush[0] = col_cached;
-                break;
-            }
-            case DS_CircleRandom:
-                brush_dims = (Pt) {(i32)w_cached, (i32)w_cached};
-                brush = new_circle_brush(col_cached, hardness_cached, w_cached, True);
-                break;
-        }
-    }
+Rect canvas_apply_drawer(XImage* im, struct DrawerData data, u32 line_w, argb col, Pt c, struct Brush* brush_in_out) {
+    brush_cache_update(&data, line_w, col, brush_in_out);
+    Pt const brush_dims = brush_in_out->dims;
 
     Pt lt = (Pt) {c.x - (brush_dims.x / 2), c.y - (brush_dims.y / 2)};
-    canvas_apply_brush(im, brush, brush_dims, lt);
+    canvas_apply_brush(im, brush_in_out->data, brush_dims, lt);
 
     // inclusive
     return (Rect) {
@@ -4379,6 +4373,8 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
     struct InputMode* mode = &inp->mode;
     struct ToolCtx* tc = &CURR_TC(ctx);
 
+    Pt const cur = pt_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
+
     /* draw canvas */ {
         fill_rect(dc, (Pt) {0, 0}, (Pt) {(i32)dc->width, (i32)dc->height}, WND_BACKGROUND);
         /* put scaled image */ {
@@ -4446,6 +4442,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
             XRenderFreePicture(dc->dp, bb_pict);
         }
     }
+
     // transform mode rectangle
     if (ctx->input.mode.t == InputT_Transform) {
         Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
@@ -4460,6 +4457,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         );
     }
 
+    // rectangle around text
     if (mode->t == InputT_Text) {
         Rect const text_rect = get_string_rect(
             dc,
@@ -4478,6 +4476,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         );
     }
 
+    // anchor cross
     if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor)
         && inp->c.state == CS_None) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
@@ -4491,9 +4490,24 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         draw_dash_line(dc, (Pt) {rect.l, rect.t}, (Pt) {rect.r, rect.b}, 1);
     }
 
-    if (inp->c.state == CS_Drag && BTN_EQ(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
-        Pt const cur = pt_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
+    // drawer preview
+    if (ctx->input.mode.t == InputT_Interact && tc->t == Tool_Drawer) {
+        brush_cache_update(&tc->d.drawer, tc->line_w, *tc_curr_col(tc), &tc->brush_cache);
+        Pt brush_dims = tc->brush_cache.dims;
+        Pt lt = {cur.x - (brush_dims.x / 2), cur.y - (brush_dims.y / 2)};
+        draw_dash_rect(
+            dc,
+            (Pt[4]) {
+                (Pt) {lt.x, lt.y},
+                (Pt) {lt.x + brush_dims.x, lt.y},
+                (Pt) {lt.x + brush_dims.x, lt.y + brush_dims.y},
+                (Pt) {lt.x, lt.y + brush_dims.y},
+            }
+        );
+    }
 
+    // canvas resize graphics
+    if (inp->c.state == CS_Drag && BTN_EQ(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         draw_dash_rect(
             dc,
             (Pt[4]) {
@@ -4777,6 +4791,58 @@ void dc_cache_update(struct Ctx* ctx, Rect damage) {
     } else {
         dc_cache_update_pm(dc, dc->cache.pm, dc->cv.im, damage);
         dc_cache_update_pm(dc, dc->cache.overlay, inp->ovr.im, damage);
+    }
+}
+
+void brush_cache_free(struct Brush* brush) {
+    free(brush->data);
+}
+
+void brush_cache_update(struct DrawerData const* data, u32 line_w, argb col, struct Brush* brush_in_out) {
+    struct BrushParams* par = &brush_in_out->params;
+
+    Bool force_cache_fail = par->data.shape == DS_CircleRandom;
+
+    if (force_cache_fail || par->data.shape != data->shape || par->data.hardness != data->hardness
+        || par->line_w != line_w || par->col != col) {
+        free(brush_in_out->data);
+        brush_in_out->dims = PNIL;
+
+        par->data.shape = data->shape;
+        par->data.hardness = data->hardness;
+        par->line_w = line_w;
+        par->col = col;
+
+        switch (par->data.shape) {
+            case DS_Brush: {
+                brush_in_out->dims = (Pt) {(i32)par->line_w, (i32)par->line_w};
+                brush_in_out->data = new_circle_brush(par->col, par->data.hardness, par->line_w, False);
+                break;
+            }
+            case DS_Circle: {
+                brush_in_out->dims = (Pt) {(i32)par->line_w, (i32)par->line_w};
+                brush_in_out->data = new_circle_brush(par->col, 1.0, par->line_w, False);
+                break;
+            }
+            case DS_Square: {
+                brush_in_out->dims = (Pt) {(i32)par->line_w, (i32)par->line_w};
+                brush_in_out->data = ecalloc(brush_in_out->dims.x * brush_in_out->dims.y, sizeof(argb));
+                for (i32 i = 0; i < brush_in_out->dims.x * brush_in_out->dims.y; ++i) {
+                    brush_in_out->data[i] = par->col;
+                }
+                break;
+            }
+            case DS_Point: {
+                brush_in_out->dims = (Pt) {1, 1};
+                brush_in_out->data = ecalloc(1, sizeof(argb));
+                brush_in_out->data[0] = par->col;
+                break;
+            }
+            case DS_CircleRandom:
+                brush_in_out->dims = (Pt) {(i32)par->line_w, (i32)par->line_w};
+                brush_in_out->data = new_circle_brush(par->col, par->data.hardness, par->line_w, True);
+                break;
+        }
     }
 }
 
@@ -5664,6 +5730,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
 
+    update_screen(ctx, (Pt) {e->x, e->y}, False);
     draw_selection_circle(ctx, &ctx->sc, e->x, e->y);
 
     inp->prev_c.x = e->x;
