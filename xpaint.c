@@ -4382,7 +4382,7 @@ static double polygon_area(const Pt* pts, size_t n) {
  * generate_stroke_paths:
  *   Trace 8-connected contours of all 1-px-wide border pixels in 'data'.
  *   Returns a stb_ds-array of stb_ds-arrays of Pt, each a closed loop.
- *   Fixes stray 1x1 pixels and avoids double-tracing loops by orientation.
+ *   Fixes stray 1x1 pixels by emitting a 1px-offset diamond, and avoids double-tracing loops by orientation.
  */
 Pt** generate_stroke_paths(const argb* data, Pt dims) {
     int W = dims.x;
@@ -4414,7 +4414,7 @@ Pt** generate_stroke_paths(const argb* data, Pt dims) {
                     int ny = y + dy;
                     if (nx < 0 || nx >= W || ny < 0 || ny >= H || !IS_OPAQUE(data[IDX(nx, ny)])) {
                         is_border[IDX(x, y)] = 1;
-                        dy = dx = 2;  // break both loops
+                        dy = dx = 2;  // break loops
                     }
                 }
             }
@@ -4427,6 +4427,7 @@ Pt** generate_stroke_paths(const argb* data, Pt dims) {
 
     Pt** paths = NULL;
 
+    // 2) Contour tracing via Moore‐neighbor
     for (int y0 = 0; y0 < H; y0++) {
         for (int x0 = 0; x0 < W; x0++) {
             size_t i0 = IDX(x0, y0);
@@ -4434,10 +4435,9 @@ Pt** generate_stroke_paths(const argb* data, Pt dims) {
                 continue;
             }
 
-            // start a new contour
             Pt* path = NULL;
             Pt p = {x0, y0};
-            int b_dir = 6;  // came from south
+            int b_dir = 6;  // coming from south
             Pt p_start = p;
             int first_round = 1;
 
@@ -4445,7 +4445,6 @@ Pt** generate_stroke_paths(const argb* data, Pt dims) {
                 visited[IDX(p.x, p.y)] = 1;
                 arrpush(path, p);
 
-                // find next border neighbor
                 for (int i = 1; i <= 8; i++) {
                     int dir = (b_dir + i) & 7;
                     int nx = p.x + dx8[dir];
@@ -4464,18 +4463,18 @@ Pt** generate_stroke_paths(const argb* data, Pt dims) {
             arrpush(path, p_start);
 
             size_t len = arrlen(path);
-            // handle stray single-pixel
             if (len == 2) {
-                // build 4-pt square around pixel
-                Pt sq[5] = {{x0 - 1, y0 - 1}, {x0 + 1, y0 - 1}, {x0 + 1, y0 + 1}, {x0 - 1, y0 + 1}, {x0 - 1, y0 - 1}};
+                // emit a 1px outline square around the pixel
                 arrfree(path);
                 Pt* sqpath = NULL;
+                // clockwise: top-left, top-right, bottom-right, bottom-left, back to top-left
+                Pt sq[5] = {{x0, y0}, {x0 + 1, y0}, {x0 + 1, y0 + 1}, {x0, y0 + 1}, {x0, y0}};
                 for (int i = 0; i < 5; i++) {
                     arrpush(sqpath, sq[i]);
                 }
                 arrpush(paths, sqpath);
             } else {
-                // avoid duplicate loops: keep only CCW-oriented
+                // only keep CCW loops to avoid duplicates
                 if (polygon_area(path, len) > 0.0) {
                     arrpush(paths, path);
                 } else {
