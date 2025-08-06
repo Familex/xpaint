@@ -86,7 +86,7 @@ argb const SEL_TOOL_SELECTION_FG = 0xFF181818;
 char const* const TEXT_TOOL_DEFAULT_FONT = "monospace-24";
 
 u32 const TOOLS_DEFAULT_LINE_W = 5;
-u32 const TOOLS_BRUSH_DEFAULT_SPACING = 1;  // '1' to disable. must be >= 1
+double const TOOLS_BRUSH_DEFAULT_SPACING = 0.1;  // must be >= 0
 double const TOOLS_BRUSH_DEFAULT_HARDNESS = 0.3;  // must be in [0.0 .. 0.1]
 
 double const TFM_MODE_ROTATE_SENSITIVITY = 0.01;

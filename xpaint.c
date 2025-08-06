@@ -268,7 +268,7 @@ struct DrawerData {
         DS_Square,
         DS_Point,
     } shape;
-    u32 spacing;
+    double spacing;
     double hardness;  // 0.0 .. 1.0
 };
 
@@ -572,7 +572,7 @@ struct ClCommand {
                     i32 quality;
                 } jpg_qlt;
                 struct ClCDSDSpacing {
-                    u32 val;
+                    double val;
                 } spacing;
                 struct ClCDSDHardness {
                     double val;
@@ -805,7 +805,8 @@ static Rect canvas_rect(XImage* im, Pt c, Pt dims, u32 line_w, argb col);
 static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pt p_static, Pt p_dynamic);
 // line from `a` to `b` is a polygon height (a is a base);
 static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool fill);
-static Rect canvas_line(Rect (*drawer)(void* drw_ctx, Pt p), void* drw_ctx, Pt from, Pt to, u32 spacing, Bool draw_first_pt);
+static Rect canvas_line(Rect (*drawer)(void* drw_ctx, Pt p), void* drw_ctx, Pt from, Pt to, u32 line_w, double spacing, Bool draw_first_pt);
+static Rect canvas_line_no_spacing(Rect (*drawer)(void* drw_ctx, Pt p), void* drw_ctx, Pt from, Pt to);
 static Rect canvas_apply_drawer(XImage* im, struct DrawerData data, u32 line_w, argb col, Pt c, struct Brush* brush_in_out);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pt from, Pt dims, Pt to);
 static void canvas_fill(XImage* im, argb col);
@@ -1983,10 +1984,10 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 } break;
                 case ClCDS_Spacing: {
                     if (CURR_TC(ctx).t == Tool_Drawer) {
-                        if (cl_cmd->d.set.d.spacing.val >= 1) {
+                        if (cl_cmd->d.set.d.spacing.val >= 0.0) {
                             CURR_TC(ctx).d.drawer.spacing = cl_cmd->d.set.d.spacing.val;
                         } else {
-                            msg_to_show = str_new("spacing must be >= 1");
+                            msg_to_show = str_new("spacing must be >= 0.0");
                         }
                     } else {
                         msg_to_show = str_new("wrong tool to set spacing");
@@ -2195,7 +2196,7 @@ static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx,
                     return (ClCPrsResult) {.t = ClCPrs_Ok,
                                            .d.ok.t = ClC_Set,
                                            .d.ok.d.set.t = ClCDS_Spacing,
-                                           .d.ok.d.set.d.spacing.val = strtoul(spacing, NULL, 0)};
+                                           .d.ok.d.set.d.spacing.val = strtof(spacing, NULL)};
                 }
                 case ClCDS_Hardness: {
                     char const* hardness = strtok(NULL, "");
@@ -2812,7 +2813,7 @@ void sel_circ_on_select_drawer(struct Ctx* ctx, union SCI_Arg tool) {
             .drawer =
                 (struct DrawerData) {
                     .shape = tool.drawer,
-                    .spacing = tool.drawer == DS_Square ? 1 : TOOLS_BRUSH_DEFAULT_SPACING,
+                    .spacing = tool.drawer == DS_Square ? 0.0 : TOOLS_BRUSH_DEFAULT_SPACING,
                     .hardness = TOOLS_BRUSH_DEFAULT_HARDNESS,
                 },
         }
@@ -3136,6 +3137,7 @@ Rect tool_drawer_on_release(struct Ctx* ctx, XButtonReleasedEvent const* event) 
             },
             begin,
             end,
+            tc->line_w,
             drawer->spacing,
             False
         );
@@ -3169,6 +3171,7 @@ Rect tool_drawer_on_drag(struct Ctx* ctx, XMotionEvent const* event) {
         },
         anchor,
         pointer,
+        tc->line_w,
         drawer->spacing,
         False
     );
@@ -3713,7 +3716,8 @@ Rect canvas_regular_poly_frame_helper(
         if (edges_optout) {
             arrpush(*edges_optout, curr_adjusted);
         }
-        Rect line_damage = canvas_line(
+        // only hard lines, no spacing needed
+        Rect line_damage = canvas_line_no_spacing(
             &canvas_line_drawer_callback,
             &(struct CanvasLineDrwCtxDrawer) {
                 .im = im,
@@ -3723,9 +3727,7 @@ Rect canvas_regular_poly_frame_helper(
                 .col = col,
             },
             dpt_to_pt(dpt_add(c, prev)),
-            dpt_to_pt(curr_adjusted),
-            1,  // only hard lines, no spacing needed
-            True
+            dpt_to_pt(curr_adjusted)
         );
         damage = rect_expand(damage, line_damage);
         prev = curr;
@@ -3797,13 +3799,12 @@ static void canvas_regular_poly_fill_helper(XImage* im, DPt const* edges, DPt ce
         DPt curr = DPNIL;
         canvas_regular_poly_point_helper(edges[prev_index], center, (u32)indent, &prev, NULL);
         canvas_regular_poly_point_helper(edges[i], center, (u32)indent, &curr, NULL);
-        canvas_line(
+        // flood fill optimized for spam
+        canvas_line_no_spacing(
             &canvas_line_flood_fill_callback,
             &(struct CanvasLineDrwCtxFloodFill) {.im = im, .col = col},
             dpt_to_pt(prev),
-            dpt_to_pt(curr),
-            1,  // flood fill optimized for spam
-            True
+            dpt_to_pt(curr)
         );
     }
 }
@@ -3821,8 +3822,8 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool
     DPt const b_dpt = {b.x, b.y};
     u32 const line_w = tc->line_w;
     argb const col = *tc_curr_col(tc);
-    static struct DrawerData const circle_data = {.shape = DS_Circle, .spacing = 1, .hardness = 1.0};
-    static struct DrawerData const point_data = {.shape = DS_Point, .spacing = 1, .hardness = 1.0};
+    static struct DrawerData const circle_data = {.shape = DS_Circle, .spacing = 0.0, .hardness = 1.0};
+    static struct DrawerData const point_data = {.shape = DS_Point, .spacing = 0.0, .hardness = 1.0};
 
     // fill strategy will not work for small line_w
     if (!fill && tc->line_w < 10) {
@@ -3850,7 +3851,8 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool
             DPt curr = DPNIL;
             canvas_regular_poly_point_helper(edges[prev_index], center, (u32)indent, &prev, NULL);
             canvas_regular_poly_point_helper(edges[i], center, (u32)indent, &curr, NULL);
-            canvas_line(
+            // point_data will not work with spacing
+            canvas_line_no_spacing(
                 &canvas_line_drawer_callback,
                 &(struct CanvasLineDrwCtxDrawer) {
                     .im = im,
@@ -3860,9 +3862,7 @@ Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool
                     .col = col,
                 },
                 dpt_to_pt(prev),
-                dpt_to_pt(curr),
-                1,  // only spacing 1 can be used with DS_Point
-                True
+                dpt_to_pt(curr)
             );
         }
     }
@@ -3882,7 +3882,8 @@ Rect canvas_line(
     void* drw_ctx,
     Pt from,
     Pt const to,
-    u32 spacing,
+    u32 line_w,
+    double spacing,
     Bool draw_first_pt
 ) {
     // XXX tc may be NULL
@@ -3900,6 +3901,7 @@ Rect canvas_line(
     i32 sy = from.y < to.y ? 1 : -1;
     i32 error = dx + dy;
     i32 spacing_cnt = 0;
+    i32 spacing_max = (i32)(line_w * spacing);
 
     u32 steps = 0;  // prevent infinite loops
     while (++steps < CANVAS_LINE_MAX_STEPS) {
@@ -3925,11 +3927,17 @@ Rect canvas_line(
             error += dx;
             from.y += sy;
         }
-        spacing_cnt = (spacing_cnt + 1) % (i32)spacing;
+        if (spacing_max) {
+            spacing_cnt = (spacing_cnt + 1) % spacing_max;
+        }
         draw_first_pt = True;
     }
 
     return damage;
+}
+
+Rect canvas_line_no_spacing(Rect (*drawer)(void* drw_ctx, Pt p), void* drw_ctx, Pt from, Pt to) {
+    return canvas_line(drawer, drw_ctx, from, to, 1, 0.0, True);
 }
 
 static argb* new_circle_brush(argb col, double hardness, u32 d, Bool random) {
@@ -4565,7 +4573,7 @@ static u32 draw_module(struct Ctx* ctx, SLModule const* module, Pt c) {
                         case Tool_Text: return 0;
                         case Tool_Drawer: {
                             // XXX shows spacing for pencil
-                            char const* fmt = "line_w: %d spacing: %d hardness: %.1f";
+                            char const* fmt = "line_w: %d spacing: %.1f hardness: %.1f";
                             u32 str_size =
                                 snprintf(NULL, 0, fmt, tc->line_w, tc->d.drawer.spacing, tc->d.drawer.hardness);
                             char str[str_size + 1];  // +1 for null-terminator
@@ -5142,7 +5150,7 @@ void setup(Display* dp, struct Ctx* ctx) {
             &(union ToolData) {.drawer =
                                    (struct DrawerData) {
                                        .shape = DS_Square,
-                                       .spacing = 1,
+                                       .spacing = 0.0,
                                        .hardness = TOOLS_BRUSH_DEFAULT_HARDNESS,
                                    }}
         );
