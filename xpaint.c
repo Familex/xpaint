@@ -806,6 +806,8 @@ static Rect canvas_figure(struct Ctx* ctx, XImage* im, u32 variant, Pt p_static,
 // line from `a` to `b` is a polygon height (a is a base);
 static Rect canvas_regular_poly(XImage* im, struct ToolCtx* tc, u32 n, Pt a, Pt b, Bool fill);
 static Rect canvas_line(Rect (*drawer)(void* drw_ctx, Pt p), void* drw_ctx, Pt from, Pt to, u32 spacing, Bool draw_first_pt);
+// copy `brush_arr` to `im` at `lt` corner
+static Pt canvas_apply_brush(XImage* im, argb const* brush_arr, Pt brush_dims, Pt lt);
 static Rect canvas_apply_drawer(XImage* im, struct DrawerData data, u32 line_w, argb col, Pt c, struct Brush* brush_in_out);
 static Rect canvas_copy_region(XImage* dest, XImage* src, Pt from, Pt dims, Pt to);
 static void canvas_fill(XImage* im, argb col);
@@ -3969,12 +3971,12 @@ static argb* new_circle_brush(argb col, double hardness, u32 d, Bool random) {
     return result;
 }
 
-// copy `brush_arr` to `im` at `lt` corner
-static Pt canvas_apply_brush(XImage* im, argb const* brush_arr, Pt brush_dims, Pt lt) {
-    // XXX this implementation assumes XImage::data is flattened 2D array of `argb` values
+Pt canvas_apply_brush(XImage* im, argb const* brush_arr, Pt brush_dims, Pt lt) {
     if (!im || !brush_arr || IS_PNIL(brush_dims)) {
         return PNIL;
     }
+    // XXX this implementation assumes XImage::data is flattened 2D array of `argb` values
+    assert(im->format == ZPixmap);
     Pt dims = {
         .x = MAX(0, MIN(brush_dims.x, im->width - lt.x)),
         .y = MAX(0, MIN(brush_dims.y, im->height - lt.y)),
@@ -4367,6 +4369,127 @@ void draw_selection_circle(
     swap_backbuffer(ctx);
 }
 
+// compute signed area of polygon, positive = CCW
+static double polygon_area(const Pt* pts, size_t n) {
+    double area = 0.0;
+    for (size_t i = 0; i + 1 < n; i++) {
+        area += (double)pts[i].x * pts[i + 1].y - (double)pts[i + 1].x * pts[i].y;
+    }
+    return area * 0.5;
+}
+
+/**
+ * generate_stroke_paths:
+ *   Trace 8-connected contours of all 1-px-wide border pixels in 'data'.
+ *   Returns a stb_ds-array of stb_ds-arrays of Pt, each a closed loop.
+ *   Fixes stray 1x1 pixels and avoids double-tracing loops by orientation.
+ */
+Pt** generate_stroke_paths(const argb* data, Pt dims) {
+    int W = dims.x;
+    int H = dims.y;
+    size_t N = (size_t)W * H;
+#define IDX(x, y)    (((y) * W) + (x))
+#define IS_OPAQUE(p) (((p) & 0xFF000000u) != 0)
+
+    uint8_t* is_border = calloc(N, 1);
+    uint8_t* visited = calloc(N, 1);
+    if (!is_border || !visited) {
+        free(is_border);
+        free(visited);
+        return NULL;
+    }
+
+    // 1) Build border mask
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (!IS_OPAQUE(data[IDX(x, y)])) {
+                continue;
+            }
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if ((dx | dy) == 0) {
+                        continue;
+                    }
+                    int nx = x + dx;
+                    int ny = y + dy;
+                    if (nx < 0 || nx >= W || ny < 0 || ny >= H || !IS_OPAQUE(data[IDX(nx, ny)])) {
+                        is_border[IDX(x, y)] = 1;
+                        dy = dx = 2;  // break both loops
+                    }
+                }
+            }
+        }
+    }
+
+    // neighbor offsets (E, SE, S, SW, W, NW, N, NE)
+    static const int8_t dx8[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    static const int8_t dy8[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+
+    Pt** paths = NULL;
+
+    for (int y0 = 0; y0 < H; y0++) {
+        for (int x0 = 0; x0 < W; x0++) {
+            size_t i0 = IDX(x0, y0);
+            if (!is_border[i0] || visited[i0]) {
+                continue;
+            }
+
+            // start a new contour
+            Pt* path = NULL;
+            Pt p = {x0, y0};
+            int b_dir = 6;  // came from south
+            Pt p_start = p;
+            int first_round = 1;
+
+            do {
+                visited[IDX(p.x, p.y)] = 1;
+                arrpush(path, p);
+
+                // find next border neighbor
+                for (int i = 1; i <= 8; i++) {
+                    int dir = (b_dir + i) & 7;
+                    int nx = p.x + dx8[dir];
+                    int ny = p.y + dy8[dir];
+                    if (nx >= 0 && nx < W && ny >= 0 && ny < H && is_border[IDX(nx, ny)]) {
+                        b_dir = (dir + 4) & 7;
+                        p.x = nx;
+                        p.y = ny;
+                        break;
+                    }
+                }
+                first_round = 0;
+            } while ((p.x != p_start.x || p.y != p_start.y) || first_round);
+
+            // close loop
+            arrpush(path, p_start);
+
+            size_t len = arrlen(path);
+            // handle stray single-pixel
+            if (len == 2) {
+                // build 4-pt square around pixel
+                Pt sq[5] = {{x0 - 1, y0 - 1}, {x0 + 1, y0 - 1}, {x0 + 1, y0 + 1}, {x0 - 1, y0 + 1}, {x0 - 1, y0 - 1}};
+                arrfree(path);
+                Pt* sqpath = NULL;
+                for (int i = 0; i < 5; i++) {
+                    arrpush(sqpath, sq[i]);
+                }
+                arrpush(paths, sqpath);
+            } else {
+                // avoid duplicate loops: keep only CCW-oriented
+                if (polygon_area(path, len) > 0.0) {
+                    arrpush(paths, path);
+                } else {
+                    arrfree(path);
+                }
+            }
+        }
+    }
+
+    free(is_border);
+    free(visited);
+    return paths;
+}
+
 void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
     struct DrawCtx* dc = &ctx->dc;
     struct Input* inp = &ctx->input;
@@ -4495,15 +4618,21 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         brush_cache_update(&tc->d.drawer, tc->line_w, *tc_curr_col(tc), &tc->brush_cache);
         Pt brush_dims = tc->brush_cache.dims;
         Pt lt = {cur.x - (brush_dims.x / 2), cur.y - (brush_dims.y / 2)};
-        draw_dash_rect(
-            dc,
-            (Pt[4]) {
-                (Pt) {lt.x, lt.y},
-                (Pt) {lt.x + brush_dims.x, lt.y},
-                (Pt) {lt.x + brush_dims.x, lt.y + brush_dims.y},
-                (Pt) {lt.x, lt.y + brush_dims.y},
+        debug_start();
+        Pt** paths = generate_stroke_paths(tc->brush_cache.data, brush_dims);
+        debug_end(++DEBUG_COUNTER);
+        size_t n_paths = arrlen(paths);
+        for (size_t i = 0; i < n_paths; i++) {
+            Pt* path = paths[i];
+            size_t L = arrlen(path);
+            for (size_t j = 0; j + 1 < L; j++) {
+                Pt from = {path[j].x + lt.x, path[j].y + lt.y};
+                Pt to = {path[j + 1].x + lt.x, path[j + 1].y + lt.y};
+                draw_dash_line(dc, pt_from_cv_to_scr(dc, from), pt_from_cv_to_scr(dc, to), 1);
             }
-        );
+            arrfree(path);
+        }
+        arrfree(paths);
     }
 
     // canvas resize graphics
