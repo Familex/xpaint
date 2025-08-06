@@ -4373,6 +4373,8 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
     struct InputMode* mode = &inp->mode;
     struct ToolCtx* tc = &CURR_TC(ctx);
 
+    Pt const cur = pt_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
+
     /* draw canvas */ {
         fill_rect(dc, (Pt) {0, 0}, (Pt) {(i32)dc->width, (i32)dc->height}, WND_BACKGROUND);
         /* put scaled image */ {
@@ -4440,6 +4442,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
             XRenderFreePicture(dc->dp, bb_pict);
         }
     }
+
     // transform mode rectangle
     if (ctx->input.mode.t == InputT_Transform) {
         Transform const trans = OVERLAY_TRANSFORM(&ctx->input.mode);
@@ -4454,6 +4457,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         );
     }
 
+    // rectangle around text
     if (mode->t == InputT_Text) {
         Rect const text_rect = get_string_rect(
             dc,
@@ -4472,6 +4476,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         );
     }
 
+    // anchor cross
     if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor)
         && inp->c.state == CS_None) {
         i32 const size = WND_ANCHOR_CROSS_SIZE;
@@ -4485,9 +4490,24 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
         draw_dash_line(dc, (Pt) {rect.l, rect.t}, (Pt) {rect.r, rect.b}, 1);
     }
 
-    if (inp->c.state == CS_Drag && BTN_EQ(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
-        Pt const cur = pt_from_scr_to_cv_xy(dc, cur_scr.x, cur_scr.y);
+    // drawer preview
+    if (ctx->input.mode.t == InputT_Interact && tc->t == Tool_Drawer) {
+        brush_cache_update(&tc->d.drawer, tc->line_w, *tc_curr_col(tc), &tc->brush_cache);
+        Pt brush_dims = tc->brush_cache.dims;
+        Pt lt = {cur.x - (brush_dims.x / 2), cur.y - (brush_dims.y / 2)};
+        draw_dash_rect(
+            dc,
+            (Pt[4]) {
+                (Pt) {lt.x, lt.y},
+                (Pt) {lt.x + brush_dims.x, lt.y},
+                (Pt) {lt.x + brush_dims.x, lt.y + brush_dims.y},
+                (Pt) {lt.x, lt.y + brush_dims.y},
+            }
+        );
+    }
 
+    // canvas resize graphics
+    if (inp->c.state == CS_Drag && BTN_EQ(ctx->input.c.btn, BTN_CANVAS_RESIZE) && inp->mode.t == InputT_Interact) {
         draw_dash_rect(
             dc,
             (Pt[4]) {
@@ -5710,6 +5730,7 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
         }
     }
 
+    update_screen(ctx, (Pt) {e->x, e->y}, False);
     draw_selection_circle(ctx, &ctx->sc, e->x, e->y);
 
     inp->prev_c.x = e->x;
