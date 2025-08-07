@@ -4369,123 +4369,162 @@ void draw_selection_circle(
     swap_backbuffer(ctx);
 }
 
-// compute signed area of polygon, positive = CCW
-static double polygon_area(const Pt* pts, size_t n) {
-    double area = 0.0;
-    for (size_t i = 0; i + 1 < n; i++) {
-        area += (double)pts[i].x * pts[i + 1].y - (double)pts[i + 1].x * pts[i].y;
-    }
-    return area * 0.5;
-}
+typedef struct Edge {
+    Pt a, b;
+} Edge;
 
-/**
- * generate_stroke_paths:
- *   Trace 8-connected contours of all 1-px-wide border pixels in 'data'.
- *   Returns a stb_ds-array of stb_ds-arrays of Pt, each a closed loop.
- *   Fixes stray 1x1 pixels by emitting a 1px-offset diamond, and avoids double-tracing loops by orientation.
- */
+static const int8_t vertex_table[16][8] = {
+    {-1, -1, -1, -1, -1, -1, -1, -1},  // 0
+    {0, 3, -1, -1, -1, -1, -1, -1},  // 1
+    {0, 1, -1, -1, -1, -1, -1, -1},  // 2
+    {1, 3, -1, -1, -1, -1, -1, -1},  // 3
+    {1, 2, -1, -1, -1, -1, -1, -1},  // 4
+    {0, 1, 2, 3, -1, -1, -1, -1},  // 5
+    {0, 2, -1, -1, -1, -1, -1, -1},  // 6
+    {2, 3, -1, -1, -1, -1, -1, -1},  // 7
+    {2, 3, -1, -1, -1, -1, -1, -1},  // 8
+    {0, 2, -1, -1, -1, -1, -1, -1},  // 9
+    {0, 3, 1, 2, -1, -1, -1, -1},  // 10
+    {1, 2, -1, -1, -1, -1, -1, -1},  // 11
+    {1, 3, -1, -1, -1, -1, -1, -1},  // 12
+    {0, 1, -1, -1, -1, -1, -1, -1},  // 13
+    {0, 3, -1, -1, -1, -1, -1, -1},  // 14
+    {-1, -1, -1, -1, -1, -1, -1, -1}  // 15
+};
+
 Pt** generate_stroke_paths(const argb* data, Pt dims) {
     int W = dims.x;
     int H = dims.y;
-    size_t N = (size_t)W * H;
-#define IDX(x, y)    (((y) * W) + (x))
-#define IS_OPAQUE(p) (((p) & 0xFF000000u) != 0)
+    int newW = W + 2;
+    int newH = H + 2;
+    uint8_t* alpha = ecalloc(newW * newH, 1);
 
-    uint8_t* is_border = calloc(N, 1);
-    uint8_t* visited = calloc(N, 1);
-    if (!is_border || !visited) {
-        free(is_border);
-        free(visited);
-        return NULL;
-    }
-
-    // 1) Build border mask
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
-            if (!IS_OPAQUE(data[IDX(x, y)])) {
-                continue;
-            }
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if ((dx | dy) == 0) {
-                        continue;
-                    }
-                    int nx = x + dx;
-                    int ny = y + dy;
-                    if (nx < 0 || nx >= W || ny < 0 || ny >= H || !IS_OPAQUE(data[IDX(nx, ny)])) {
-                        is_border[IDX(x, y)] = 1;
-                        dy = dx = 2;  // break loops
-                    }
-                }
+            int idx_src = x + (y * W);
+            int idx_dst = (x + 1) + ((y + 1) * newW);
+            if (data[idx_src] & 0xFF000000) {
+                alpha[idx_dst] = 1;
             }
         }
     }
 
-    // neighbor offsets (E, SE, S, SW, W, NW, N, NE)
-    static const int8_t dx8[8] = {1, 1, 0, -1, -1, -1, 0, 1};
-    static const int8_t dy8[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+    Edge* edges = NULL;
+    for (int j = 0; j < newH - 1; j++) {
+        for (int i = 0; i < newW - 1; i++) {
+            int tl = alpha[i + (j * newW)];
+            int tr = alpha[i + 1 + (j * newW)];
+            int br = alpha[i + 1 + ((j + 1) * newW)];
+            int bl = alpha[i + ((j + 1) * newW)];
+            int state = (tl << 0) | (tr << 1) | (br << 2) | (bl << 3);
+            const int8_t* vertices = vertex_table[state];
+            for (int k = 0; k < 8 && vertices[k] != -1; k += 2) {
+                int8_t v0 = vertices[k];
+                int8_t v1 = vertices[k + 1];
+                Pt p0 = PNIL;
+                Pt p1 = PNIL;
+                if (v0 == 0) {
+                    p0.x = i;
+                    p0.y = j;
+                } else if (v0 == 1) {
+                    p0.x = i + 1;
+                    p0.y = j;
+                } else if (v0 == 2) {
+                    p0.x = i + 1;
+                    p0.y = j + 1;
+                } else if (v0 == 3) {
+                    p0.x = i;
+                    p0.y = j + 1;
+                }
+                if (v1 == 0) {
+                    p1.x = i;
+                    p1.y = j;
+                } else if (v1 == 1) {
+                    p1.x = i + 1;
+                    p1.y = j;
+                } else if (v1 == 2) {
+                    p1.x = i + 1;
+                    p1.y = j + 1;
+                } else if (v1 == 3) {
+                    p1.x = i;
+                    p1.y = j + 1;
+                }
+                Edge e = {p0, p1};
+                arrput(edges, e);
+            }
+        }
+    }
+    free(alpha);
+
+    struct {
+        Pt key;
+        Pt* value;
+    }* graph_keys = NULL;
+    for (int i = 0; i < arrlen(edges); i++) {
+        Pt a = edges[i].a;
+        Pt b = edges[i].b;
+        ptrdiff_t idx = hmgeti(graph_keys, a);
+        if (idx == -1) {
+            Pt* neighbors_ = NULL;
+            hmput(graph_keys, a, neighbors_);
+            idx = hmgeti(graph_keys, a);
+        }
+        Pt* neighbors = hmget(graph_keys, a);
+        arrput(neighbors, b);
+        hmput(graph_keys, a, neighbors);
+
+        idx = hmgeti(graph_keys, b);
+        if (idx == -1) {
+            Pt* neighbors_ = NULL;
+            hmput(graph_keys, b, neighbors_);
+            idx = hmgeti(graph_keys, b);
+        }
+        neighbors = hmget(graph_keys, b);
+        arrput(neighbors, a);
+        hmput(graph_keys, b, neighbors);
+    }
+    arrfree(edges);
 
     Pt** paths = NULL;
-
-    // 2) Contour tracing via Moore‐neighbor
-    for (int y0 = 0; y0 < H; y0++) {
-        for (int x0 = 0; x0 < W; x0++) {
-            size_t i0 = IDX(x0, y0);
-            if (!is_border[i0] || visited[i0]) {
-                continue;
-            }
-
+    for (int i = 0; i < hmlen(graph_keys); i++) {
+        while (arrlen(graph_keys[i].value) > 0) {
+            Pt start = graph_keys[i].key;
             Pt* path = NULL;
-            Pt p = {x0, y0};
-            int b_dir = 6;  // coming from south
-            Pt p_start = p;
-            int first_round = 1;
-
+            Pt current = start;
             do {
-                visited[IDX(p.x, p.y)] = 1;
-                arrpush(path, p);
-
-                for (int i = 1; i <= 8; i++) {
-                    int dir = (b_dir + i) & 7;
-                    int nx = p.x + dx8[dir];
-                    int ny = p.y + dy8[dir];
-                    if (nx >= 0 && nx < W && ny >= 0 && ny < H && is_border[IDX(nx, ny)]) {
-                        b_dir = (dir + 4) & 7;
-                        p.x = nx;
-                        p.y = ny;
+                Pt shifted = {current.x - 1, current.y - 1};
+                arrput(path, shifted);
+                Pt next = graph_keys[i].value[arrlen(graph_keys[i].value) - 1];
+                arrpop(graph_keys[i].value);
+                ptrdiff_t idx_next = hmgeti(graph_keys, next);
+                if (idx_next == -1) {
+                    break;
+                }
+                Pt* next_neighbors = hmget(graph_keys, next);
+                for (int j = 0; j < arrlen(next_neighbors); j++) {
+                    if (next_neighbors[j].x == current.x && next_neighbors[j].y == current.y) {
+                        arrdel(next_neighbors, j);
+                        hmput(graph_keys, next, next_neighbors);
+                        // graph_vals = (Pt**)hmvalues(graph_keys);
                         break;
                     }
                 }
-                first_round = 0;
-            } while ((p.x != p_start.x || p.y != p_start.y) || first_round);
-
-            // close loop
-            arrpush(path, p_start);
-
-            size_t len = arrlen(path);
-            if (len == 2) {
-                // emit a 1px outline square around the pixel
-                arrfree(path);
-                Pt* sqpath = NULL;
-                // clockwise: top-left, top-right, bottom-right, bottom-left, back to top-left
-                Pt sq[5] = {{x0, y0}, {x0 + 1, y0}, {x0 + 1, y0 + 1}, {x0, y0 + 1}, {x0, y0}};
-                for (int i = 0; i < 5; i++) {
-                    arrpush(sqpath, sq[i]);
-                }
-                arrpush(paths, sqpath);
-            } else {
-                // only keep CCW loops to avoid duplicates
-                if (polygon_area(path, len) > 0.0) {
-                    arrpush(paths, path);
-                } else {
-                    arrfree(path);
-                }
-            }
+                current = next;
+                i = hmgeti(graph_keys, current);
+                // graph_vals = (Pt**)hmvalues(graph_keys);
+            } while (current.x != start.x || current.y != start.y);
+            Pt shifted_start = {start.x - 1, start.y - 1};
+            arrput(path, shifted_start);
+            arrput(paths, path);
         }
     }
 
-    free(is_border);
-    free(visited);
+    for (int i = 0; i < hmlen(graph_keys); i++) {
+        Pt* neighbors = hmget(graph_keys, graph_keys[i].key);
+        arrfree(neighbors);
+    }
+    hmfree(graph_keys);
+
     return paths;
 }
 
