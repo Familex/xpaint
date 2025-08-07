@@ -687,6 +687,7 @@ static Pt pt_from_scr_to_cv_xy(struct DrawCtx const* dc, i32 x, i32 y);
 static Pt pt_apply_trans(Pt p, Transform trans);
 static Pt pt_apply_trans_pivot(Pt p, Transform trans, Pt pivot);
 static Pt dpt_to_pt(DPt p);
+static DPt pt_to_dpt(Pt p);
 static DPt dpt_rotate(DPt p, double deg); // clockwise
 static DPt dpt_add(DPt a, DPt b);
 static double dpt_dist(DPt a, DPt b);
@@ -833,6 +834,7 @@ static int draw_line_ex(struct DrawCtx* dc, Pt from, Pt to, u32 w, int line_styl
 static int draw_line(struct DrawCtx* dc, Pt from, Pt to, u32 w, enum Schm sc, Bool invert);
 static void draw_dash_line(struct DrawCtx* dc, Pt from, Pt to, u32 w);
 static void draw_dash_rect(struct DrawCtx* dc, Pt pts[4]);
+static void draw_dash_cross(struct DrawCtx* dc, Pt cv_center, i32 radius);
 // FIXME merge with get_string_rect?
 static u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len);
 static Rect get_string_rect(struct DrawCtx const* dc, XftFont* font, char const* str, u32 len, Pt lt_c);
@@ -1591,6 +1593,10 @@ Pt pt_apply_trans_pivot(Pt p, Transform trans, Pt pivot) {
 
 Pt dpt_to_pt(DPt p) {
     return (Pt) {.x = (i32)p.x, .y = (i32)p.y};
+}
+
+DPt pt_to_dpt(Pt p) {
+    return (DPt) {.x = p.x, .y = p.y};
 }
 
 DPt dpt_rotate(DPt p, double deg) {
@@ -4255,6 +4261,21 @@ void draw_dash_rect(struct DrawCtx* dc, Pt pts[4]) {
     }
 }
 
+void draw_dash_cross(struct DrawCtx* dc, Pt cv_center, i32 radius) {
+    Pt lt = pt_from_cv_to_scr(dc, cv_center);
+    Pt rb = pt_from_cv_to_scr(dc, (Pt) {cv_center.x + 1, cv_center.y + 1});
+    Pt scr_center = (Pt) {(lt.x + rb.x) / 2, (lt.y + rb.y) / 2};
+    Rect const rect = {
+        scr_center.x - radius,
+        scr_center.y - radius,
+        scr_center.x + radius,
+        scr_center.y + radius,
+    };
+
+    draw_dash_line(dc, (Pt) {rect.l, rect.b}, (Pt) {rect.r, rect.t}, 1);
+    draw_dash_line(dc, (Pt) {rect.l, rect.t}, (Pt) {rect.r, rect.b}, 1);
+}
+
 u32 get_string_width(struct DrawCtx const* dc, char const* str, u32 len) {
     XGlyphInfo ext;
     XftTextExtentsUtf8(dc->dp, dc->fnt, (XftChar8*)str, (i32)len, &ext);
@@ -4487,15 +4508,7 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
     // anchor cross
     if (WND_ANCHOR_CROSS_SIZE && ctx->input.mode.t == InputT_Interact && !IS_PNIL(inp->anchor)
         && inp->c.state == CS_None) {
-        i32 const size = WND_ANCHOR_CROSS_SIZE;
-
-        Pt lt = pt_from_cv_to_scr(dc, inp->anchor);
-        Pt rb = pt_from_cv_to_scr(dc, (Pt) {inp->anchor.x + 1, inp->anchor.y + 1});
-        Pt center = (Pt) {(lt.x + rb.x) / 2, (lt.y + rb.y) / 2};
-        Rect const rect = {center.x - size, center.y - size, center.x + size, center.y + size};
-
-        draw_dash_line(dc, (Pt) {rect.l, rect.b}, (Pt) {rect.r, rect.t}, 1);
-        draw_dash_line(dc, (Pt) {rect.l, rect.t}, (Pt) {rect.r, rect.b}, 1);
+        draw_dash_cross(dc, inp->anchor, WND_ANCHOR_CROSS_SIZE);
     }
 
     // drawer preview
@@ -4512,6 +4525,11 @@ void update_screen(struct Ctx* ctx, Pt cur_scr, Bool full_redraw) {
                 (Pt) {lt.x, lt.y + brush_dims.y},
             }
         );
+    }
+
+    // brush line resize pivot
+    if (inp->mode.t == InputT_Interact && inp->c.state == CS_Drag && BTN_EQ(inp->c.btn, BTN_LINE_RESIZE)) {
+        draw_dash_cross(dc, inp->c.pos, WND_ANCHOR_CROSS_SIZE);
     }
 
     // canvas resize graphics
@@ -5712,6 +5730,8 @@ HdlrResult motion_notify_hdlr(struct Ctx* ctx, XEvent* event) {
                 }
 
                 update_screen(ctx, (Pt) {e->x, e->y}, False);
+            } else if (inp->mode.t == InputT_Interact && BTN_EQ(inp->c.btn, BTN_LINE_RESIZE)) {
+                tc->line_w = (u32)fabs(dpt_dist(pt_to_dpt(inp->c.pos), pt_to_dpt(cur))) * 2;
             } else if (tc->on_drag) {
                 Rect curr_damage = tc->on_drag(ctx, e);
                 overlay_expand_rect(&inp->ovr, curr_damage);
