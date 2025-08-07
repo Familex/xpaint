@@ -593,11 +593,14 @@ struct ClCommand {
     } d;
 };
 
+enum {
+    ClCPrc_Msg = 0x1,  // wants to show message
+    ClCPrc_Exit = 0x2,  // wants to exit application
+};
+typedef u32 ClCPrcFlags;
+
 typedef struct {
-    enum {
-        ClCPrc_Msg = 0x1,  // wants to show message
-        ClCPrc_Exit = 0x2,  // wants to exit application
-    } bit_status;
+    ClCPrcFlags flags;
     char* msg_dyn;  // NULL if not PCCR_MSG
 } ClCPrcResult;
 
@@ -732,7 +735,7 @@ static void input_mode_set(struct Ctx* ctx, enum InputTag mode_tag);
 static void input_mode_free(struct InputMode* input_mode);
 static char const* input_mode_as_str(enum InputTag mode_tag);
 static void input_free(struct Input* input);
-static enum InputModeFlag input_mode_to_flag(enum InputTag mode);
+static InputModeFlags input_mode_to_flag(enum InputTag mode);
 
 static void text_mode_push(struct Ctx* ctx, char c);
 static Bool text_mode_pop(struct Ctx* ctx);
@@ -1950,7 +1953,7 @@ void image_free(struct Image* im) {
 ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
     assert(cl_cmd);
     char* msg_to_show = NULL;  // counts as PCCR_Msg at func end
-    usize bit_status = 0;
+    ClCPrcFlags result = 0;
 
     switch (cl_cmd->t) {
         case ClC_Set: {
@@ -2019,7 +2022,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
             msg_to_show = str_new("%s", cl_cmd->d.echo.msg_dyn);
         } break;
         case ClC_Exit: {
-            bit_status |= ClCPrc_Exit;
+            result |= ClCPrc_Exit;
         } break;
         case ClC_W:
         case ClC_WQ: {
@@ -2027,7 +2030,7 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
                 enum ImageType const type = IMT_Png;  // FIXME pass actual filetype
                 if (write_io(&ctx->dc, &ctx->input, type, &ctx->out)) {
                     if (cl_cmd->t == ClC_WQ) {
-                        bit_status |= ClCPrc_Exit;
+                        result |= ClCPrc_Exit;
                     } else {
                         msg_to_show = str_new("image saved to '%s'", ioctx_as_str(&ctx->out));
                     }
@@ -2080,8 +2083,8 @@ ClCPrcResult cl_cmd_process(struct Ctx* ctx, struct ClCommand const* cl_cmd) {
         case ClCTag_Invalid:
         case ClCTag_Count: assert(!"invalid enum value");
     }
-    bit_status |= msg_to_show ? ClCPrc_Msg : 0;
-    return (ClCPrcResult) {.bit_status = bit_status, .msg_dyn = msg_to_show};
+    result |= msg_to_show ? ClCPrc_Msg : 0;
+    return (ClCPrcResult) {.flags = result, .msg_dyn = msg_to_show};
 }
 
 static ClCPrsResult cl_cmd_parse_helper(__attribute__((unused)) struct Ctx* ctx, char* cl) {
@@ -2741,7 +2744,7 @@ void input_free(struct Input* input) {
     overlay_free(&input->ovr);
 }
 
-enum InputModeFlag input_mode_to_flag(enum InputTag mode) {
+InputModeFlags input_mode_to_flag(enum InputTag mode) {
     switch (mode) {
         case InputT_Interact: return MF_Int;
         case InputT_Color: return MF_Color;
@@ -5427,12 +5430,12 @@ HdlrResult key_press_hdlr(struct Ctx* ctx, XEvent* event) {
                 case ClCPrs_Ok: {
                     struct ClCommand* cmd = &parse_res.d.ok;
                     ClCPrcResult proc_res = cl_cmd_process(ctx, cmd);
-                    if (proc_res.bit_status & ClCPrc_Msg) {
+                    if (proc_res.flags & ClCPrc_Msg) {
                         // XXX double memory allocation
                         cl_msg_to_show = str_new(proc_res.msg_dyn);
                         str_free(&proc_res.msg_dyn);  // XXX member free
                     }
-                    is_exit = (Bool)(proc_res.bit_status & ClCPrc_Exit);
+                    is_exit = (Bool)(proc_res.flags & ClCPrc_Exit);
                 } break;
                 case ClCPrs_ENoArg: {
                     if (parse_res.d.noarg.context_optdyn) {
