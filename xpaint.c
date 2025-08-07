@@ -4608,24 +4608,30 @@ static u32 draw_module(struct Ctx* ctx, SLModule const* module, Pt c) {
                     }
                     UNREACHABLE();
                 case InputT_Text: {
-                    char const* separator = " ";
-                    char const* font_name = xft_font_name(tc->text_font);
-                    char* str = ecalloc(
-                        (LENGTH(TEXT_FONT_PROMPT) - 1) + (strlen(font_name) + 2) + strlen(separator)
-                            + (LENGTH(TEXT_MODE_PROMPT) - 1) + arrlen(mode->d.text.textarr) + 1,
-                        sizeof(char)
+                    char const* const separator = " ";
+                    char const* const font_name = xft_font_name(tc->text_font);
+                    usize const str_len = strlen(TEXT_FONT_PROMPT) + 2 /* 2 quotes */
+                        + strlen(font_name) + strlen(separator) + strlen(TEXT_FONT_PROMPT)
+                        + arrlen(mode->d.text.textarr);
+
+                    char* const str_dyn = ecalloc(str_len + 1, sizeof(char));
+                    usize actual_len = snprintf(
+                        str_dyn,
+                        str_len + 1,
+                        "%s\"%s\"%s%s%.*s",
+                        TEXT_FONT_PROMPT,
+                        font_name,
+                        separator,
+                        TEXT_MODE_PROMPT,
+                        (u32)arrlen(mode->d.text.textarr),
+                        mode->d.text.textarr
                     );
-                    strcat(str, TEXT_FONT_PROMPT);
-                    strcat(str, "\"");
-                    strcat(str, font_name);
-                    strcat(str, "\"");
-                    strcat(str, separator);
-                    strcat(str, TEXT_MODE_PROMPT);
-                    strncat(str, mode->d.text.textarr, arrlen(mode->d.text.textarr));
-                    u32 width = draw_string(dc, str, c, SchmNorm, False);
+                    assert(actual_len == str_len);
+                    (void)actual_len;  // HACK for release mode
 
-                    free(str);
+                    u32 width = draw_string(dc, str_dyn, c, SchmNorm, False);
 
+                    free(str_dyn);
                     return width;
                 }
             }
@@ -4683,15 +4689,17 @@ void update_statusline(struct Ctx* ctx) {
         i32 user_cmd_w = NIL;
         /* draw command */ {
             char const* command = cl->cmdarr;
-            usize const command_len = arrlen(command);
+            u32 const command_len = arrlen(command);
+            usize const cl_str_len = strlen(CL_CMD_PROMPT) + command_len;
 
-            char* cl_str_dyn = ecalloc(strlen(CL_CMD_PROMPT) + command_len + 1, sizeof(char));
-            strcat(cl_str_dyn, CL_CMD_PROMPT);
-            strncat(cl_str_dyn + strlen(CL_CMD_PROMPT), command, command_len);
+            char* cl_str_dyn = ecalloc(cl_str_len + 1, sizeof(char));
+            usize actual_len = snprintf(cl_str_dyn, cl_str_len + 1, "%s%.*s", CL_CMD_PROMPT, command_len, command);
+            assert(actual_len == cl_str_len);
+            (void)actual_len;  // HACK for release mode
 
             user_cmd_w = (i32)draw_string(dc, cl_str_dyn, (Pt) {0, cmd_y}, SchmNorm, False);
 
-            str_free(&cl_str_dyn);
+            free(cl_str_dyn);
         }
 
         /* draw cursor */ {
