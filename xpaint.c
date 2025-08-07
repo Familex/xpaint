@@ -183,6 +183,7 @@ enum InputModeFlag {
     MF_Trans = 0x4,  // transform
     // MF_Term managed manually because can use any key
 };
+typedef u32 InputModeFlags;
 
 enum {
     A_Cardinal,
@@ -634,7 +635,7 @@ static Bool state_match(u32 a, u32 b);
 static Button get_btn(XButtonEvent const* e);
 static Bool btn_eq_impl(Button a, Button const* arr, u32 arr_len);
 static Bool key_eq_impl(Key a, Key const* arr, u32 arr_len);
-static Bool can_action_impl(struct Input const* input, Key curr_key, enum InputModeFlag mode, Key const* arr, u32 arr_len);
+static Bool can_action_impl(struct Input const* input, Key curr_key, InputModeFlags mode, Key const* arr, u32 arr_len);
 static char* uri_to_path(char const* uri);
 static usize figure_side_count(enum FigureType type);
 static char* path_expand_home(char const* path);
@@ -1103,7 +1104,7 @@ Bool key_eq_impl(Key a, Key const* arr, u32 arr_len) {
     return False;
 }
 
-Bool can_action_impl(struct Input const* input, Key curr_key, enum InputModeFlag mode, Key const* arr, u32 arr_len) {
+Bool can_action_impl(struct Input const* input, Key curr_key, InputModeFlags mode, Key const* arr, u32 arr_len) {
     if (!(input_mode_to_flag(input->mode.t) & mode)) {
         return False;  // wrong mode
     }
